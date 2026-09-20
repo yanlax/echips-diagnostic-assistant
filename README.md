@@ -75,5 +75,8 @@ src-tauri/
 
 ```
 cargo tauri dev
-cargo tauri build
+cargo tauri build --no-bundle   # портативный exe без установщика
 ```
+
+GitHub Actions собирает один portable-файл `Echips-Diagnostic-Assistant.exe`
+(установка не нужна, требуется WebView2 — есть в Windows 10/11).

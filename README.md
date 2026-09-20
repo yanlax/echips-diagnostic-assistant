@@ -30,6 +30,7 @@ src-tauri/
     commands/
       system.rs               get_system_info — WMI Win32_ComputerSystem/BIOS
       battery.rs               get_battery_info — WMI Win32_Battery
+      network.rs               get_network_adapters — Wi-Fi/Bluetooth
       usb.rs                   list_usb_devices — Win32_PnPEntity USB\*
       report.rs                 save_report — сохранение .txt отчёта
 ```
@@ -43,13 +44,14 @@ src-tauri/
 - Камера — live-превью через `getUserMedia`, обработка отказа в доступе
 - Звук — запись 5 с с микрофона и воспроизведение (`MediaRecorder`)
 - USB-порты — список устройств (`list_usb_devices`, Win32_PnPEntity) + ручная отметка по портам
+- Wi-Fi/Bluetooth — статус адаптеров (`get_network_adapters`, Win32_NetworkAdapter) + ручная отметка
 - Батарея — текущий заряд/статус (полный health% — TODO)
 - Итоговый отчёт — сводка по всем пунктам + сохранение в
   `%APPDATA%/ru.echips.diagnostic-assistant/reports/*.txt`
 
 ## Что оформлено как заглушка (ручная отметка Исправно/Неисправно/Пропустить)
 
-Wi-Fi/Bluetooth, отпечаток пальца, температуры/кулер,
+отпечаток пальца, температуры/кулер,
 стресс-тест — сами экраны в навигации уже есть, но без автоматической
 проверки. Реализуются по одному: добавить рендер-функцию в `app.js` и
 зарегистрировать в объекте `RENDERERS`, при необходимости — новую
@@ -65,8 +67,6 @@ Tauri-команду в `src-tauri/src/commands/`.
 - Температуры/обороты кулера — нет прямого WMI-источника на всех платах;
   вероятно потребуется внешняя утилита (LibreHardwareMonitor CLI/DLL) или
   чтение через ACPI, если Echips-платы это поддерживают
-- Bluetooth/Wi-Fi — перечисление устройств через WMI
-  (`Win32_NetworkAdapter`)
 - Стресс-тест — нагрузка CPU через Rust-потоки + мониторинг троттлинга
 
 ## Сборка

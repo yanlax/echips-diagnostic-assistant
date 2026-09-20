@@ -533,6 +533,53 @@ function renderUsbScreen() {
   load();
 }
 
+// ---- Экран "Wi-Fi / Bluetooth" ----
+function renderWifiBtScreen() {
+  showLoading("Опрос сетевых адаптеров...");
+  invoke("get_network_adapters")
+    .then(function (adapters) {
+      function adapterStatus(a) {
+        if (a.error_code) return "Ошибка устройства (код " + a.error_code + ")";
+        if (a.enabled === false) return "Отключён";
+        if (a.enabled === true) return a.connection_status === 2 ? "Включён, подключён" : "Включён";
+        return "Обнаружен";
+      }
+      function section(kind, title) {
+        var list = adapters.filter(function (a) { return a.kind === kind; });
+        return "<h3>" + title + "</h3>" + '<div class="devlist">' + (list.length ? list.map(function (a) {
+          return devRow(a.name, adapterStatus(a));
+        }).join("") : '<p class="hint">Адаптер не обнаружен.</p>') + "</div>";
+      }
+      var hasWifi = adapters.some(function (a) { return a.kind === "wifi"; });
+      var hasBt = adapters.some(function (a) { return a.kind === "bluetooth"; });
+
+      screen.innerHTML =
+        '<div class="test-screen">' +
+        "<h2>Wi-Fi / Bluetooth</h2>" +
+        section("wifi", "Wi-Fi") + section("bluetooth", "Bluetooth") +
+        '<p class="hint">Убедитесь, что Wi-Fi видит сети, а Bluetooth находит устройства, затем отметьте результат.</p>' +
+        '<div class="btn-row">' +
+        '<button class="btn-primary" id="btn-pass">Исправно</button>' +
+        '<button class="btn-danger" id="btn-fail">Неисправно</button>' +
+        '<button class="btn-ghost" id="btn-skip">Пропустить</button>' +
+        "</div></div>";
+
+      var found = "Wi-Fi: " + (hasWifi ? "есть" : "нет") + ", Bluetooth: " + (hasBt ? "есть" : "нет");
+      document.getElementById("btn-pass").addEventListener("click", function () {
+        setStatus("wifi_bt", "pass", found);
+      });
+      document.getElementById("btn-fail").addEventListener("click", function () {
+        setStatus("wifi_bt", "fail", found);
+      });
+      document.getElementById("btn-skip").addEventListener("click", function () {
+        setStatus("wifi_bt", "skipped", "");
+      });
+    })
+    .catch(function (err) {
+      showError(typeof err === "string" ? err : "Не удалось опросить сетевые адаптеры");
+    });
+}
+
 // ---- Экран "Батарея" ----
 function renderBatteryScreen() {
   showLoading("Опрос контроллера батареи...");
@@ -651,6 +698,7 @@ var RENDERERS = {
   camera: renderCameraScreen,
   audio: renderAudioScreen,
   usb: renderUsbScreen,
+  wifi_bt: renderWifiBtScreen,
   battery: renderBatteryScreen,
   report: renderReportScreen
 };

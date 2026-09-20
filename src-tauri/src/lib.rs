@@ -10,6 +10,7 @@ pub fn run() {
             commands::battery::get_battery_info,
             commands::report::save_report,
             commands::usb::list_usb_devices,
+            commands::network::get_network_adapters,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

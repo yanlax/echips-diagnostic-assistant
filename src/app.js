@@ -464,6 +464,75 @@ function renderAudioScreen() {
   });
 }
 
+// ---- Экран "USB-порты" ----
+function renderUsbScreen() {
+  var portCount = 3;
+  var checked = {};
+
+  function paint(devices, error) {
+    var list = "";
+    if (error) {
+      list = '<div class="error-text">' + escapeHtml(error) + "</div>";
+    } else {
+      var real = devices.filter(function (d) { return !d.is_hub; });
+      list = '<div class="devlist">' + (real.length ? real.map(function (d) {
+        var bad = d.status && d.status !== "OK";
+        return devRow(d.name || d.device_id, (d.manufacturer || "") + (bad ? " — статус: " + d.status : ""));
+      }).join("") : "<p class=\"hint\">USB-устройств не найдено.</p>") + "</div>";
+    }
+
+    var ports = "";
+    for (var i = 1; i <= portCount; i++) {
+      ports += '<label class="port-check"><input type="checkbox" data-port="' + i + '"' +
+        (checked[i] ? " checked" : "") + "> Порт " + i + " работает</label>";
+    }
+
+    screen.innerHTML =
+      '<div class="test-screen">' +
+      "<h2>USB-порты</h2>" +
+      '<p class="hint">Вставляйте флешку в каждый порт по очереди и нажимайте «Обновить» — устройство должно появиться в списке. Затем отметьте проверенные порты.</p>' +
+      list +
+      '<div class="btn-row"><button class="btn-ghost" id="btn-refresh">Обновить</button></div>' +
+      '<p class="hint">Количество портов: <input type="number" id="port-count" min="1" max="12" value="' + portCount + '" style="width:4em"></p>' +
+      '<div class="port-list">' + ports + "</div>" +
+      '<div class="btn-row">' +
+      '<button class="btn-primary" id="btn-pass">Все порты исправны</button>' +
+      '<button class="btn-danger" id="btn-fail">Есть неисправные</button>' +
+      "</div></div>";
+
+    document.getElementById("btn-refresh").addEventListener("click", load);
+    document.getElementById("port-count").addEventListener("change", function (e) {
+      portCount = Math.max(1, Math.min(12, parseInt(e.target.value, 10) || 1));
+      paint(devices, error);
+    });
+    Array.prototype.forEach.call(screen.querySelectorAll("[data-port]"), function (cb) {
+      cb.addEventListener("change", function () { checked[cb.dataset.port] = cb.checked; });
+    });
+    function summary() {
+      var ok = [], bad = [];
+      for (var i = 1; i <= portCount; i++) { (checked[i] ? ok : bad).push(i); }
+      return { ok: ok, bad: bad };
+    }
+    document.getElementById("btn-pass").addEventListener("click", function () {
+      var s = summary();
+      var note = s.bad.length ? "Не отмечены порты: " + s.bad.join(", ") : "Проверено портов: " + portCount;
+      setStatus("usb", s.bad.length ? "fail" : "pass", note);
+    });
+    document.getElementById("btn-fail").addEventListener("click", function () {
+      var s = summary();
+      setStatus("usb", "fail", s.bad.length ? "Не работают/не проверены порты: " + s.bad.join(", ") : "");
+    });
+  }
+
+  function load() {
+    showLoading("Опрос USB-устройств...");
+    invoke("list_usb_devices")
+      .then(function (devices) { paint(devices, null); })
+      .catch(function (err) { paint([], String(err)); });
+  }
+  load();
+}
+
 // ---- Экран "Батарея" ----
 function renderBatteryScreen() {
   showLoading("Опрос контроллера батареи...");
@@ -581,6 +650,7 @@ var RENDERERS = {
   display: renderDisplayScreen,
   camera: renderCameraScreen,
   audio: renderAudioScreen,
+  usb: renderUsbScreen,
   battery: renderBatteryScreen,
   report: renderReportScreen
 };

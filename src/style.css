@@ -335,3 +335,6 @@ html, body {
   background: #000;
   border-radius: 8px;
 }
+
+.port-list { display: flex; flex-wrap: wrap; gap: 12px; margin: 8px 0; }
+.port-check { display: flex; align-items: center; gap: 6px; }

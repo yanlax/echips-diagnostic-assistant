@@ -10,3 +10,4 @@ pub mod summary;
 pub mod crash;
 pub mod memtest;
 pub mod storage;
+pub mod peripherals;

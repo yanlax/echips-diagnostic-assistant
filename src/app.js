@@ -18,10 +18,14 @@ var CATS = [
   { id:'disk', tag:'HDD', name:'Диск: здоровье', method:'Состояние, износ, температура и ошибки (Get-PhysicalDisk, счётчики надёжности)', impl:'реальные данные', kind:'runner', fetch:'disk' },
   { id:'crash', tag:'BSOD', name:'Журнал сбоев', method:'Синие экраны и внезапные перезагрузки: события Windows + minidump', impl:'реальные данные', kind:'runner', fetch:'crash' },
   { id:'usb', tag:'USB', name:'USB-порты', method:'Список устройств на USB-шине (WMI PnP) + статус', impl:'реальные данные', kind:'runner', fetch:'usb' },
+  { id:'rem', tag:'FLASH', name:'Накопитель USB', method:'Запись и чтение флешки на порту с проверкой данных и замером скорости', impl:'реальная нагрузка', kind:'removable' },
   { id:'bt', tag:'BT', name:'Bluetooth', method:'Статус адаптера и список сопряжённых устройств', impl:'реальные данные', kind:'runner', fetch:'bt' },
   { id:'wifi', tag:'WIFI', name:'Wi-Fi', method:'Адаптер + список видимых сетей (netsh wlan)', impl:'реальные данные', kind:'runner', fetch:'wifi' },
+  { id:'lan', tag:'LAN', name:'LAN (Ethernet)', method:'Адаптер, состояние линка и скорость', impl:'реальные данные', kind:'runner', fetch:'lan' },
   { id:'kb', tag:'KEY', name:'Клавиатура', method:'Карта клавиш, детект n-key rollover; залипы — глазами', impl:'интерактивно', kind:'keyboard' },
   { id:'lcd', tag:'LCD', name:'Матрица', method:'Заливка сплошными цветами — битые пиксели и засветы', impl:'интерактивно', kind:'display' },
+  { id:'ext', tag:'EXT', name:'Внешний монитор', method:'Подключённые мониторы и тип выхода (HDMI / DisplayPort / VGA)', impl:'реальные данные', kind:'runner', fetch:'ext' },
+  { id:'bright', tag:'BRT', name:'Яркость', method:'Регулировка подсветки матрицы через WMI, проверка на глаз', impl:'реальное управление', kind:'brightness' },
   { id:'cam', tag:'CAM', name:'Камера', method:'Живое превью через getUserMedia — оценка на глаз', impl:'реальное превью', kind:'camera' },
   { id:'pad', tag:'PAD', name:'Тачпад', method:'Точки касания, мультитач, базовые жесты', impl:'интерактивно', kind:'touchpad' },
   { id:'fp', tag:'FP', name:'Отпечаток', method:'Сенсор виден системе (WinBio) — регистрация вручную', impl:'частично', kind:'runner', fetch:'fp' },
@@ -33,10 +37,17 @@ var CATS = [
   { id:'stress', tag:'STR', name:'Стресс-тест', method:'Реальная нагрузка CPU на всех ядрах на заданное время', impl:'CPU реально', kind:'stress' }
 ];
 var FILLS = [
-  { name:'белый', color:'#FFFFFF' }, { name:'чёрный', color:'#000000' },
-  { name:'красный', color:'#FF0000' }, { name:'зелёный', color:'#00FF00' },
-  { name:'синий', color:'#0000FF' }, { name:'серый 50%', color:'#808080' }
+  { name:'белый', color:'#FFFFFF' }, { name:'серый', color:'#8F8F8F' }, { name:'чёрный', color:'#000000' },
+  { name:'красный', color:'#FF0000' }, { name:'зелёный', color:'#00FF00' }, { name:'синий', color:'#0000FF' },
+  { name:'жёлтый', color:'#FFFF00' }, { name:'голубой', color:'#00FFFF' }, { name:'пурпурный', color:'#FF00FF' },
+  { name:'градиент горизонтальный', color:'#666', bg:'linear-gradient(90deg,#000,#fff)' },
+  { name:'градиент вертикальный', color:'#666', bg:'linear-gradient(180deg,#000,#fff)' },
+  { name:'цветные полосы', color:'#888', bg:'linear-gradient(90deg,#fff 0 14.28%,#ff0 0 28.57%,#0ff 0 42.85%,#0f0 0 57.14%,#f0f 0 71.42%,#f00 0 85.7%,#00f 0)' },
+  { name:'шахматка', color:'#888', bg:'repeating-conic-gradient(#000 0 25%,#fff 0 50%) 0 0/48px 48px' },
+  { name:'сетка', color:'#444', bg:'linear-gradient(#fff 1px,transparent 1px) 0 0/40px 40px,linear-gradient(90deg,#fff 1px,transparent 1px) 0 0/40px 40px,#000' },
+  { name:'полосы 1 пиксель', color:'#888', bg:'repeating-linear-gradient(90deg,#000 0 1px,#fff 1px 2px)' }
 ];
+function fillBg(f){ return f.bg || f.color; }
 var KEYROWS = [
   ['Esc','F1','F2','F3','F4','F5','F6','F7','F8','F9','F10','F11','F12','Del'],
   ['`','1','2','3','4','5','6','7','8','9','0','-','=','Bksp'],
@@ -77,7 +88,8 @@ var S = {
   sensorPoll:null, sensorReading:null, sensorHistory:[],
   stressOn:false, stressT:0, stressLoad:'CPU', stressDur:300, stressResult:null,
   snapshot:false, exported:null,
-  hw:null, verdict:null,
+  hw:null, verdict:null, br:{ info:null, loading:false }, camClip:null,
+  rm:{ drives:null, timer:null, running:null, log:[], err:null, size:64 },
   dr:{ disks:null, sel:0, mode:64, running:false, pct:0, mbps:0, res:null, err:null },
   mem:{ size:1024, passes:1, running:false, pct:0, pass:1, pattern:'', errors:0, res:null, err:null },
   auto:{ on:false, ids:[], idx:-1, stopped:false, waiting:false, msg:'', cls:'' },
@@ -147,6 +159,8 @@ function stopAudio(){
 var A = {
   go:function(screen,id){
     stopSensorPoll(); stopCamera(); stopAudio();
+    if (S.rm.timer){ clearInterval(S.rm.timer); S.rm.timer=null; }
+    S.br = { info:null, loading:false }; S.camClip = null;
     if (S.dr.running) invoke('stop_disk_read_test').catch(function(){});
     if (S.mem.running) invoke('stop_memory_test').catch(function(){});
     if (document.getElementById('fill-overlay')) A.fillClose();
@@ -164,7 +178,7 @@ var A = {
     if (c.kind==='camera') A.camStart();
     if (c.kind==='runner' && S.auto.on) A.run();
   },
-  reset:function(){ A.autoOff(); S.results={}; S.comments={}; S.keys={}; S.snapshot=false; render(); },
+  reset:function(){ A.autoOff(); S.rm.log=[]; S.results={}; S.comments={}; S.keys={}; S.snapshot=false; render(); },
   press:function(id){ S.keys[id]=true; render(); },
   nextFill:function(){ S.fill=(S.fill+1)%FILLS.length; render(); paintFill(); },
   prevFill:function(){ S.fill=(S.fill+FILLS.length-1)%FILLS.length; render(); paintFill(); },
@@ -281,6 +295,66 @@ var A = {
       .catch(function(err){ fin(); m.err = typeof err==='string'?err:'Ошибка теста памяти'; render(); });
   },
   memStop:function(){ invoke('stop_memory_test').catch(function(){}); },
+
+  /* ---- яркость ---- */
+  brLoad:function(){
+    if (S.br.info || S.br.loading) return;
+    S.br.loading = true;
+    invoke('get_brightness').then(function(r){
+      S.br.info = r; S.br.loading = false; render();
+      if (!r.available && S.auto.on && S.cat==='bright') A.autoApply({ status:'na', note:'Управление яркостью недоступно (настольный ПК или внешний монитор)' });
+    }).catch(function(err){
+      S.br.info = { available:false, current:0, min:0, max:100, error: typeof err==='string'?err:'' }; S.br.loading=false; render();
+      if (S.auto.on && S.cat==='bright') A.autoApply({ status:'na', note:'Управление яркостью недоступно' });
+    });
+  },
+  brInput:function(v){
+    var l = document.getElementById('br-val'); if (l) l.textContent = v+'%';
+    clearTimeout(S.brT);
+    S.brT = setTimeout(function(){ invoke('set_brightness', { level:parseInt(v,10) }).catch(function(){}); }, 120);
+  },
+  brSet:function(v){ if (S.br.info) S.br.info.current=v; invoke('set_brightness', { level:v }).catch(function(){}); render(); },
+
+  /* ---- USB-накопитель ---- */
+  rmStart:function(){
+    if (S.rm.timer) return;
+    function poll(){
+      if (S.rm.running) return;
+      invoke('list_removable_drives').then(function(list){
+        var changed = JSON.stringify(list) !== JSON.stringify(S.rm.drives);
+        S.rm.drives = list; S.rm.err = null;
+        if (changed && S.screen==='test' && cat().kind==='removable') render();
+      }).catch(function(err){
+        S.rm.err = typeof err==='string' ? err : 'Не удалось получить список накопителей';
+        if (S.rm.drives===null){ S.rm.drives = []; render(); }
+      });
+    }
+    poll(); S.rm.timer = setInterval(poll, 2000);
+  },
+  rmTest:function(letter){
+    if (S.rm.running) return;
+    S.rm.running = letter; render();
+    invoke('test_removable_drive', { letter:letter, sizeMb:S.rm.size }).then(function(r){
+      S.rm.running = null; S.rm.log.unshift(r); render();
+    }).catch(function(err){
+      S.rm.running = null; S.rm.log.unshift({ letter:letter, error: typeof err==='string'?err:'Ошибка теста накопителя' }); render();
+    });
+  },
+
+  /* ---- запись с камеры ---- */
+  camRecord:function(){
+    if (!S.camStream || S.camRecording || typeof MediaRecorder==='undefined') return;
+    var chunks = [], rec = new MediaRecorder(S.camStream);
+    S.camRecording = true; S.camClip = null; render();
+    rec.ondataavailable = function(e){ if (e.data.size) chunks.push(e.data); };
+    rec.onstop = function(){
+      S.camRecording = false;
+      if (chunks.length) S.camClip = URL.createObjectURL(new Blob(chunks, { type: rec.mimeType }));
+      render();
+    };
+    rec.start();
+    setTimeout(function(){ if (rec.state!=='inactive') rec.stop(); }, 5000);
+  },
 
   /* ---- runner-категории: реальные invoke-запросы ---- */
   run:function(){
@@ -692,20 +766,44 @@ function fetchCategory(kind){
     });
   }
   if (kind==='wifi'){
-    return Promise.all([invoke('list_wifi_adapters'), invoke('scan_wifi_networks').catch(function(){ return []; })])
-      .then(function(res){
-        var adapters=res[0], networks=res[1];
-        var lines = adapters.length
-          ? adapters.map(function(a){ return 'Адаптер: ' + a.name + ' — ' + a.status + ' (' + a.mac + ')'; })
-          : ['Wi-Fi адаптер не обнаружен.'];
-        lines.push('Видимых сетей: ' + networks.length);
-        var off = adapters.filter(function(a){ return a.status==='Disabled' || a.status==='Not Present'; });
-        return { lines: lines.concat(networks.slice(0,8)),
-          verdict: !adapters.length ? absent('wifi','Wi-Fi адаптер')
-            : off.length ? { status:'fail', note:'Wi-Fi адаптер отключён или недоступен' }
-            : !networks.length ? { status:'fail', note:'Адаптер есть, но сетей не видит' }
-            : { status:'pass', note:'Wi-Fi работает, видимых сетей: '+networks.length } };
-      });
+    var scan = invoke('scan_wifi_detailed').catch(function(){
+      return invoke('scan_wifi_networks').then(function(l){ return l.map(function(x){ return { ssid:x, signal:null }; }); }).catch(function(){ return []; });
+    });
+    return Promise.all([invoke('list_wifi_adapters'), scan]).then(function(res){
+      var adapters=res[0], networks=res[1], min = profile().wifiMinSignal;
+      var lines = adapters.length
+        ? adapters.map(function(a){ return 'Адаптер: ' + a.name + ' — ' + a.status + ' (' + a.mac + ')'; })
+        : ['Wi-Fi адаптер не обнаружен.'];
+      lines.push('Видимых сетей: ' + networks.length);
+      var sigs = networks.map(function(n){ return n.signal; }).filter(function(v){ return v!=null; });
+      var best = sigs.length ? Math.max.apply(null, sigs) : null;
+      if (best!==null) lines.push('Лучший уровень сигнала: '+best+'%'+(min!=null?' (порог профиля '+min+'%)':''));
+      var off = adapters.filter(function(a){ return a.status==='Disabled' || a.status==='Not Present'; });
+      return { lines: lines.concat(networks.slice(0,8).map(function(n){ return n.ssid + (n.signal!=null ? ' — ' + n.signal + '%' : ''); })),
+        verdict: !adapters.length ? absent('wifi','Wi-Fi адаптер')
+          : off.length ? { status:'fail', note:'Wi-Fi адаптер отключён или недоступен' }
+          : !networks.length ? { status:'fail', note:'Адаптер есть, но сетей не видит' }
+          : (min!=null && best!==null && best<min) ? { status:'fail', note:'Лучший сигнал '+best+'% ниже порога '+min+'% — проверьте антенну и шлейф' }
+          : { status:'pass', note:'Wi-Fi работает, видимых сетей: '+networks.length+(best!==null?', лучший сигнал '+best+'%':'') } };
+    });
+  }
+  if (kind==='lan'){
+    return invoke('list_lan_adapters').then(function(list){
+      if (!list.length) return { lines:['Ethernet-адаптер не обнаружен.'], verdict:absent('lan','Ethernet-адаптер') };
+      var up = list.filter(function(a){ return a.status==='Up'; });
+      return { lines:list.map(function(a){ return a.name+' ('+a.description+') — '+(a.status==='Up'?'линк есть, '+a.speed:a.status==='Disconnected'?'кабель не подключён':a.status)+' · '+a.mac; }),
+        verdict: up.length ? { status:'pass', note:'Линк установлен, скорость '+up[0].speed }
+          : { status:'na', note:'Адаптер есть, кабель не подключён — линк не проверен' } };
+    });
+  }
+  if (kind==='ext'){
+    return invoke('list_monitors').then(function(list){
+      var CONN = { HDMI:'HDMI', DVI:'DVI', DisplayPort:'DisplayPort', VGA:'VGA', internal:'встроенный', other:'тип не определён' };
+      var ext = list.filter(function(m){ return !m.internal; });
+      var lines = list.length ? list.map(function(m){ return (m.internal?'Встроенная матрица':'Внешний монитор')+': '+(m.name==='Monitor'?'Монитор':m.name)+' — '+(CONN[m.connection]||m.connection); }) : ['Мониторы через WMI не найдены.'];
+      if (!ext.length) lines.push('Внешний монитор не подключён — подключите HDMI/DisplayPort и повторите проверку.');
+      return { lines:lines, verdict: ext.length ? { status:'pass', note:'Внешний монитор подключён ('+(CONN[ext[0].connection]||ext[0].connection)+')' } : null };
+    });
   }
   if (kind==='fp'){
     return invoke('get_fingerprint_sensor').then(function(name){
@@ -851,7 +949,7 @@ function fieldKeyboard(){
 }
 function paintFill(){
   var o = document.getElementById('fill-overlay'); if(!o) return;
-  o.style.background = FILLS[S.fill].color;
+  o.style.background = fillBg(FILLS[S.fill]);
   var h = document.getElementById('fill-hint');
   if (h){ h.style.opacity='1'; h.textContent = FILLS[S.fill].name+' · клик или → — следующий цвет · ← назад · Esc — выйти';
     clearTimeout(S.fillHintT); S.fillHintT = setTimeout(function(){ h.style.opacity='0'; }, 3500); }
@@ -866,10 +964,10 @@ document.addEventListener('keydown', function(e){
 function fieldDisplay(){
   return '<div class="fillwrap"><div class="btn-row-fs"><button class="btn btn-primary" onclick="echips.fillOpen()">На весь экран</button>'+
     '<span class="kbnote">Полноэкранная заливка: клик или → — следующий цвет, Esc — выход</span></div>'+
-    '<div class="fillstage" style="background:'+FILLS[S.fill].color+'" onclick="echips.nextFill()">'+
+    '<div class="fillstage" style="background:'+fillBg(FILLS[S.fill])+'" onclick="echips.nextFill()">'+
     '<span>клик — следующая заливка · '+FILLS[S.fill].name+'</span></div>'+
     '<div class="swatches">'+ FILLS.map(function(f,i){
-      return '<div class="swatch'+(i===S.fill?' on':'')+'" style="background:'+f.color+'" onclick="echips.setFill('+i+')"></div>';
+      return '<div class="swatch'+(i===S.fill?' on':'')+'" style="background:'+fillBg(f)+'" onclick="echips.setFill('+i+')"></div>';
     }).join('') +'</div></div>';
 }
 function fieldTouchpad(){
@@ -903,7 +1001,9 @@ function fieldCamera(){
       ? '<video id="cam-preview" autoplay muted playsinline style="width:100%;height:100%;object-fit:cover;border-radius:10px"></video>'
       : '<div class="lens">CAM</div><div class="m">'+(S.runError?esc(S.runError):'запрос доступа к камере…')+'</div>')+
     '</div>'+
-    '<div class="side">'+ CAMCHECKS.map(function(s){ return '<div class="note">'+s+'</div>'; }).join('') +'</div></div>';
+    '<div class="side">'+ CAMCHECKS.map(function(s){ return '<div class="note">'+s+'</div>'; }).join('') +
+    (S.camStream ? '<button class="btn btn-ghost" style="margin-top:8px" onclick="echips.camRecord()" '+(S.camRecording?'disabled':'')+'>'+(S.camRecording?'Запись 5 с…':S.camClip?'Записать заново':'Записать 5 с')+'</button>' : '')+
+    (S.camClip ? '<video src="'+S.camClip+'" controls style="width:100%;margin-top:8px;border-radius:8px;background:#000"></video>' : '')+'</div></div>';
 }
 function spectrumBars(){
   var bars = '';
@@ -984,6 +1084,34 @@ function fieldDiskRead(){
   }
   return out+'</div>';
 }
+function fieldBrightness(){
+  A.brLoad();
+  var b = S.br.info;
+  if (!b) return '<div class="runwrap"><div class="idle"><span class="t">··</span><span>опрос подсветки…</span></div></div>';
+  if (!b.available) return '<div class="runwrap"><div class="idle"><span class="t">--</span><span>Управление яркостью через WMI недоступно: настольный ПК, внешний монитор или драйвер не поддерживает. Отметьте «Не применимо».</span></div></div>';
+  return '<div class="runwrap"><div class="control"><div class="k">Яркость подсветки: <span id="br-val" style="color:var(--text)">'+b.current+'%</span></div>'+
+    '<input type="range" class="range" min="'+b.min+'" max="'+b.max+'" value="'+b.current+'" oninput="echips.brInput(this.value)"></div>'+
+    '<div class="runrow" style="margin-top:14px"><button class="btn btn-ghost" onclick="echips.brSet('+b.min+')">Минимум</button>'+
+    '<button class="btn btn-ghost" onclick="echips.brSet('+Math.round((b.min+b.max)/2)+')">50%</button>'+
+    '<button class="btn btn-ghost" onclick="echips.brSet('+b.max+')">Максимум</button>'+
+    '<span class="n">яркость матрицы должна плавно и без мерцания меняться</span></div></div>';
+}
+function fieldRemovable(){
+  A.rmStart();
+  var rm = S.rm, drives = rm.drives;
+  var out = '<div class="runwrap"><div class="kbnote" style="margin-bottom:10px">Вставьте флешку в проверяемый порт — она появится в списке. Для проверки нескольких портов вставляйте её по очереди.</div>';
+  if (drives===null) out += '<div class="idle"><span class="t">··</span><span>поиск накопителей…</span></div>';
+  else if (!drives.length) out += '<div class="idle"><span class="t">--</span><span>'+(rm.err?esc(rm.err):'USB-накопитель не найден — вставьте флешку')+'</span></div>';
+  else out += '<div class="devlist2">'+drives.map(function(d){
+      return '<div class="devrow2"><span class="dot" style="background:var(--ok);box-shadow:0 0 8px var(--ok)"></span>'+esc(d.letter)+': '+esc(d.label||'без метки')+' · '+d.size_gb+' ГБ · свободно '+d.free_gb+' ГБ · '+esc(d.fs)+
+        '<button class="btn btn-primary" style="margin-left:auto;padding:7px 14px" onclick="echips.rmTest(\''+esc(d.letter)+'\')" '+(rm.running?'disabled':'')+'>'+(rm.running===d.letter?'Проверка…':'Проверить запись/чтение')+'</button></div>';
+    }).join('')+'</div>';
+  if (rm.log.length) out += '<div class="log">'+rm.log.map(function(r,i){
+      return r.error ? '<div><span class="t">'+String(i+1).padStart(2,'0')+'</span><span style="color:var(--err)">'+esc(r.letter)+': '+esc(r.error)+'</span></div>'
+        : '<div><span class="t">'+String(i+1).padStart(2,'0')+'</span><span>'+esc(r.letter)+': запись '+r.write_mbps.toFixed(1)+' МБ/с · чтение '+r.read_mbps.toFixed(1)+' МБ/с · '+r.size_mb+' МБ · '+(r.errors?'<b style="color:var(--err)">ошибок данных: '+r.errors+'</b>':'данные совпали')+'</span></div>';
+    }).join('')+'</div>';
+  return out+'</div>';
+}
 function fieldMem(){
   var m = S.mem, r = m.res;
   var sizes = [[512,'512 МБ'],[1024,'1 ГБ'],[2048,'2 ГБ'],[4096,'4 ГБ']];
@@ -1024,6 +1152,8 @@ function screenTest(){
   else if(c.kind==='audio') field = fieldAudio();
   else if(c.kind==='diskread') field = fieldDiskRead();
   else if(c.kind==='memtest') field = fieldMem();
+  else if(c.kind==='brightness') field = fieldBrightness();
+  else if(c.kind==='removable') field = fieldRemovable();
   else field = fieldRunner();
   return '<div class="pane">'+
     '<div class="crumbs"><button class="btn-link" onclick="echips.go(\'dash\')">← все категории</button>'+

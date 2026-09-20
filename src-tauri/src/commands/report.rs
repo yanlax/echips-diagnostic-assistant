@@ -30,6 +30,7 @@ fn status_label(status: &str) -> &'static str {
     match status {
         "pass" => "OK",
         "fail" => "НЕИСПРАВНО",
+        "na" => "НЕ ПРИМЕНИМО",
         _ => "НЕ ПРОВЕРЕНО",
     }
 }

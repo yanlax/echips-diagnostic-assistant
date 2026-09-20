@@ -46,6 +46,7 @@ var CAMCHECKS = ['Превью идёт без артефактов','Цвета
 var STATUS = {
   pass:{ label:'пройдено', cls:'pass' },
   fail:{ label:'ошибка', cls:'fail' },
+  na:{ label:'не применимо', cls:'na' },
   idle:{ label:'не проверено', cls:'' }
 };
 
@@ -79,9 +80,11 @@ function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').rep
 function cat(){ for (var i=0;i<CATS.length;i++) if (CATS[i].id===S.cat) return CATS[i]; return CATS[0]; }
 function statusOf(id){ return S.results[id] || 'idle'; }
 function counts(){
-  var p=0,f=0;
-  CATS.forEach(function(c){ if(S.results[c.id]==='pass') p++; else if(S.results[c.id]==='fail') f++; });
-  return { pass:p, fail:f, checked:p+f };
+  var p=0,f=0,n=0;
+  CATS.forEach(function(c){
+    if(S.results[c.id]==='pass') p++; else if(S.results[c.id]==='fail') f++; else if(S.results[c.id]==='na') n++;
+  });
+  return { pass:p, fail:f, na:n, checked:p+f+n };
 }
 function deviceLabel(){
   if (!S.device) return 'определяется…';
@@ -134,6 +137,7 @@ function stopAudio(){
 var A = {
   go:function(screen,id){
     stopSensorPoll(); stopCamera(); stopAudio();
+    if (document.getElementById('fill-overlay')) A.fillClose();
     S.screen=screen; if(id) S.cat=id; S.running=false; S.runLines=[]; S.runError=null; S.exported=null; S.tone=null;
     if(screen==='drivers'){ A.drvStart(); }
     if(screen==='mb'){ A.mbReset(); }
@@ -148,7 +152,26 @@ var A = {
   },
   reset:function(){ S.results={}; S.comments={}; S.keys={}; S.snapshot=false; render(); },
   press:function(id){ S.keys[id]=true; render(); },
-  nextFill:function(){ S.fill=(S.fill+1)%FILLS.length; render(); },
+  nextFill:function(){ S.fill=(S.fill+1)%FILLS.length; render(); paintFill(); },
+  prevFill:function(){ S.fill=(S.fill+FILLS.length-1)%FILLS.length; render(); paintFill(); },
+  fillOpen:function(){
+    if (document.getElementById('fill-overlay')) return;
+    var o = document.createElement('div');
+    o.id = 'fill-overlay';
+    o.innerHTML = '<span id="fill-hint"></span>';
+    o.addEventListener('click', function(){ A.nextFill(); });
+    document.body.appendChild(o);
+    try { getCurrentWindow().setFullscreen(true); } catch(e){}
+    paintFill();
+    clearTimeout(S.fillHintT);
+    S.fillHintT = setTimeout(function(){ var h=document.getElementById('fill-hint'); if(h) h.style.opacity='0'; }, 3500);
+  },
+  fillClose:function(){
+    var o = document.getElementById('fill-overlay');
+    if (o) o.parentNode.removeChild(o);
+    try { getCurrentWindow().setFullscreen(false); } catch(e){}
+    render();
+  },
   setFill:function(i){ S.fill=i; render(); },
   comment:function(v){ S.comments[S.cat]=v; },
   mark:function(v){ S.results[S.cat]=v; A.go('dash'); },
@@ -545,6 +568,37 @@ function screenDash(){
     }).join('') +'</div></div>';
 }
 
+/* Соответствие KeyboardEvent.code позициям клавиш в раскладке KEYROWS. */
+var CODEMAP = (function(){
+  var named = { 'Esc':['Escape'],'Del':['Delete'],'`':['Backquote'],'-':['Minus'],'=':['Equal'],'Bksp':['Backspace'],'Tab':['Tab'],
+    '[':['BracketLeft'],']':['BracketRight'],'\\':['Backslash'],'Caps':['CapsLock'],';':['Semicolon'],"'":['Quote'],
+    'Enter':['Enter','NumpadEnter'],',':['Comma'],'.':['Period'],'/':['Slash'],'Ctrl':['ControlLeft','ControlRight'],
+    'Win':['MetaLeft','MetaRight'],'Space':['Space'],'←':['ArrowLeft'],'↑':['ArrowUp'],'↓':['ArrowDown'],'→':['ArrowRight'] };
+  var map = {};
+  KEYROWS.forEach(function(row,ri){
+    row.forEach(function(label,ki){
+      var id = ri+':'+ki, codes;
+      if (label==='Shift') codes = [ki===0 ? 'ShiftLeft' : 'ShiftRight'];
+      else if (label==='Alt') codes = [ki===3 ? 'AltLeft' : 'AltRight'];
+      else if (named[label]) codes = named[label];
+      else if (/^F\d+$/.test(label)) codes = [label];
+      else if (/^\d$/.test(label)) codes = ['Digit'+label, 'Numpad'+label];
+      else if (/^[A-Z]$/.test(label)) codes = ['Key'+label];
+      else codes = [];
+      codes.forEach(function(c){ map[c] = id; });
+    });
+  });
+  return map;
+})();
+document.addEventListener('keydown', function(e){
+  if (S.screen!=='test' || cat().kind!=='keyboard') return;
+  if (e.target && (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA')) return;
+  e.preventDefault();
+  var id = CODEMAP[e.code];
+  if (id && !S.keys[id]){ S.keys[id] = true; render(); }
+  else if (!id) { S.lastUnknown = e.code; }
+});
+
 function fieldKeyboard(){
   var pressed = Object.keys(S.keys).length, total = 0;
   KEYROWS.forEach(function(r){ total += r.length; });
@@ -557,10 +611,25 @@ function fieldKeyboard(){
         return '<div class="key'+(S.keys[id]?' on':'')+'" style="flex:'+(WIDE[label]||1)+' 1 0" onclick="echips.press(\''+id+'\')">'+esc(label)+'</div>';
       }).join('') +'</div>';
     }).join('') +'</div>'+
-    '<div class="kbnote">Залипание и непрожатие определяет техник глазами — результат ниже.</div></div>';
+    '<div class="kbnote">Клавиши подсвечиваются при нажатии на самой клавиатуре. Fn обычно не виден системе — отметьте её кликом мыши.'+(S.lastUnknown?' Не найдена в раскладке: '+esc(S.lastUnknown)+'.':'')+'</div></div>';
 }
+function paintFill(){
+  var o = document.getElementById('fill-overlay'); if(!o) return;
+  o.style.background = FILLS[S.fill].color;
+  var h = document.getElementById('fill-hint');
+  if (h){ h.style.opacity='1'; h.textContent = FILLS[S.fill].name+' · клик или → — следующий цвет · ← назад · Esc — выйти';
+    clearTimeout(S.fillHintT); S.fillHintT = setTimeout(function(){ h.style.opacity='0'; }, 3500); }
+}
+document.addEventListener('keydown', function(e){
+  if (!document.getElementById('fill-overlay')) return;
+  e.preventDefault();
+  if (e.key==='Escape') A.fillClose();
+  else if (e.key==='ArrowRight' || e.key===' ' || e.key==='Enter') A.nextFill();
+  else if (e.key==='ArrowLeft') A.prevFill();
+});
 function fieldDisplay(){
-  return '<div class="fillwrap">'+
+  return '<div class="fillwrap"><div class="btn-row-fs"><button class="btn btn-primary" onclick="echips.fillOpen()">На весь экран</button>'+
+    '<span class="kbnote">Полноэкранная заливка: клик или → — следующий цвет, Esc — выход</span></div>'+
     '<div class="fillstage" style="background:'+FILLS[S.fill].color+'" onclick="echips.nextFill()">'+
     '<span>клик — следующая заливка · '+FILLS[S.fill].name+'</span></div>'+
     '<div class="swatches">'+ FILLS.map(function(f,i){
@@ -599,7 +668,7 @@ function fieldCamera(){
     '</div>'+
     '<div class="side">'+ CAMCHECKS.map(function(s){ return '<div class="note">'+s+'</div>'; }).join('') +'</div></div>';
 }
-function fieldAudio(){
+function spectrumBars(){
   var bars = '';
   var data = null;
   if (S.toneAnalyser){
@@ -614,6 +683,10 @@ function fieldAudio(){
     }
     bars += '<i style="height:'+h.toFixed(0)+'%"></i>';
   }
+  return bars;
+}
+function fieldAudio(){
+  var bars = spectrumBars();
   var note = S.tone===null ? 'выберите сигнал — спектр появится ниже'
     : S.tone===2 ? 'echo-тест: сигнал с микрофона идёт в анализатор напрямую (Web Audio)'
     : 'воспроизведение через встроенные динамики · Web Audio API';
@@ -639,6 +712,7 @@ function screenTest(){
     '<div class="field">'+field+'</div>'+
     '<div class="verdict">'+
       '<input placeholder="Комментарий техника — попадёт в отчёт" value="'+esc(S.comments[c.id]||'')+'" oninput="echips.comment(this.value)">'+
+      '<button class="btn btn-ghost" onclick="echips.mark(\'na\')" title="Такого узла нет в этой модели (например, тачпад на настольном ПК)">Не применимо</button>'+
       '<button class="btn btn-danger" onclick="echips.mark(\'fail\')">Не пройден</button>'+
       '<button class="btn btn-primary" onclick="echips.mark(\'pass\')">Пройден</button>'+
     '</div></div>';
@@ -971,6 +1045,8 @@ function render(){
   var host = document.getElementById('screen');
   var focus = document.activeElement, sel = null;
   if(focus && focus.tagName==='INPUT') sel = focus.selectionStart;
+  var viewKey = S.screen+'|'+S.cat+'|'+(S.screen==='drivers'?S.drv.step:'')+'|'+(S.screen==='mb'?S.mb.step:'');
+  var isNewView = viewKey !== S.viewKey; S.viewKey = viewKey;
   host.innerHTML = S.screen==='start' ? screenStart()
     : S.screen==='drivers' ? screenDrivers()
     : S.screen==='mb' ? screenMb()
@@ -978,6 +1054,7 @@ function render(){
     : S.screen==='test' ? screenTest()
     : S.screen==='sensors' ? screenSensors()
     : S.screen==='stress' ? screenStress() : screenReport();
+  if (isNewView && host.firstElementChild) host.firstElementChild.classList.add('enter');
   if(sel!==null){
     var inp = host.querySelector('input');
     if(inp){ inp.focus(); try{ inp.setSelectionRange(sel,sel); }catch(e){} }
@@ -1000,7 +1077,11 @@ function padPoint(e, move){
 /* ---------- аудио-спектр: перерисовка на кадр, пока играет тон ---------- */
 (function audioLoop(){
   requestAnimationFrame(audioLoop);
-  if (S.tone!==null && S.screen==='test' && cat().kind==='audio') render();
+  if (S.tone!==null && S.screen==='test' && cat().kind==='audio'){
+    // Обновляем только спектр: полная перерисовка каждый кадр ломала клики по кнопкам.
+    var sp = document.querySelector('.spectrum');
+    if (sp) sp.innerHTML = spectrumBars();
+  }
 })();
 
 document.addEventListener('DOMContentLoaded', function(){

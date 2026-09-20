@@ -85,7 +85,7 @@ var S = {
   tone:null, toneCtx:null, toneOsc:null, toneAnalyser:null, toneMic:null, phase:0,
   camStream:null,
   device:null, deviceError:null,
-  sensorPoll:null, sensorReading:null, sensorHistory:[],
+  sensorPoll:null, sensorReading:null, sensorHistory:[], gpuHistory:[],
   stressOn:false, stressT:0, stressLoad:'CPU', stressDur:300, stressResult:null,
   snapshot:false, exported:null,
   hw:null, verdict:null, br:{ info:null, loading:false }, camClip:null,
@@ -367,7 +367,7 @@ var A = {
     }).catch(function(err){
       S.running=false; S.runError = typeof err==='string' ? err : 'Ошибка получения данных';
       render();
-      if (S.auto.on && S.cat===c.id) A.autoApply({ status:'fail', note:S.runError });
+      if (S.auto.on && S.cat===c.id) A.autoApply(null);
     });
   },
 
@@ -432,6 +432,7 @@ var A = {
         if (r.available && r.cpu_temp_c!=null){
           S.sensorHistory = S.sensorHistory.concat([r.cpu_temp_c]).slice(-100);
         }
+        if (r.gpu){ S.gpuHistory = S.gpuHistory.concat([r.gpu.temp_c]).slice(-100); }
         render();
       }).catch(function(err){
         S.sensorReading = { available:false, cpu_temp_c:null, note: typeof err==='string'?err:'Ошибка опроса датчиков' };
@@ -663,8 +664,8 @@ function isRequired(id){
 /* Узел не найден: на ноутбуке из списка required — неисправность, иначе «не применимо». */
 function absent(id, what){
   return isRequired(id)
-    ? { status:'fail', note: what+' не обнаружен — обязателен для этой модели' }
-    : { status:'na', note: what+' не обнаружен в системе' };
+    ? { status:'fail', note: what+': не обнаружено, для этой модели обязательно' }
+    : { status:'na', note: what+': не обнаружено в системе' };
 }
 
 function sysReport(hw){
@@ -690,6 +691,11 @@ function sysReport(hw){
   chk('Тип корпуса', hw.is_laptop ? 'ноутбук' : 'настольный ПК / другое', null);
   return { lines:lines, bad:bad };
 }
+
+/* Статус PnP: неисправность — только Error/Degraded; Unknown бывает у составных
+   устройств и корневых хабов без драйвера-фильтра и ошибкой не является. */
+function isBadStatus(d){ return d.status==='Error' || d.status==='Degraded'; }
+function statusRu(st){ return st==='OK' ? 'работает' : st==='Error' ? 'ОШИБКА' : st==='Degraded' ? 'работает с ограничениями' : st==='Unknown' ? 'состояние не сообщается' : st; }
 
 /* ---------- реальные данные для runner-категорий ----------
    Каждая ветка возвращает { lines, verdict }: verdict — автооценка по порогам
@@ -739,26 +745,31 @@ function fetchCategory(kind){
       lines.push('Minidump-файлов в C:\\Windows\\Minidump: '+h.minidump_files);
       var cutoff = Date.now() - days*86400000;
       var recent = h.entries.filter(function(e){ return new Date(e.time.replace(' ','T')).getTime() >= cutoff; });
-      return { lines:lines, verdict: recent.length
-        ? { status:'fail', note:'Сбоев за '+days+' дн.: '+recent.length+' (последний '+recent[0].code+' '+recent[0].name+')' }
-        : { status:'pass', note:'За '+days+' дн. сбоев не найдено'+(h.entries.length?' (более старые записи есть)':'') } };
+      var crashes = recent.filter(function(e){ return e.code!=='0x0'; });
+      var power = recent.filter(function(e){ return e.code==='0x0'; });
+      var maxPower = profile().unexpectedShutdownsMax!=null ? profile().unexpectedShutdownsMax : 2;
+      var v;
+      if (crashes.length) v = { status:'fail', note:'Синих экранов за '+days+' дн.: '+crashes.length+' (последний '+crashes[0].code+' '+crashes[0].name+')' };
+      else if (power.length > maxPower) v = { status:'fail', note:'Внезапных отключений/перезагрузок за '+days+' дн.: '+power.length+' (допустимо не более '+maxPower+') — питание, перегрев, плата' };
+      else v = { status:'pass', note:'Синих экранов за '+days+' дн. нет'+(power.length?'; внезапных отключений: '+power.length+' (в пределах допуска)':'') };
+      return { lines:lines, verdict:v };
     });
   }
   if (kind==='usb'){
     return invoke('list_usb_devices').then(function(list){
-      var bad = list.filter(function(d){ return d.status!=='OK'; });
+      var bad = list.filter(isBadStatus);
       return {
-        lines: list.length ? list.map(function(d){ return d.name + ' — ' + (d.status==='OK'?'работает':d.status); }) : ['USB-устройства не обнаружены (кроме встроенных корневых хабов).'],
-        verdict: bad.length ? { status:'fail', note:'USB-устройства с ошибкой: '+bad.map(function(d){ return d.name; }).join(', ') }
+        lines: list.length ? list.map(function(d){ return d.name + ' — ' + statusRu(d.status); }) : ['USB-устройства не обнаружены (кроме встроенных корневых хабов).'],
+        verdict: bad.length ? { status:'fail', note:'USB-устройства с ошибкой: '+bad.slice(0,3).map(function(d){ return d.name; }).join(', ')+(bad.length>3?' и ещё '+(bad.length-3):'') }
                             : { status:'pass', note: list.length ? 'USB-устройства без ошибок ('+list.length+')' : 'Ошибок USB нет; порты проверьте флешкой' }
       };
     });
   }
   if (kind==='bt'){
     return invoke('list_bluetooth_devices').then(function(list){
-      var bad = list.filter(function(d){ return d.status!=='OK'; });
+      var bad = list.filter(isBadStatus);
       return {
-        lines: list.length ? list.map(function(d){ return d.name + ' — ' + (d.status==='OK'?'работает':d.status); }) : ['Bluetooth-адаптер не обнаружен или отключён.'],
+        lines: list.length ? list.map(function(d){ return d.name + ' — ' + statusRu(d.status); }) : ['Bluetooth-адаптер не обнаружен или отключён.'],
         verdict: !list.length ? absent('bt','Bluetooth-адаптер')
           : bad.length ? { status:'fail', note:'Bluetooth с ошибкой: '+bad.map(function(d){ return d.name; }).join(', ') }
           : { status:'pass', note:'Bluetooth-адаптер работает' }
@@ -1173,13 +1184,17 @@ function screenTest(){
 function screenSensors(){
   var r = S.sensorReading;
   var cpuVal = r && r.available ? r.cpu_temp_c.toFixed(1) : '—';
+  var g = r && r.gpu;
   var rows = [
-    { k:'CPU (ACPI)', v:cpuVal, u:'°C', c:'#FF8A00', m: r ? esc(r.note) : 'опрос…' }
+    { k:'CPU (ACPI)', v:cpuVal, u:'°C', c:'#FF8A00', m: r ? esc(r.note) : 'опрос…' },
+    { k:'GPU (nvidia-smi)', v: g ? g.temp_c.toFixed(0) : '—', u:'°C', c:'#6E8FA8',
+      m: g ? esc(g.name)+(g.fan_pct!=null?' · вентилятор '+g.fan_pct+'%':'')+(g.power_w!=null?' · '+g.power_w+' Вт':'')+(g.util_pct!=null?' · загрузка '+g.util_pct+'%':'')
+           : (r ? 'Видеокарта NVIDIA не найдена или драйвер без nvidia-smi. Для AMD/Intel данных нет.' : 'опрос…') }
   ];
   var grid = '<line x1="0" y1="0" x2="1000" y2="0" stroke="rgba(255,255,255,.06)"></line>'+
     '<line x1="0" y1="150" x2="1000" y2="150" stroke="rgba(255,255,255,.06)"></line>'+
     '<line x1="0" y1="300" x2="1000" y2="300" stroke="rgba(255,255,255,.10)"></line>';
-  var hist = S.sensorHistory;
+  var hist = S.sensorHistory.length ? S.sensorHistory : S.gpuHistory;
   var points = hist.length ? hist.map(function(v,i){
     var x = (i/((hist.length-1)||1))*1000;
     var y = 300 - Math.max(0,Math.min(1,(v-20)/(80-20)))*300;
@@ -1187,7 +1202,7 @@ function screenSensors(){
   }).join(' ') : '';
   var chart = hist.length
     ? '<div class="plot"><svg viewBox="0 0 1000 300" preserveAspectRatio="none">'+grid+
-      '<polyline points="'+points+'" fill="none" stroke="#FF8A00" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"></polyline></svg></div>'
+      '<polyline points="'+points+'" fill="none" stroke="'+(S.sensorHistory.length?'#FF8A00':'#6E8FA8')+'" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"></polyline></svg></div>'
     : '<div class="infoline" style="margin:0">'+(r && !r.available ? esc(r.note) : 'ожидание данных…')+'</div>';
   return '<div class="pane">'+
     '<div class="head"><div><div class="eyebrow">Live · WMI ACPI</div><h1 class="title">Датчики</h1></div>'+
@@ -1198,7 +1213,7 @@ function screenSensors(){
         '<div class="v"><b>'+r2.v+'</b><span>'+r2.u+'</span></div><div class="m">'+r2.m+'</div></div>';
     }).join('') +'</div>'+
     '<div class="chart">'+chart+'</div>'+
-    '<div class="footrow"><span class="txt">Без LibreHardwareMonitor/HWInfo доступен только один ACPI-датчик через WMI, и не на всех платах. Снимок можно приложить к отчёту.</span>'+
+    '<div class="footrow"><span class="txt">Без LibreHardwareMonitor/HWInfo доступен один ACPI-датчик через WMI (не на всех платах) и GPU NVIDIA через nvidia-smi. Снимок можно приложить к отчёту.</span>'+
     '<button class="btn btn-ghost" onclick="echips.snapshot()">'+(S.snapshot?'Снимок добавлен в отчёт':'Приложить снимок к отчёту')+'</button></div></div>';
 }
 

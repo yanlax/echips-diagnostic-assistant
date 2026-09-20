@@ -37,8 +37,8 @@ pub fn list_usb_devices() -> Result<Vec<PnpDevice>, String> {
     #[cfg(target_os = "windows")]
     {
         let raw = run_ps(
-            "Get-PnpDevice -Class USB | Where-Object { $_.FriendlyName } | \
-             ForEach-Object { \"$($_.FriendlyName)||$($_.Status)\" }",
+            "Get-PnpDevice -Class USB -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName } | \
+             ForEach-Object { \"$($_.FriendlyName)||$($_.Status)\" }; exit 0",
         )?;
         Ok(parse_pnp_lines(&raw))
     }
@@ -53,8 +53,8 @@ pub fn list_bluetooth_devices() -> Result<Vec<PnpDevice>, String> {
     #[cfg(target_os = "windows")]
     {
         let raw = run_ps(
-            "Get-PnpDevice -Class Bluetooth | Where-Object { $_.FriendlyName } | \
-             ForEach-Object { \"$($_.FriendlyName)||$($_.Status)\" }",
+            "Get-PnpDevice -Class Bluetooth -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName } | \
+             ForEach-Object { \"$($_.FriendlyName)||$($_.Status)\" }; exit 0",
         )?;
         Ok(parse_pnp_lines(&raw))
     }
@@ -132,8 +132,8 @@ pub fn get_fingerprint_sensor() -> Result<Option<String>, String> {
     #[cfg(target_os = "windows")]
     {
         let raw = run_ps(
-            "Get-PnpDevice -Class Biometric -ErrorAction SilentlyContinue | \
-             Where-Object { $_.FriendlyName } | Select-Object -First 1 -ExpandProperty FriendlyName",
+            "Get-PnpDevice -Class Biometric -PresentOnly -ErrorAction SilentlyContinue | \
+             Where-Object { $_.FriendlyName } | Select-Object -First 1 -ExpandProperty FriendlyName; exit 0",
         )?;
         let trimmed = raw.trim().to_string();
         Ok(if trimmed.is_empty() { None } else { Some(trimmed) })

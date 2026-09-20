@@ -12,6 +12,8 @@
 //                     сигнал рядом с роутером указывает на антенну/шлейф
 //   diskMaxWearPct    порог износа SSD, %: выше — «не пройден»
 //   crashDays         окно поиска сбоев (синие экраны/перезагрузки), дней
+//   unexpectedShutdownsMax  сколько внезапных отключений (Kernel-Power 41 без
+//                     синего экрана) допустимо в окне crashDays; синие экраны — всегда ошибка
 //   required          категории, обязательные на ноутбуке: если узла нет —
 //                     «не пройден»; на десктопе отсутствие = «не применимо»
 //   expect            эталон железа для теста «Системная информация»:
@@ -28,6 +30,7 @@ window.ECHIPS_PROFILES = {
     wifiMinSignal: null,
     diskMaxWearPct: 90,
     crashDays: 30,
+    unexpectedShutdownsMax: 2,
     required: ["wifi", "bt", "bat"],
     expect: {}
   },

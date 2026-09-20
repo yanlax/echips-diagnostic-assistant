@@ -431,3 +431,8 @@ h1.title{font-family:var(--grotesk);font-size:27px;font-weight:600;color:var(--t
 .autobar .ab-msg.ok{color:var(--ok)}
 .autobar .ab-msg.err{color:var(--err)}
 .autobar .headactions{justify-content:flex-end}
+
+/* ---------- диск и память ---------- */
+.spark{display:flex;align-items:flex-end;gap:3px;height:74px;margin-top:14px;padding:8px;border-radius:9px;background:var(--glass);border:1px solid var(--line)}
+.spark i{flex:1;background:linear-gradient(180deg,var(--accent-hi),var(--accent));border-radius:2px 2px 0 0;min-height:3px}
+.stat4 .v.err{color:var(--err)}

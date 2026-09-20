@@ -15,6 +15,8 @@ var getCurrentWindow = window.__TAURI__.window.getCurrentWindow;
 
 var CATS = [
   { id:'sys', tag:'SYS', name:'Системная информация', method:'Процессор, ОЗУ, диски, видеокарта, плата, BIOS + сверка с профилем модели', impl:'реальные данные', kind:'runner', fetch:'sys' },
+  { id:'disk', tag:'HDD', name:'Диск: здоровье', method:'Состояние, износ, температура и ошибки (Get-PhysicalDisk, счётчики надёжности)', impl:'реальные данные', kind:'runner', fetch:'disk' },
+  { id:'crash', tag:'BSOD', name:'Журнал сбоев', method:'Синие экраны и внезапные перезагрузки: события Windows + minidump', impl:'реальные данные', kind:'runner', fetch:'crash' },
   { id:'usb', tag:'USB', name:'USB-порты', method:'Список устройств на USB-шине (WMI PnP) + статус', impl:'реальные данные', kind:'runner', fetch:'usb' },
   { id:'bt', tag:'BT', name:'Bluetooth', method:'Статус адаптера и список сопряжённых устройств', impl:'реальные данные', kind:'runner', fetch:'bt' },
   { id:'wifi', tag:'WIFI', name:'Wi-Fi', method:'Адаптер + список видимых сетей (netsh wlan)', impl:'реальные данные', kind:'runner', fetch:'wifi' },
@@ -25,6 +27,8 @@ var CATS = [
   { id:'fp', tag:'FP', name:'Отпечаток', method:'Сенсор виден системе (WinBio) — регистрация вручную', impl:'частично', kind:'runner', fetch:'fp' },
   { id:'bat', tag:'BAT', name:'Аккумулятор', method:'Design vs Full charge capacity, циклы, износ (powercfg)', impl:'реальные данные', kind:'runner', fetch:'bat' },
   { id:'snd', tag:'SND', name:'Звук', method:'Тестовый сигнал (Web Audio) и echo-тест через микрофон', impl:'реально', kind:'audio' },
+  { id:'diskread', tag:'RD', name:'Диск: чтение', method:'Замер скорости чтения по всему диску, медленные блоки и ошибки чтения', impl:'реальная нагрузка', kind:'diskread' },
+  { id:'mem', tag:'RAM', name:'Память', method:'Многопоточная запись и проверка паттернов в ОЗУ, счётчик ошибок', impl:'реальная нагрузка', kind:'memtest' },
   { id:'sens', tag:'SNS', name:'Датчики', method:'Температуры через WMI ACPI — доступность зависит от платы', impl:'зависит от платы', kind:'sensors' },
   { id:'stress', tag:'STR', name:'Стресс-тест', method:'Реальная нагрузка CPU на всех ядрах на заданное время', impl:'CPU реально', kind:'stress' }
 ];
@@ -74,6 +78,8 @@ var S = {
   stressOn:false, stressT:0, stressLoad:'CPU', stressDur:300, stressResult:null,
   snapshot:false, exported:null,
   hw:null, verdict:null,
+  dr:{ disks:null, sel:0, mode:64, running:false, pct:0, mbps:0, res:null, err:null },
+  mem:{ size:1024, passes:1, running:false, pct:0, pass:1, pattern:'', errors:0, res:null, err:null },
   auto:{ on:false, ids:[], idx:-1, stopped:false, waiting:false, msg:'', cls:'' },
   drv:{ step:'idle' },
   mb:{ step:'login', techId:'', techName:'', pin:'', pinErr:'', ticket:'', serial:'', uuid:'', formErr:'', before:null, writeError:null }
@@ -141,6 +147,8 @@ function stopAudio(){
 var A = {
   go:function(screen,id){
     stopSensorPoll(); stopCamera(); stopAudio();
+    if (S.dr.running) invoke('stop_disk_read_test').catch(function(){});
+    if (S.mem.running) invoke('stop_memory_test').catch(function(){});
     if (document.getElementById('fill-overlay')) A.fillClose();
     if (S.auto.on && screen!=='test' && screen!=='report') A.autoOff();
     S.screen=screen; if(id) S.cat=id; S.running=false; S.runLines=[]; S.runError=null; S.verdict=null; S.exported=null; S.tone=null;
@@ -227,6 +235,52 @@ var A = {
     a.msg=(v.status==='na'?'Не применимо: ':'Пройден: ')+v.note+' · переход к следующему…'; a.cls='ok'; render();
     a.timer = setTimeout(function(){ if (S.auto.on && S.auto.idx===at) A.autoNext(); }, 1800);
   },
+
+  /* ---- тест чтения диска ---- */
+  drLoad:function(){
+    if (S.dr.disks) return;
+    S.dr.disks = [];
+    invoke('get_disk_health').then(function(list){
+      S.dr.disks = list;
+      var i = 0; list.forEach(function(d,k){ if (d.is_system) i = k; });
+      S.dr.sel = i; render();
+    }).catch(function(err){ S.dr.err = typeof err==='string'?err:'Не удалось получить список дисков'; render(); });
+  },
+  drPick:function(i){ if(!S.dr.running){ S.dr.sel=i; render(); } },
+  drMode:function(m){ if(!S.dr.running){ S.dr.mode=m; render(); } },
+  drStart:function(){
+    var d = S.dr.disks[S.dr.sel]; if (!d || S.dr.running) return;
+    S.dr.running=true; S.dr.pct=0; S.dr.mbps=0; S.dr.res=null; S.dr.err=null; render();
+    var unlisten=null;
+    tauriEvent.listen('disk-progress', function(ev){
+      S.dr.pct=ev.payload.pct; S.dr.mbps=ev.payload.mbps;
+      var f=document.getElementById('dr-fill'), t=document.getElementById('dr-txt');
+      if (f && t){ f.style.width=S.dr.pct+'%'; t.textContent=S.dr.pct+'% · '+S.dr.mbps.toFixed(0)+' МБ/с'; } else render();
+    }).then(function(u){ unlisten=u; });
+    function fin(){ if(unlisten) unlisten(); S.dr.running=false; }
+    invoke('run_disk_read_test', { diskNumber:d.number, sizeGb:d.size_gb, sampleMb:S.dr.mode }).then(function(r){
+      fin(); S.dr.res=r; render();
+    }).catch(function(err){ fin(); S.dr.err = typeof err==='string'?err:'Ошибка теста чтения'; render(); });
+  },
+  drStop:function(){ invoke('stop_disk_read_test').catch(function(){}); },
+
+  /* ---- тест памяти ---- */
+  memSize:function(v){ if(!S.mem.running){ S.mem.size=v; render(); } },
+  memPasses:function(v){ if(!S.mem.running){ S.mem.passes=v; render(); } },
+  memStart:function(){
+    if (S.mem.running) return;
+    var m = S.mem; m.running=true; m.pct=0; m.pass=1; m.pattern=''; m.errors=0; m.res=null; m.err=null; render();
+    var unlisten=null;
+    tauriEvent.listen('mem-progress', function(ev){
+      var p=ev.payload; m.pct=p.pct; m.pass=p.pass; m.pattern=p.pattern; m.errors=p.errors;
+      var f=document.getElementById('mem-fill'), t=document.getElementById('mem-txt');
+      if (f && t){ f.style.width=m.pct+'%'; t.textContent=m.pct+'% · проход '+m.pass+' · '+m.pattern+' · ошибок '+m.errors; } else render();
+    }).then(function(u){ unlisten=u; });
+    function fin(){ if(unlisten) unlisten(); m.running=false; }
+    invoke('run_memory_test', { sizeMb:m.size, passes:m.passes }).then(function(r){ fin(); m.res=r; render(); })
+      .catch(function(err){ fin(); m.err = typeof err==='string'?err:'Ошибка теста памяти'; render(); });
+  },
+  memStop:function(){ invoke('stop_memory_test').catch(function(){}); },
 
   /* ---- runner-категории: реальные invoke-запросы ---- */
   run:function(){
@@ -577,6 +631,45 @@ function fetchCategory(kind){
         : { status:'pass', note: hasExp ? 'Железо совпадает с профилем «'+profile().name+'»' : 'Сводка собрана (эталона в профиле нет)' } };
     });
   }
+  if (kind==='disk'){
+    return invoke('get_disk_health').then(function(list){
+      var P = profile(), maxWear = P.diskMaxWearPct!=null ? P.diskMaxWearPct : 90, lines = [], bad = [];
+      if (!list.length) return { lines:['Физические диски не найдены.'], verdict:{ status:'fail', note:'Диск не обнаружен' } };
+      list.forEach(function(d){
+        lines.push(d.name+' · '+d.size_gb+' ГБ · '+(d.media||'тип не определён')+' · '+(d.bus||'')+(d.is_system?' · системный':''));
+        lines.push('    Состояние: '+(d.health||'—')+(d.status?' ('+d.status+')':''));
+        var extra = [];
+        if (d.temp_c!=null) extra.push('температура '+d.temp_c+' °C');
+        if (d.wear_pct!=null) extra.push('износ '+d.wear_pct+'%');
+        if (d.power_on_hours!=null) extra.push('наработка '+d.power_on_hours+' ч');
+        if (d.read_errors!=null) extra.push('ошибок чтения '+d.read_errors);
+        if (d.write_errors!=null) extra.push('ошибок записи '+d.write_errors);
+        lines.push('    '+(extra.length ? extra.join(' · ') : 'счётчики надёжности недоступны для этого диска'));
+        if (d.health && d.health!=='Healthy') bad.push(d.name+': состояние '+d.health);
+        if (d.wear_pct!=null && d.wear_pct>=maxWear) bad.push(d.name+': износ '+d.wear_pct+'% (порог '+maxWear+'%)');
+        if ((d.read_errors||0)>0 || (d.write_errors||0)>0) bad.push(d.name+': неисправленные ошибки ввода-вывода');
+        if (d.temp_c!=null && d.temp_c>=75) bad.push(d.name+': температура '+d.temp_c+' °C');
+      });
+      return { lines:lines, verdict: bad.length ? { status:'fail', note:bad.join('; ') } : { status:'pass', note:'Диски в порядке ('+list.length+' шт.)' } };
+    });
+  }
+  if (kind==='crash'){
+    var days = profile().crashDays || 30;
+    return invoke('get_crash_history', { days: Math.max(days, 90) }).then(function(h){
+      var lines = [];
+      if (!h.entries.length) lines.push('Сбоев и внезапных перезагрузок в журнале не найдено.');
+      h.entries.forEach(function(e){
+        lines.push(e.time+' · '+e.code+' '+e.name+' ['+({bugcheck:'событие',minidump:'minidump','kernel-power':'Kernel-Power'}[e.source]||e.source)+']');
+        lines.push('    '+e.hint);
+      });
+      lines.push('Minidump-файлов в C:\\Windows\\Minidump: '+h.minidump_files);
+      var cutoff = Date.now() - days*86400000;
+      var recent = h.entries.filter(function(e){ return new Date(e.time.replace(' ','T')).getTime() >= cutoff; });
+      return { lines:lines, verdict: recent.length
+        ? { status:'fail', note:'Сбоев за '+days+' дн.: '+recent.length+' (последний '+recent[0].code+' '+recent[0].name+')' }
+        : { status:'pass', note:'За '+days+' дн. сбоев не найдено'+(h.entries.length?' (более старые записи есть)':'') } };
+    });
+  }
   if (kind==='usb'){
     return invoke('list_usb_devices').then(function(list){
       var bad = list.filter(function(d){ return d.status!=='OK'; });
@@ -853,6 +946,75 @@ function autoBanner(){
     '<div class="headactions">'+btns+'</div></div>';
 }
 
+function sparkBars(samples){
+  var max = Math.max.apply(null, samples.concat([1]));
+  return '<div class="spark">'+samples.map(function(v){ return '<i style="height:'+Math.max(3, v/max*100).toFixed(0)+'%" title="'+v.toFixed(0)+' МБ/с"></i>'; }).join('')+'</div>';
+}
+function fieldDiskRead(){
+  A.drLoad();
+  var d = S.dr, disks = d.disks || [], r = d.res;
+  var modes = [[64,'Быстрый · 1,5 ГБ'],[256,'Расширенный · 6 ГБ']];
+  var out = '<div class="runwrap">'+
+    '<div class="control"><div class="k">Диск</div><div class="opts">'+ (disks.length ? disks.map(function(x,i){
+      return '<button class="opt'+(d.sel===i?' on':'')+'" onclick="echips.drPick('+i+')" '+(d.running?'disabled':'')+'>'+esc(x.name)+' · '+x.size_gb+' ГБ'+(x.is_system?' · системный':'')+'</button>';
+    }).join('') : '<span class="kbnote">'+(d.err?esc(d.err):'опрос дисков…')+'</span>') +'</div></div>'+
+    '<div class="control" style="margin-top:12px"><div class="k">Режим</div><div class="opts">'+ modes.map(function(m){
+      return '<button class="opt mono'+(d.mode===m[0]?' on':'')+'" onclick="echips.drMode('+m[0]+')" '+(d.running?'disabled':'')+'>'+m[1]+'</button>';
+    }).join('') +'</div></div>'+
+    '<div class="runrow" style="margin-top:14px"><button class="btn btn-primary" onclick="echips.drStart()" '+(d.running||!disks.length?'disabled':'')+'>'+(d.running?'Идёт чтение…':r?'Повторить':'Запустить')+'</button>'+
+    (d.running?'<button class="btn btn-ghost" onclick="echips.drStop()">Остановить</button>':'')+
+    '<span class="n">чтение 24 участков по всему диску, запись не выполняется</span></div>';
+  if (d.running || r){
+    out += '<div class="bar" style="margin-top:14px"><div class="fill" id="dr-fill" style="width:'+(r?100:d.pct)+'%"></div></div>'+
+      '<div class="mbtext" id="dr-txt">'+(d.running ? d.pct+'% · '+d.mbps.toFixed(0)+' МБ/с' : '')+'</div>';
+  }
+  if (d.err && disks.length) out += '<div class="idle" style="color:var(--err);margin-top:10px"><span>'+esc(d.err)+'</span></div>';
+  if (r){
+    var drop = r.max_mbps>0 ? Math.round((1-r.min_mbps/r.max_mbps)*100) : 0;
+    var bad = r.errors>0, warn = r.slow_blocks>0 || drop>60;
+    out += sparkBars(r.samples)+
+      '<div class="stats4">'+
+      '<div class="stat4"><div class="k">средняя</div><div class="v">'+r.avg_mbps.toFixed(0)+' МБ/с</div></div>'+
+      '<div class="stat4"><div class="k">мин / макс</div><div class="v">'+r.min_mbps.toFixed(0)+' / '+r.max_mbps.toFixed(0)+'</div></div>'+
+      '<div class="stat4"><div class="k">медленных блоков</div><div class="v '+(r.slow_blocks?'err':'ok')+'">'+r.slow_blocks+'</div></div>'+
+      '<div class="stat4"><div class="k">ошибок чтения</div><div class="v '+(bad?'err':'ok')+'">'+r.errors+'</div></div></div>'+
+      '<div class="kbnote" style="margin-top:8px">'+(r.stopped?'Остановлено пользователем. ':'')+'Прочитано '+r.read_mb+' МБ. '+
+      (bad ? 'Есть ошибки чтения (смещения, МБ: '+r.error_offsets_mb.join(', ')+') — диск неисправен.' :
+       warn ? 'Есть медленные участки или просадка скорости '+drop+'% — возможна деградация диска.' : 'Ошибок и заметных просадок нет.')+'</div>';
+  }
+  return out+'</div>';
+}
+function fieldMem(){
+  var m = S.mem, r = m.res;
+  var sizes = [[512,'512 МБ'],[1024,'1 ГБ'],[2048,'2 ГБ'],[4096,'4 ГБ']];
+  var out = '<div class="runwrap">'+
+    '<div class="control"><div class="k">Объём проверяемой памяти</div><div class="opts">'+ sizes.map(function(x){
+      return '<button class="opt mono'+(m.size===x[0]?' on':'')+'" onclick="echips.memSize('+x[0]+')" '+(m.running?'disabled':'')+'>'+x[1]+'</button>';
+    }).join('') +'</div></div>'+
+    '<div class="control" style="margin-top:12px"><div class="k">Проходов</div><div class="opts">'+ [1,2,4].map(function(n){
+      return '<button class="opt mono'+(m.passes===n?' on':'')+'" onclick="echips.memPasses('+n+')" '+(m.running?'disabled':'')+'>'+n+'</button>';
+    }).join('') +'</div></div>'+
+    '<div class="runrow" style="margin-top:14px"><button class="btn btn-primary" onclick="echips.memStart()" '+(m.running?'disabled':'')+'>'+(m.running?'Идёт проверка…':r?'Повторить':'Запустить')+'</button>'+
+    (m.running?'<button class="btn btn-ghost" onclick="echips.memStop()">Остановить</button>':'')+
+    '<span class="n">объём ограничивается 60% свободной памяти; окно остаётся отзывчивым</span></div>';
+  if (m.running || r){
+    out += '<div class="bar" style="margin-top:14px"><div class="fill" id="mem-fill" style="width:'+(r?100:m.pct)+'%"></div></div>'+
+      '<div class="mbtext" id="mem-txt">'+(m.running ? m.pct+'% · проход '+m.pass+' · '+esc(m.pattern)+' · ошибок '+m.errors : '')+'</div>';
+  }
+  if (m.err) out += '<div class="idle" style="color:var(--err);margin-top:10px"><span>'+esc(m.err)+'</span></div>';
+  if (r){
+    out += '<div class="stats4" style="margin-top:14px">'+
+      '<div class="stat4"><div class="k">проверено</div><div class="v">'+r.tested_mb+' МБ</div></div>'+
+      '<div class="stat4"><div class="k">проходов</div><div class="v">'+r.passes+'</div></div>'+
+      '<div class="stat4"><div class="k">ошибок</div><div class="v '+(r.errors?'err':'ok')+'">'+r.errors+'</div></div>'+
+      '<div class="stat4"><div class="k">время</div><div class="v">'+r.elapsed_secs+' с</div></div></div>'+
+      '<div class="kbnote" style="margin-top:8px">'+(r.stopped?'Остановлено пользователем. ':'')+(r.capped?'Объём урезан до 60% свободной памяти. ':'')+
+      (r.errors ? 'Обнаружены ошибки памяти — модуль или слот неисправны.' : 'Ошибок не найдено. Это быстрая проверка из-под Windows: для полной уверенности используйте длительный тест.')+'</div>'+
+      (r.first_errors.length ? '<div class="log" style="margin-top:8px">'+r.first_errors.map(function(t,i){ return '<div><span class="t">'+String(i+1).padStart(2,'0')+'</span><span>'+esc(t)+'</span></div>'; }).join('')+'</div>' : '');
+  }
+  return out+'</div>';
+}
+
 function screenTest(){
   var c = cat(), field = '';
   if(c.kind==='keyboard') field = fieldKeyboard();
@@ -860,6 +1022,8 @@ function screenTest(){
   else if(c.kind==='touchpad') field = fieldTouchpad();
   else if(c.kind==='camera') field = fieldCamera();
   else if(c.kind==='audio') field = fieldAudio();
+  else if(c.kind==='diskread') field = fieldDiskRead();
+  else if(c.kind==='memtest') field = fieldMem();
   else field = fieldRunner();
   return '<div class="pane">'+
     '<div class="crumbs"><button class="btn-link" onclick="echips.go(\'dash\')">← все категории</button>'+
@@ -1167,7 +1331,7 @@ function screenMb(){
 }
 
 function screenReport(){
-  var c = counts(), full = c.checked===CATS.length;
+  var c = counts(), full = (profile().tests||[]).every(function(id){ return statusOf(id)!=='idle'; });
   var verdict = c.fail ? 'в ремонт' : full ? 'годен' : 'не завершено';
   return '<div class="pane">'+
     '<div class="head"><div><div class="eyebrow">Итог прогона</div><h1 class="title">Отчёт</h1></div>'+

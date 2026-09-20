@@ -8,6 +8,8 @@
 //   tests             порядок тестов автопрогона (id категорий из CATS в app.js)
 //   stopAtFail        true — остановить автопрогон на первом непройденном тесте
 //   batteryMinHealth  минимальный износ-порог: health% батареи, ниже — «не пройден»
+//   diskMaxWearPct    порог износа SSD, %: выше — «не пройден»
+//   crashDays         окно поиска сбоев (синие экраны/перезагрузки), дней
 //   required          категории, обязательные на ноутбуке: если узла нет —
 //                     «не пройден»; на десктопе отсутствие = «не применимо»
 //   expect            эталон железа для теста «Системная информация»:
@@ -18,9 +20,11 @@
 window.ECHIPS_PROFILES = {
   default: {
     name: "Стандартный",
-    tests: ["sys", "usb", "bt", "wifi", "kb", "lcd", "cam", "pad", "fp", "bat", "snd"],
+    tests: ["sys", "disk", "crash", "usb", "bt", "wifi", "kb", "lcd", "cam", "pad", "fp", "bat", "snd"],
     stopAtFail: false,
     batteryMinHealth: 80,
+    diskMaxWearPct: 90,
+    crashDays: 30,
     required: ["wifi", "bt", "bat"],
     expect: {}
   },

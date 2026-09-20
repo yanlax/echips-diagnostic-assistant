@@ -7,3 +7,6 @@ pub mod sensors;
 pub mod stress;
 pub mod system;
 pub mod summary;
+pub mod crash;
+pub mod memtest;
+pub mod storage;

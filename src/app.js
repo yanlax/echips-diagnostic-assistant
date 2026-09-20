@@ -100,7 +100,11 @@ function renderNav() {
   });
 }
 
+// Освобождение камеры/микрофона при уходе с экрана (задаётся рендерерами)
+var cleanupScreen = null;
+
 function goTo(id) {
+  if (cleanupScreen) { cleanupScreen(); cleanupScreen = null; }
   state.current = id;
   renderNav();
   var test = window.ECHIPS_TESTS.filter(function (t) { return t.id === id; })[0];
@@ -299,6 +303,167 @@ function renderDisplayScreen() {
   paint();
 }
 
+// ---- Общие для камеры/микрофона ----
+function mediaErrorText(err, device) {
+  var name = err && err.name;
+  if (name === "NotAllowedError" || name === "SecurityError") {
+    return "Доступ к " + device + " запрещён. Разрешите доступ в настройках Windows (Конфиденциальность) и повторите.";
+  }
+  if (name === "NotFoundError" || name === "OverconstrainedError") {
+    return "Устройство не найдено: " + device + " не обнаружена в системе.";
+  }
+  if (name === "NotReadableError" || name === "AbortError") {
+    return "Не удалось открыть " + device + " — возможно, устройство занято другим приложением.";
+  }
+  return "Ошибка доступа к " + device + ": " + ((err && err.message) || err);
+}
+
+function stopStream(stream) {
+  if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
+}
+
+function mediaUnavailable(device) {
+  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) return false;
+  showError("WebView не поддерживает доступ к " + device + " (navigator.mediaDevices недоступен).");
+  return true;
+}
+
+// ---- Экран "Камера" ----
+function renderCameraScreen() {
+  if (mediaUnavailable("камере")) return;
+  var stream = null;
+  cleanupScreen = function () { stopStream(stream); stream = null; };
+
+  screen.innerHTML =
+    '<div class="test-screen">' +
+    "<h2>Камера</h2>" +
+    '<p class="hint">Проверьте, что изображение появилось, чёткое, без артефактов и полос.</p>' +
+    '<div class="error-text" id="cam-error"></div>' +
+    '<video id="cam-video" class="cam-video" autoplay playsinline muted></video>' +
+    '<div class="btn-row">' +
+    '<button class="btn-primary" id="btn-pass" disabled>Исправно</button>' +
+    '<button class="btn-danger" id="btn-fail">Неисправно</button>' +
+    '<button class="btn-ghost" id="btn-retry">Повторить</button>' +
+    "</div>" +
+    "</div>";
+
+  var video = document.getElementById("cam-video");
+  var errEl = document.getElementById("cam-error");
+  var passBtn = document.getElementById("btn-pass");
+
+  function start() {
+    errEl.textContent = "";
+    passBtn.disabled = true;
+    stopStream(stream);
+    navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+      .then(function (s) {
+        stream = s;
+        video.srcObject = s;
+        passBtn.disabled = false;
+      })
+      .catch(function (err) {
+        errEl.textContent = mediaErrorText(err, "камере");
+      });
+  }
+  start();
+
+  document.getElementById("btn-retry").addEventListener("click", start);
+  document.getElementById("btn-pass").addEventListener("click", function () {
+    cleanupScreen();
+    setStatus("camera", "pass", "");
+  });
+  document.getElementById("btn-fail").addEventListener("click", function () {
+    var note = errEl.textContent;
+    cleanupScreen();
+    setStatus("camera", "fail", note);
+  });
+}
+
+// ---- Экран "Звук" (микрофон: запись и воспроизведение) ----
+function renderAudioScreen() {
+  if (mediaUnavailable("микрофону")) return;
+  if (typeof MediaRecorder === "undefined") {
+    showError("WebView не поддерживает MediaRecorder — запись звука недоступна.");
+    return;
+  }
+  var stream = null, recorder = null, chunks = [], audioUrl = null, timer = null;
+  cleanupScreen = function () {
+    if (timer) clearTimeout(timer);
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+    stopStream(stream);
+    stream = null;
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+  };
+
+  screen.innerHTML =
+    '<div class="test-screen">' +
+    "<h2>Звук</h2>" +
+    '<p class="hint">Нажмите «Записать», скажите что-нибудь (5 секунд), затем прослушайте запись — так проверяются микрофон и динамики.</p>' +
+    '<div class="error-text" id="aud-error"></div>' +
+    '<div class="keylog" id="aud-status">Готово к записи</div>' +
+    '<audio id="aud-player" controls style="display:none;width:100%"></audio>' +
+    '<div class="btn-row">' +
+    '<button class="btn-ghost" id="btn-rec">Записать (5 с)</button>' +
+    '<button class="btn-primary" id="btn-pass" disabled>Исправно</button>' +
+    '<button class="btn-danger" id="btn-fail">Неисправно</button>' +
+    "</div>" +
+    "</div>";
+
+  var errEl = document.getElementById("aud-error");
+  var statusEl = document.getElementById("aud-status");
+  var player = document.getElementById("aud-player");
+  var recBtn = document.getElementById("btn-rec");
+
+  recBtn.addEventListener("click", function () {
+    errEl.textContent = "";
+    recBtn.disabled = true;
+    navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+      .then(function (s) {
+        stream = s;
+        chunks = [];
+        recorder = new MediaRecorder(s);
+        recorder.ondataavailable = function (e) { if (e.data.size) chunks.push(e.data); };
+        recorder.onstop = function () {
+          stopStream(stream);
+          stream = null;
+          if (audioUrl) URL.revokeObjectURL(audioUrl);
+          if (!chunks.length) {
+            statusEl.textContent = "Запись пуста";
+            recBtn.disabled = false;
+            return;
+          }
+          audioUrl = URL.createObjectURL(new Blob(chunks, { type: recorder.mimeType }));
+          player.src = audioUrl;
+          player.style.display = "block";
+          statusEl.textContent = "Запись готова — прослушайте";
+          recBtn.disabled = false;
+          recBtn.textContent = "Записать заново";
+          document.getElementById("btn-pass").disabled = false;
+          player.play().catch(function () {});
+        };
+        recorder.start();
+        statusEl.textContent = "Идёт запись...";
+        timer = setTimeout(function () {
+          if (recorder.state !== "inactive") recorder.stop();
+        }, 5000);
+      })
+      .catch(function (err) {
+        errEl.textContent = mediaErrorText(err, "микрофону");
+        recBtn.disabled = false;
+      });
+  });
+
+  document.getElementById("btn-pass").addEventListener("click", function () {
+    cleanupScreen();
+    setStatus("audio", "pass", "");
+  });
+  document.getElementById("btn-fail").addEventListener("click", function () {
+    var note = errEl.textContent;
+    cleanupScreen();
+    setStatus("audio", "fail", note);
+  });
+}
+
 // ---- Экран "Батарея" ----
 function renderBatteryScreen() {
   showLoading("Опрос контроллера батареи...");
@@ -414,6 +579,8 @@ var RENDERERS = {
   keyboard: renderKeyboardScreen,
   touchpad: renderTouchpadScreen,
   display: renderDisplayScreen,
+  camera: renderCameraScreen,
+  audio: renderAudioScreen,
   battery: renderBatteryScreen,
   report: renderReportScreen
 };

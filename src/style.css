@@ -327,3 +327,11 @@ html, body {
   color: #1c1f26;
   font-size: 12px;
 }
+
+.cam-video {
+  width: 100%;
+  max-width: 640px;
+  aspect-ratio: 4 / 3;
+  background: #000;
+  border-radius: 8px;
+}

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<title>Echips Diagnostic Assistant</title>
+<link rel="stylesheet" href="style.css">
+<script src="theme.js"></script>
+</head>
+<body>
+
+<div class="device">
+  <header class="titlebar">
+    <div class="titlebar-drag"></div>
+    <div class="titlebar-controls">
+      <button type="button" class="titlebar-btn" id="win-minimize" title="Свернуть" aria-label="Свернуть">
+        <svg viewBox="0 0 10 10"><line x1="1" y1="5" x2="9" y2="5"/></svg>
+      </button>
+      <button type="button" class="titlebar-btn" id="win-maximize" title="Развернуть" aria-label="Развернуть">
+        <svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" fill="none"/></svg>
+      </button>
+      <button type="button" class="titlebar-btn titlebar-btn-close" id="win-close" title="Закрыть" aria-label="Закрыть">
+        <svg viewBox="0 0 10 10"><line x1="1" y1="1" x2="9" y2="9"/><line x1="9" y1="1" x2="1" y2="9"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="body">
+    <aside class="sidebar">
+      <div class="brand">
+        <img class="mark" src="logo.png" alt="Echips">
+        <div class="brandtext">
+          <div class="h">Echips Diagnostic<br>Assistant</div>
+          <div class="s" id="version-label">v0.1.0</div>
+        </div>
+      </div>
+
+      <nav class="steps" id="test-nav">
+        <!-- заполняется динамически из реестра тестов (app.js) -->
+      </nav>
+
+      <div class="progress-block">
+        <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+        <div class="progress-label" id="progress-label">0 / 0 проверок</div>
+      </div>
+
+      <div class="footer">
+        <span class="c">© Echips</span>
+        <button class="footer-link" id="site-link" type="button">echips.ru</button>
+      </div>
+    </aside>
+
+    <div class="content">
+      <div class="screen" id="screen"></div>
+    </div>
+  </div>
+</div>
+
+<script src="titlebar.js"></script>
+<script src="tests.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

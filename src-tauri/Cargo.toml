@@ -1,0 +1,30 @@
+[package]
+name = "echips-diagnostic-app"
+version = "0.1.0"
+description = "Echips Diagnostic Assistant — приложение для инженеров сервисного центра"
+authors = ["Echips"]
+edition = "2021"
+
+[lib]
+name = "echips_diagnostic_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+encoding_rs = "0.8"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+
+# Статическая линковка CRT — без неё на чистом Windows не хватает VCRUNTIME.
+[target.'cfg(target_os = "windows")'.dependencies]

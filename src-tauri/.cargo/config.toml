@@ -1,0 +1,7 @@
+# Статическая линковка CRT для Windows — избегаем зависимости от VCRUNTIME
+# на чистых установках (см. learnings.md по echips-driver-assistant).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.i686-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -1,0 +1,77 @@
+# Echips Diagnostic Assistant
+
+Каркас Tauri 2 приложения для инженеров сервисного центра — чек-лист
+аппаратной диагностики ноутбука с сохранением отчёта.
+
+Построено по конвенциям `echips-driver-assistant`: кастомный титлбар,
+переключение темы, `screen`-based рендеринг, `.devlist`/`.devrow`,
+`.btn-primary`/`.btn-ghost`, `escapeHtml()`/`showLoading()`/`showError()`.
+
+## Структура
+
+```
+src/                     фронтенд (без сборки — чистый HTML/CSS/JS)
+  index.html
+  style.css
+  theme.js                переключение тёмной/светлой темы
+  titlebar.js              свернуть/развернуть/закрыть окна
+  tests.js                 реестр тестов (список пунктов диагностики)
+  app.js                    рендер экранов, состояние, IPC-вызовы
+
+src-tauri/
+  Cargo.toml
+  tauri.conf.json
+  capabilities/default.json
+  .cargo/config.toml        crt-static для Windows (см. learnings)
+  src/
+    main.rs
+    lib.rs                  регистрация команд
+    powershell.rs            run_ps/run_ps_json, декодирование cp1251
+    commands/
+      system.rs               get_system_info — WMI Win32_ComputerSystem/BIOS
+      battery.rs               get_battery_info — WMI Win32_Battery
+      report.rs                 save_report — сохранение .txt отчёта
+```
+
+## Что уже работает
+
+- Определение устройства (модель, серийник, BIOS, ОС, CPU, ОЗУ)
+- Клавиатура — счётчик уникальных нажатых клавиш
+- Тачпад — визуальный тест рисованием
+- Дисплей — заливка сплошными цветами на весь экран для поиска дефектов
+- Батарея — текущий заряд/статус (полный health% — TODO)
+- Итоговый отчёт — сводка по всем пунктам + сохранение в
+  `%APPDATA%/ru.echips.diagnostic-assistant/reports/*.txt`
+
+## Что оформлено как заглушка (ручная отметка Исправно/Неисправно/Пропустить)
+
+Камера, звук, USB-порты, Wi-Fi/Bluetooth, отпечаток пальца, температуры/кулер,
+стресс-тест — сами экраны в навигации уже есть, но без автоматической
+проверки. Реализуются по одному: добавить рендер-функцию в `app.js` и
+зарегистрировать в объекте `RENDERERS`, при необходимости — новую
+Tauri-команду в `src-tauri/src/commands/`.
+
+## Известные TODO
+
+- `logo.png` — нужно скопировать из `echips-driver-assistant`
+- Иконки для бандла (`src-tauri/icons/`) — скопировать оттуда же или
+  сгенерировать через `tauri icon`
+- Батарея: design/full charge capacity и health% — разбор XML из
+  `powercfg /batteryreport`
+- Температуры/обороты кулера — нет прямого WMI-источника на всех платах;
+  вероятно потребуется внешняя утилита (LibreHardwareMonitor CLI/DLL) или
+  чтение через ACPI, если Echips-платы это поддерживают
+- Камера/микрофон — через `navigator.mediaDevices.getUserMedia` во
+  фронтенде (не требует Rust-команд, но требует разрешений в WebView)
+- USB/Bluetooth/Wi-Fi — перечисление устройств через WMI
+  (`Win32_USBHub`, `Win32_PnPEntity`, `Win32_NetworkAdapter`)
+- Стресс-тест — нагрузка CPU через Rust-потоки + мониторинг троттлинга
+
+## Сборка
+
+Требуется Rust + Tauri CLI, Node не нужен (фронтенд без сборки).
+
+```
+cargo tauri dev
+cargo tauri build
+```

@@ -1,11 +1,11 @@
-// Определение модели/серийника устройства — тот же каскадный подход
-// (WMI Win32_ComputerSystem / Win32_BIOS), что и в echips-driver-assistant,
-// нужен здесь для привязки отчёта диагностики к конкретному устройству.
+// Определение модели/серийника устройства — тот же WMI-каскад, что и в
+// echips-driver-assistant (detect_system_info), плюс базовые данные для
+// шапки диагностики (ОС, CPU, ОЗУ).
 
-use crate::powershell::run_ps_json;
+use crate::powershell::{run_ps, run_ps_json};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct SystemInfo {
     pub manufacturer: String,
     pub model: String,
@@ -41,5 +41,24 @@ pub fn get_system_info() -> Result<SystemInfo, String> {
     #[cfg(not(target_os = "windows"))]
     {
         Err("Определение системной информации доступно только в Windows-сборке".to_string())
+    }
+}
+
+/// Список устройств с ошибкой в диспетчере устройств (Status = 'Error') —
+/// быстрый индикатор явных проблем при старте диагностики.
+#[tauri::command]
+pub fn get_problem_devices() -> Result<Vec<String>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let raw = run_ps(
+            "Get-PnpDevice | Where-Object { $_.Status -eq 'Error' } | \
+             Select-Object -ExpandProperty FriendlyName",
+        )?;
+        Ok(raw.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Доступно только в Windows-сборке".to_string())
     }
 }

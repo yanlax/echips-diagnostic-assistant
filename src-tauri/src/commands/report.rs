@@ -1,18 +1,19 @@
-// Сохранение итогового отчёта диагностики на диск (txt) — в паре с текущим
-// repair-doc воркфлоу: выявленная неисправность / выполненные работы / результат.
+// Сохранение итогового отчёта диагностики — .txt (для акта) и .json (для
+// базы), как задумано в дизайне ("Экспорт JSON" / "Экспорт PDF" — PDF пока
+// не реализован, честно оставлен как TODO в README, чтобы не выдавать
+// недоделанный генератор PDF за готовую функцию).
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::Write;
 use tauri::Manager;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TestResult {
     pub id: String,
     pub title: String,
-    /// "pass" | "fail" | "skipped" | "not_run"
+    /// "pass" | "fail" | "idle"
     pub status: String,
-    pub note: Option<String>,
+    pub comment: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -29,27 +30,25 @@ fn status_label(status: &str) -> &'static str {
     match status {
         "pass" => "OK",
         "fail" => "НЕИСПРАВНО",
-        "skipped" => "ПРОПУЩЕНО",
         _ => "НЕ ПРОВЕРЕНО",
     }
 }
 
-fn render_report(report: &DiagnosticReport) -> String {
+fn render_txt(report: &DiagnosticReport) -> String {
     let mut out = String::new();
-    out.push_str("ECHIPS — ОТЧЁТ ДИАГНОСТИКИ\n");
-    out.push_str("==========================\n\n");
+    out.push_str("ECHIPS HARDWARE CHECK — ОТЧЁТ ДИАГНОСТИКИ\n");
+    out.push_str("===========================================\n\n");
     out.push_str(&format!("Устройство: {}\n", report.device_model));
     out.push_str(&format!("Серийный номер: {}\n", report.device_serial));
     out.push_str(&format!("Инженер: {}\n", report.engineer));
     out.push_str(&format!("Начало: {}\n", report.started_at));
     out.push_str(&format!("Окончание: {}\n\n", report.finished_at));
-    out.push_str("Результаты проверок:\n");
-    out.push_str("---------------------\n");
+    out.push_str("Результаты проверок:\n---------------------\n");
     for r in &report.results {
         out.push_str(&format!("[{}] {}", status_label(&r.status), r.title));
-        if let Some(note) = &r.note {
-            if !note.trim().is_empty() {
-                out.push_str(&format!(" — {}", note));
+        if let Some(c) = &r.comment {
+            if !c.trim().is_empty() {
+                out.push_str(&format!(" — {c}"));
             }
         }
         out.push('\n');
@@ -68,31 +67,44 @@ fn render_report(report: &DiagnosticReport) -> String {
     out
 }
 
-#[tauri::command]
-pub fn save_report(app: tauri::AppHandle, report: DiagnosticReport) -> Result<String, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Не удалось определить папку данных приложения: {e}"))?
-        .join("reports");
+fn safe_filename_part(s: &str) -> String {
+    let cleaned: String = s.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+    if cleaned.is_empty() {
+        "device".to_string()
+    } else {
+        cleaned
+    }
+}
 
+fn reports_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app.path().app_data_dir().map_err(|e| format!("Не удалось определить папку данных приложения: {e}"))?.join("reports");
     fs::create_dir_all(&dir).map_err(|e| format!("Не удалось создать папку отчётов: {e}"))?;
+    Ok(dir)
+}
 
-    let safe_serial = report
-        .device_serial
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect::<String>();
+#[tauri::command]
+pub fn save_report_txt(app: tauri::AppHandle, report: DiagnosticReport) -> Result<String, String> {
+    let dir = reports_dir(&app)?;
     let filename = format!(
         "{}_{}.txt",
         chrono::Local::now().format("%Y%m%d_%H%M%S"),
-        if safe_serial.is_empty() { "device".to_string() } else { safe_serial }
+        safe_filename_part(&report.device_serial)
     );
     let path = dir.join(&filename);
+    fs::write(&path, render_txt(&report)).map_err(|e| format!("Не удалось записать отчёт: {e}"))?;
+    Ok(path.to_string_lossy().to_string())
+}
 
-    let mut file = fs::File::create(&path).map_err(|e| format!("Не удалось создать файл отчёта: {e}"))?;
-    file.write_all(render_report(&report).as_bytes())
-        .map_err(|e| format!("Не удалось записать отчёт: {e}"))?;
-
+#[tauri::command]
+pub fn save_report_json(app: tauri::AppHandle, report: DiagnosticReport) -> Result<String, String> {
+    let dir = reports_dir(&app)?;
+    let filename = format!(
+        "{}_{}.json",
+        chrono::Local::now().format("%Y%m%d_%H%M%S"),
+        safe_filename_part(&report.device_serial)
+    );
+    let path = dir.join(&filename);
+    let json = serde_json::to_string_pretty(&report).map_err(|e| format!("Не удалось сериализовать отчёт: {e}"))?;
+    fs::write(&path, json).map_err(|e| format!("Не удалось записать отчёт: {e}"))?;
     Ok(path.to_string_lossy().to_string())
 }

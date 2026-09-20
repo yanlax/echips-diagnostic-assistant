@@ -1,8 +1,8 @@
 pub mod battery;
-pub mod fingerprint;
-pub mod network;
+pub mod drivers;
+pub mod hardware;
+pub mod motherboard;
 pub mod report;
 pub mod sensors;
 pub mod stress;
 pub mod system;
-pub mod usb;

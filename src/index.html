@@ -1,62 +1,52 @@
 <!DOCTYPE html>
-<html lang="ru" data-theme="dark">
+<html lang="ru">
 <head>
 <meta charset="UTF-8">
-<title>Echips Diagnostic Assistant</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Echips Hardware Check</title>
 <link rel="stylesheet" href="style.css">
-<script src="theme.js"></script>
 </head>
 <body>
 
-<div class="device">
+<div class="app">
   <header class="titlebar">
-    <div class="titlebar-drag"></div>
-    <div class="titlebar-controls">
-      <button type="button" class="titlebar-btn" id="win-minimize" title="Свернуть" aria-label="Свернуть">
-        <svg viewBox="0 0 10 10"><line x1="1" y1="5" x2="9" y2="5"/></svg>
-      </button>
-      <button type="button" class="titlebar-btn" id="win-maximize" title="Развернуть" aria-label="Развернуть">
-        <svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" fill="none"/></svg>
-      </button>
-      <button type="button" class="titlebar-btn titlebar-btn-close" id="win-close" title="Закрыть" aria-label="Закрыть">
-        <svg viewBox="0 0 10 10"><line x1="1" y1="1" x2="9" y2="9"/><line x1="9" y1="1" x2="1" y2="9"/></svg>
-      </button>
-    </div>
+    <div class="t">ECHIPS HARDWARE CHECK</div>
+    <button class="winbtn" type="button" id="win-minimize" title="Свернуть" aria-label="Свернуть">
+      <svg viewBox="0 0 10 10"><line x1="1" y1="5" x2="9" y2="5"></line></svg>
+    </button>
+    <button class="winbtn close" type="button" id="win-close" title="Закрыть" aria-label="Закрыть">
+      <svg viewBox="0 0 10 10"><line x1="1" y1="1" x2="9" y2="9"></line><line x1="9" y1="1" x2="1" y2="9"></line></svg>
+    </button>
   </header>
 
-  <div class="body">
+  <div class="main">
     <aside class="sidebar">
       <div class="brand">
-        <img class="mark" src="logo.png" alt="Echips">
-        <div class="brandtext">
-          <div class="h">Echips Diagnostic<br>Assistant</div>
-          <div class="s" id="version-label">v0.1.0</div>
+        <div class="mark">E</div>
+        <div>
+          <div class="h">Echips Hardware<br>Check</div>
+          <div class="s">v0.2.0 · ОТК / сервис</div>
         </div>
       </div>
 
-      <nav class="steps" id="test-nav">
-        <!-- заполняется динамически из реестра тестов (app.js) -->
-      </nav>
+      <nav class="steps" id="steps"></nav>
 
-      <div class="progress-block">
-        <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
-        <div class="progress-label" id="progress-label">0 / 0 проверок</div>
+      <div class="devbox" id="devbox">
+        <div class="k">Устройство</div>
+        <div class="n" id="devbox-name">определяется…</div>
+        <div class="sn" id="devbox-sn"></div>
       </div>
 
-      <div class="footer">
+      <div class="sidefoot">
         <span class="c">© Echips</span>
-        <button class="footer-link" id="site-link" type="button">echips.ru</button>
+        <a href="#" id="site-link">echips.ru</a>
       </div>
     </aside>
 
-    <div class="content">
-      <div class="screen" id="screen"></div>
-    </div>
+    <div class="content" id="screen"></div>
   </div>
 </div>
 
-<script src="titlebar.js"></script>
-<script src="tests.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

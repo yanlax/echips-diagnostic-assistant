@@ -12,6 +12,7 @@ pub fn run() {
             commands::usb::list_usb_devices,
             commands::network::get_network_adapters,
             commands::fingerprint::get_biometric_devices,
+            commands::sensors::get_sensors_info,
             commands::stress::run_cpu_stress,
             commands::stress::stop_cpu_stress,
         ])

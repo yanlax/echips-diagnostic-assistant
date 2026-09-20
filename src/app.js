@@ -699,6 +699,65 @@ function renderFingerprintScreen() {
     });
 }
 
+// ---- Экран "Температуры / кулер" ----
+function renderSensorsScreen() {
+  var timer = null, busy = false, last = "";
+  cleanupScreen = function () { if (timer) { clearInterval(timer); timer = null; } };
+
+  screen.innerHTML =
+    '<div class="test-screen">' +
+    "<h2>Температуры / кулер</h2>" +
+    '<p class="hint">Показания ACPI через WMI, обновляются каждые 3 секунды. На части ноутбуков эти источники пусты или неточны — тогда оцените нагрев и шум кулера вручную (например, во время стресс-теста).</p>' +
+    '<div id="sensors-body"></div>' +
+    '<div class="btn-row">' +
+    '<button class="btn-primary" id="btn-pass">Исправно</button>' +
+    '<button class="btn-danger" id="btn-fail">Неисправно</button>' +
+    '<button class="btn-ghost" id="btn-skip">Пропустить</button>' +
+    "</div></div>";
+
+  var body = document.getElementById("sensors-body");
+  body.innerHTML = '<p class="hint">Опрос сенсоров...</p>';
+
+  function refresh() {
+    if (busy) return;
+    busy = true;
+    invoke("get_sensors_info")
+      .then(function (info) {
+        var t = info.temperatures.map(function (x) {
+          return devRow(x.name || x.source, x.celsius.toFixed(1) + " °C");
+        }).join("");
+        var f = info.fans.map(function (x) {
+          return devRow(x.name || "Кулер", (x.rpm != null ? x.rpm + " об/мин" : "") + (x.status ? " (" + x.status + ")" : ""));
+        }).join("");
+        last = info.temperatures.length
+          ? "Макс. температура " + Math.max.apply(null, info.temperatures.map(function (x) { return x.celsius; })).toFixed(1) + " °C"
+          : "Автоматические данные недоступны";
+        body.innerHTML =
+          "<h3>Температуры</h3>" +
+          (t ? '<div class="devlist">' + t + "</div>" : '<p class="hint">Нет данных о температурах (WMI не отдаёт значения на этой плате).</p>') +
+          "<h3>Кулер</h3>" +
+          (f ? '<div class="devlist">' + f + "</div>" : '<p class="hint">Нет данных об оборотах кулера (Win32_Fan пуст).</p>');
+      })
+      .catch(function (err) {
+        last = "Опрос не удался";
+        body.innerHTML = '<div class="error-text">' + escapeHtml(typeof err === "string" ? err : "Не удалось опросить сенсоры") + "</div>";
+      })
+      .then(function () { busy = false; });
+  }
+  refresh();
+  timer = setInterval(refresh, 3000);
+
+  document.getElementById("btn-pass").addEventListener("click", function () {
+    cleanupScreen(); setStatus("sensors", "pass", last);
+  });
+  document.getElementById("btn-fail").addEventListener("click", function () {
+    cleanupScreen(); setStatus("sensors", "fail", last);
+  });
+  document.getElementById("btn-skip").addEventListener("click", function () {
+    cleanupScreen(); setStatus("sensors", "skipped", "");
+  });
+}
+
 // ---- Экран "Батарея" ----
 function renderBatteryScreen() {
   showLoading("Опрос контроллера батареи...");
@@ -825,6 +884,7 @@ var RENDERERS = {
   wifi_bt: renderWifiBtScreen,
   stress: renderStressScreen,
   fingerprint: renderFingerprintScreen,
+  sensors: renderSensorsScreen,
   battery: renderBatteryScreen,
   report: renderReportScreen
 };

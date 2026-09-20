@@ -16,6 +16,7 @@ var getCurrentWindow = window.__TAURI__.window.getCurrentWindow;
 var CATS = [
   { id:'sys', tag:'SYS', name:'Системная информация', method:'Процессор, ОЗУ, диски, видеокарта, плата, BIOS + сверка с профилем модели', impl:'реальные данные', kind:'runner', fetch:'sys' },
   { id:'disk', tag:'HDD', name:'Диск: здоровье', method:'Состояние, износ, температура и ошибки (Get-PhysicalDisk, счётчики надёжности)', impl:'реальные данные', kind:'runner', fetch:'disk' },
+  { id:'smart', tag:'SMART', name:'Диск: SMART', method:'Атрибуты SMART (SATA) и лог здоровья NVMe: износ, температура, ошибки — как в CrystalDiskInfo', impl:'реальные данные', kind:'smart' },
   { id:'crash', tag:'BSOD', name:'Журнал сбоев', method:'Синие экраны и внезапные перезагрузки: события Windows + minidump', impl:'реальные данные', kind:'runner', fetch:'crash' },
   { id:'usb', tag:'USB', name:'USB-порты', method:'Список устройств на USB-шине (WMI PnP) + статус', impl:'реальные данные', kind:'runner', fetch:'usb' },
   { id:'rem', tag:'FLASH', name:'Накопитель USB', method:'Запись и чтение флешки на порту с проверкой данных и замером скорости', impl:'реальная нагрузка', kind:'removable' },
@@ -32,6 +33,7 @@ var CATS = [
   { id:'bat', tag:'BAT', name:'Аккумулятор', method:'Design vs Full charge capacity, циклы, износ (powercfg)', impl:'реальные данные', kind:'runner', fetch:'bat' },
   { id:'snd', tag:'SND', name:'Звук', method:'Тестовый сигнал (Web Audio) и echo-тест через микрофон', impl:'реально', kind:'audio' },
   { id:'diskread', tag:'RD', name:'Диск: чтение', method:'Замер скорости чтения по всему диску, медленные блоки и ошибки чтения', impl:'реальная нагрузка', kind:'diskread' },
+  { id:'surface', tag:'SURF', name:'Диск: поверхность', method:'Чтение диска блоками с замером времени каждого блока и графиком скорости в реальном времени (как Victoria)', impl:'реальная нагрузка', kind:'surface' },
   { id:'diskwrite', tag:'WR', name:'Диск: запись', method:'Запись и чтение проверочного файла на томе: скорость по участкам, медленные блоки, ошибки данных', impl:'реальная нагрузка', kind:'diskwrite' },
   { id:'mem', tag:'RAM', name:'Память', method:'Многопоточная запись и проверка паттернов в ОЗУ, счётчик ошибок', impl:'реальная нагрузка', kind:'memtest' },
   { id:'sens', tag:'SNS', name:'Датчики', method:'Температуры через WMI ACPI — доступность зависит от платы', impl:'зависит от платы', kind:'sensors' },
@@ -92,7 +94,9 @@ var S = {
   hw:null, verdict:null, br:{ info:null, loading:false }, camClip:null,
   rm:{ drives:null, timer:null, running:null, log:[], err:null, size:64 },
   dr:{ disks:null, sel:0, mode:64, running:false, pct:0, mbps:0, res:null, err:null },
-  dw:{ vols:null, sel:0, mb:512, running:false, pct:0, phase:'', mbps:0, res:null, err:null },
+  sm:{ disks:null, sel:0, err:null, loading:false },
+  sf:{ disks:null, sel:0, range:'all', running:false, pos:0, total:0, mbps:0, startPct:0, endPct:100, classes:[0,0,0,0,0,0,0], bad:[], cols:[], res:null, err:null, t0:0 },
+  dw:{ vols:null, live:[], sel:0, mb:512, running:false, pct:0, phase:'', mbps:0, res:null, err:null },
   mem:{ size:1024, passes:1, running:false, pct:0, pass:1, pattern:'', errors:0, res:null, err:null },
   auto:{ on:false, ids:[], idx:-1, stopped:false, waiting:false, msg:'', cls:'' },
   drv:{ step:'idle' },
@@ -164,6 +168,7 @@ var A = {
     if (S.rm.timer){ clearInterval(S.rm.timer); S.rm.timer=null; }
     S.br = { info:null, loading:false }; S.camClip = null;
     if (S.stressTempT){ clearInterval(S.stressTempT); S.stressTempT=null; }
+    if (S.sf.running) invoke('stop_surface_scan').catch(function(){});
     if (S.dw.running) invoke('stop_disk_write_test').catch(function(){});
     if (S.dr.running) invoke('stop_disk_read_test').catch(function(){});
     if (S.mem.running) invoke('stop_memory_test').catch(function(){});
@@ -184,6 +189,8 @@ var A = {
       if (c.kind==='runner') A.run();
       else if (c.kind==='diskread') A.drAuto();
       else if (c.kind==='diskwrite') A.dwAuto();
+      else if (c.kind==='smart') A.smAuto();
+      else if (c.kind==='surface') A.sfAuto();
       else if (c.kind==='memtest') A.memAuto();
       else if (c.kind==='sensors') A.sensorsAuto();
       else if (c.kind==='stress') A.stressAuto();
@@ -261,6 +268,82 @@ var A = {
     }
     a.msg=(v.status==='na'?'Не применимо: ':'Пройден: ')+v.note+' · переход к следующему…'; a.cls='ok'; render();
     a.timer = setTimeout(function(){ if (S.auto.on && S.auto.idx===at) A.autoNext(); }, 1800);
+  },
+
+  /* ---- SMART ---- */
+  smLoad:function(){
+    if (S.sm.disks || S.sm.loading) return;
+    S.sm.loading = true;
+    invoke('get_smart_report').then(function(list){
+      S.sm.disks = list; S.sm.loading = false; S.sm.sel = 0; render();
+    }).catch(function(err){
+      S.sm.loading = false; S.sm.disks = []; S.sm.err = typeof err==='string'?err:'Не удалось получить SMART'; render();
+    });
+  },
+  smPick:function(i){ S.sm.sel = i; render(); },
+  smAuto:function(){
+    S.sm.disks = null; S.sm.err = null; S.sm.loading = true;
+    invoke('get_smart_report').then(function(list){
+      S.sm.disks = list; S.sm.loading = false; S.sm.sel = 0; render();
+      A.autoApply(judgeSmart(list));
+    }).catch(function(err){
+      S.sm.loading = false; S.sm.disks = []; S.sm.err = typeof err==='string'?err:'Не удалось получить SMART'; render(); A.autoApply(null);
+    });
+  },
+
+  /* ---- сканирование поверхности ---- */
+  sfLoad:function(){
+    if (S.sf.disks) return;
+    S.sf.disks = [];
+    invoke('get_disk_health').then(function(list){
+      S.sf.disks = list; var i = 0; list.forEach(function(d,k){ if (d.is_system) i = k; });
+      S.sf.sel = i; render();
+    }).catch(function(err){ S.sf.err = typeof err==='string'?err:'Не удалось получить список дисков'; render(); });
+  },
+  sfPick:function(i){ if(!S.sf.running){ S.sf.sel=i; render(); } },
+  sfRange:function(r){ if(!S.sf.running){ S.sf.range=r; render(); } },
+  sfStart:function(){
+    var d = S.sf.disks && S.sf.disks[S.sf.sel]; if (!d || S.sf.running) return;
+    var f = S.sf, gb = d.size_gb, r = f.range, start = 0, end = 100;
+    if (r==='first100'){ end = Math.min(100, 100/gb*100); }
+    else if (r==='first10'){ end = Math.min(100, 10/gb*100); }
+    else if (r==='last10'){ start = Math.max(0, 100-10/gb*100); }
+    else if (typeof r==='number'){ end = Math.min(100, r/gb*100); }
+    f.startPct=start; f.endPct=end; f.running=true; f.pos=0; f.total=0; f.mbps=0; f.classes=[0,0,0,0,0,0,0]; f.bad=[]; f.cols=[]; f.res=null; f.err=null; f.t0=Date.now();
+    render();
+    var unlisten=null;
+    tauriEvent.listen('surface-progress', function(ev){
+      var p=ev.payload; f.pos=p.pos_mb; f.total=p.total_mb; f.mbps=p.mbps; f.classes=p.classes; f.bad=f.bad.concat(p.new_bad_mb);
+      var COLS=SF_COLS, frac=p.total_mb>0 ? p.pos_mb/p.total_mb : 0;
+      var abs=(f.startPct + (f.endPct-f.startPct)*frac)/100, col=Math.min(COLS-1, Math.max(0, Math.floor(abs*COLS)));
+      if (p.mbps>0){ var lastc=f.lastCol==null ? col : f.lastCol; for (var c=Math.min(lastc,col); c<=col; c++) f.cols[c]=p.mbps; }
+      f.lastCol=col; paintSurface();
+    }).then(function(u){ unlisten=u; });
+    function fin(){ if(unlisten) unlisten(); f.running=false; f.lastCol=null; }
+    invoke('run_surface_scan', { diskNumber:d.number, sizeGb:d.size_gb, startPct:start, endPct:end, blockKb:512 }).then(function(res){
+      fin(); f.res=res; render(); paintSurface();
+      if (S.auto.on && S.cat==='surface'){
+        var total = res.classes.reduce(function(a,b){ return a+b; }, 0) || 1;
+        var slowPct = res.classes[4]/total*100, maxSlow = profile().surfaceSlowPct!=null ? profile().surfaceSlowPct : 1;
+        A.autoApply(res.stopped ? null
+          : res.classes[6]>0 ? { status:'fail', note:'Нечитаемых блоков: '+res.classes[6]+' (первые смещения, МБ: '+res.bad_offsets_mb.slice(0,5).join(', ')+')' }
+          : res.classes[5]>0 ? { status:'fail', note:'Блоков с задержкой ≥500 мс: '+res.classes[5]+' — деградация поверхности' }
+          : slowPct>maxSlow ? { status:'fail', note:'Медленных блоков (150–500 мс): '+slowPct.toFixed(1)+'% (порог '+maxSlow+'%)' }
+          : { status:'pass', note:'Прочитано '+(res.scanned_mb/1024).toFixed(1)+' ГБ без ошибок, '+res.avg_mbps.toFixed(0)+' МБ/с в среднем' });
+      }
+    }).catch(function(err){
+      fin(); f.err = typeof err==='string'?err:'Ошибка сканирования'; render();
+      if (S.auto.on && S.cat==='surface') A.autoApply(null);
+    });
+  },
+  sfStop:function(){ invoke('stop_surface_scan').catch(function(){}); },
+  sfAuto:function(){
+    var f=S.sf; f.res=null; f.err=null; f.running=false; f.disks=null;
+    invoke('get_disk_health').then(function(list){
+      if (!list.length) throw 'Физические диски не найдены';
+      f.disks=list; f.sel=0; list.forEach(function(d,k){ if (d.is_system) f.sel=k; });
+      f.range = profile().surfaceScanGb || 20; A.sfStart();
+    }).catch(function(err){ f.err = typeof err==='string'?err:'Не удалось получить список дисков'; render(); A.autoApply(null); });
   },
 
   /* ---- автозапуск длинных тестов в автопрогоне ---- */
@@ -364,15 +447,18 @@ var A = {
   dwMode:function(m){ if(!S.dw.running){ S.dw.mb=m; render(); } },
   dwStart:function(){
     var v = S.dw.vols && S.dw.vols[S.dw.sel]; if (!v || S.dw.running) return;
-    var d = S.dw; d.running=true; d.pct=0; d.mbps=0; d.phase='write'; d.res=null; d.err=null; render();
+    var d = S.dw; d.running=true; d.pct=0; d.mbps=0; d.phase='write'; d.res=null; d.err=null; d.live=[]; render();
     var unlisten=null;
     tauriEvent.listen('diskw-progress', function(ev){
       d.pct=ev.payload.pct; d.mbps=ev.payload.mbps; d.phase=ev.payload.phase;
+      if (d.phase==='write') d.live.push(ev.payload.mbps);
+      var lv=document.getElementById('dw-live'); if (lv && d.phase==='write') lv.innerHTML=sparkInner(d.live);
       var f=document.getElementById('dw-fill'), t=document.getElementById('dw-txt');
       if (f && t){ f.style.width=d.pct+'%'; t.textContent=d.pct+'% · '+(d.phase==='write'?'запись':'чтение')+' · '+d.mbps.toFixed(0)+' МБ/с'; } else render();
     }).then(function(u){ unlisten=u; });
     function fin(){ if(unlisten) unlisten(); d.running=false; }
-    invoke('run_disk_write_test', { letter:v.letter, sizeMb:d.mb }).then(function(r){
+    var sizeMb = d.mb===0 ? Math.max(128, Math.floor(v.free_gb*1024*0.85)) : d.mb;
+    invoke('run_disk_write_test', { letter:v.letter, sizeMb:sizeMb }).then(function(r){
       fin(); d.res=r; render();
       if (S.auto.on && S.cat==='diskwrite'){
         var slowMax = profile().diskSlowBlocksMax!=null ? profile().diskSlowBlocksMax : 3;
@@ -1171,6 +1257,159 @@ function fieldAudio(){
     '<div class="spectrum">'+bars+'</div><div class="kbnote">'+note+'</div></div>';
 }
 
+/* ---------- SMART ---------- */
+var SMART_LABEL = { good:'Хорошее', caution:'Тревога', bad:'Плохое', unknown:'Нет данных' };
+function smartReasons(d){
+  var out = [];
+  if (d.kind==='ata'){
+    d.attrs.forEach(function(a){
+      if (a.status==='bad') out.push(a.name+' ниже порога ('+a.current+' ≤ '+a.threshold+')');
+      else if (a.status==='warn') out.push(a.name+' = '+(a.raw % 4294967296));
+    });
+  } else if (d.kind==='nvme' && d.nvme){
+    var h = d.nvme;
+    if (h.critical_warning) out.push('критическое предупреждение 0x'+h.critical_warning.toString(16).toUpperCase());
+    if (h.available_spare<=h.spare_threshold && h.spare_threshold>0) out.push('резерв '+h.available_spare+'% ≤ порога '+h.spare_threshold+'%');
+    if (h.percentage_used>=50) out.push('износ '+h.percentage_used+'%');
+    if (h.media_errors>0) out.push('ошибок целостности данных: '+h.media_errors);
+  }
+  if (d.health_pct!=null && d.health_pct<=50 && d.kind!=='nvme') out.push('остаток ресурса '+d.health_pct+'%');
+  d.notes.forEach(function(n){ if (/предсказывает/.test(n)) out.push(n); });
+  return out;
+}
+function judgeSmart(list){
+  var P = profile(), cautionFail = P.smartCautionIsFail!==false, bad=[], caution=[], have=0;
+  list.forEach(function(d){
+    if (d.status!=='unknown') have++;
+    if (d.status==='bad') bad.push(d.name+': '+(smartReasons(d).join(', ')||'плохое состояние'));
+    else if (d.status==='caution') caution.push(d.name+': '+(smartReasons(d).join(', ')||'требует внимания'));
+  });
+  if (bad.length) return { status:'fail', note:'SMART — плохое состояние. '+bad.join('; ') };
+  if (caution.length && cautionFail) return { status:'fail', note:'SMART — тревога. '+caution.join('; ') };
+  if (!have) return null;
+  return { status:'pass', note:'SMART без предупреждений ('+have+' диск.)'+(caution.length?'; замечания: '+caution.join('; '):'') };
+}
+function fmtRaw(a){ var v=a.raw; return v.toString(16).toUpperCase().padStart(12,'0')+' · '+(v<=9007199254740991?String(v):'—'); }
+function fieldSmart(){
+  A.smLoad();
+  var m = S.sm, disks = m.disks;
+  if (!disks) return '<div class="runwrap"><div class="idle"><span class="t">··</span><span>чтение SMART…</span></div></div>';
+  if (!disks.length) return '<div class="runwrap"><div class="idle" style="color:var(--err)"><span class="t">--</span><span>'+esc(m.err||'Диски не найдены')+'</span></div></div>';
+  var d = disks[Math.min(m.sel, disks.length-1)];
+  var tabs = '<div class="control"><div class="opts">'+ disks.map(function(x,i){
+    return '<button class="opt'+(m.sel===i?' on':'')+'" onclick="echips.smPick('+i+')"><span class="sdot2 st-'+x.status+'"></span>'+esc(x.name)+' · '+x.size_gb+' ГБ</button>';
+  }).join('') +'</div></div>';
+  function card(k,v,cls){ return '<div class="stat4"><div class="k">'+k+'</div><div class="v '+(cls||'')+'">'+v+'</div></div>'; }
+  var cls = d.status==='good'?'ok':d.status==='unknown'?'none':'err';
+  var cards = '<div class="stats4">'+
+    card('состояние', SMART_LABEL[d.status]+(d.health_pct!=null?' · '+d.health_pct.toFixed(0)+'%':''), cls)+
+    card('температура', d.temp_c!=null ? d.temp_c.toFixed(0)+' °C' : '—', d.temp_c!=null && d.temp_c>=70 ? 'err' : '')+
+    card('наработка', d.power_on_hours!=null ? d.power_on_hours+' ч ('+(d.power_on_hours/24).toFixed(0)+' дн.)' : '—')+
+    card('включений', d.power_cycles!=null ? d.power_cycles : '—')+'</div>'+
+    '<div class="stats4" style="margin-top:8px">'+
+    card('записано всего', d.written_gb!=null ? d.written_gb.toFixed(0)+' ГБ' : '—')+
+    card('прочитано всего', d.read_gb!=null ? d.read_gb.toFixed(0)+' ГБ' : '—')+
+    card('интерфейс / тип', esc((d.bus||'—')+(d.media?' · '+d.media:'')))+
+    card('прошивка / серийный', esc((d.firmware||'—')+' · '+(d.serial||'—')))+'</div>';
+  var table = '';
+  if (d.kind==='ata'){
+    table = '<div class="smtable"><div class="smh"><span>ID</span><span>Атрибут</span><span>Текущее</span><span>Худшее</span><span>Порог</span><span>Raw (hex · dec)</span></div>'+
+      d.attrs.map(function(a){
+        return '<div class="smr"><span><i class="sdot2 st-'+(a.status==='ok'?'good':a.status==='warn'?'caution':'bad')+'"></i>'+String(a.id).padStart(2,'0')+'</span><span>'+esc(a.name)+'</span><span>'+a.current+'</span><span>'+a.worst+'</span><span>'+a.threshold+'</span><span class="mono">'+fmtRaw(a)+'</span></div>';
+      }).join('')+'</div>';
+  } else if (d.kind==='nvme' && d.nvme){
+    var h = d.nvme;
+    var rows = [['Критическое предупреждение', '0x'+h.critical_warning.toString(16).toUpperCase().padStart(2,'0'), h.critical_warning?'bad':'good'],
+      ['Доступный резерв', h.available_spare+'% (порог '+h.spare_threshold+'%)', h.available_spare<=h.spare_threshold&&h.spare_threshold>0?'bad':'good'],
+      ['Использовано ресурса', h.percentage_used+'%', h.percentage_used>=90?'bad':h.percentage_used>=50?'caution':'good'],
+      ['Ошибки целостности данных', h.media_errors, h.media_errors?'caution':'good'],
+      ['Записей в журнале ошибок', h.error_log_entries, 'good'],
+      ['Небезопасных выключений', h.unsafe_shutdowns, 'good'],
+      ['Циклов включения', h.power_cycles, 'good'],
+      ['Наработка, ч', h.power_on_hours, 'good'],
+      ['Прочитано / записано, ГБ', h.data_read_gb.toFixed(0)+' / '+h.data_written_gb.toFixed(0), 'good']];
+    table = '<div class="smtable"><div class="smh nv"><span>Параметр NVMe</span><span>Значение</span></div>'+
+      rows.map(function(r){ return '<div class="smr nv"><span><i class="sdot2 st-'+r[2]+'"></i>'+r[0]+'</span><span class="mono">'+esc(String(r[1]))+'</span></div>'; }).join('')+'</div>';
+  }
+  var notes = d.notes.length ? '<div class="kbnote" style="margin-top:8px">'+d.notes.map(esc).join('<br>')+'</div>' : '';
+  var reasons = smartReasons(d);
+  return '<div class="runwrap">'+tabs+cards+(reasons.length?'<div class="kbnote" style="margin-top:8px;color:var(--err)">Замечания: '+esc(reasons.join('; '))+'</div>':'')+table+notes+
+    '<div class="kbnote" style="margin-top:8px">Записано/прочитано у SATA — оценка (LBA × 512 байт), у части производителей единица другая. Автоматическая оценка: «Плохое» — атрибут ниже порога, сбой по данным диска или ресурс ≤10%; «Тревога» — переназначенные/нестабильные секторы, ошибки, ресурс ≤50%.</div></div>';
+}
+
+/* ---------- сканирование поверхности ---------- */
+var SF_COLS = 600;
+var SF_CLASSES = [['<5 мс','#8A8F98'],['<20','#4CAF7D'],['<50','#9BCB5B'],['<150','#F0C24B'],['<500','#FF8A00'],['≥500','#E2574C'],['ошибка','#B0102A']];
+function sfClassesHtml(cl){
+  return SF_CLASSES.map(function(c,i){
+    return '<div class="sfc"><i style="background:'+c[1]+'"></i><span>'+c[0]+'</span><b>'+cl[i]+'</b></div>';
+  }).join('');
+}
+function paintSurface(){
+  var f = S.sf;
+  var txt = document.getElementById('sf-txt');
+  if (txt){
+    var pct = f.total>0 ? f.pos/f.total*100 : 0, el=(Date.now()-f.t0)/1000, eta = pct>0.5 && f.running ? el/pct*(100-pct) : null;
+    txt.textContent = pct.toFixed(1)+'% · '+f.mbps.toFixed(0)+' МБ/с · '+(f.pos/1024).toFixed(1)+' из '+(f.total/1024).toFixed(1)+' ГБ'+(eta!==null?' · осталось ~'+Math.floor(eta/60)+' мин '+Math.round(eta%60)+' с':'');
+  }
+  var fill = document.getElementById('sf-fill'); if (fill) fill.style.width = (f.total>0 ? f.pos/f.total*100 : 0)+'%';
+  var cl = document.getElementById('sf-cls'); if (cl) cl.innerHTML = sfClassesHtml(f.classes);
+  var bad = document.getElementById('sf-bad'); if (bad) bad.textContent = f.bad.length ? 'Нечитаемые блоки (смещение, МБ): '+f.bad.slice(0,40).join(', ')+(f.bad.length>40?' … всего '+f.bad.length:'') : '';
+  var cv = document.getElementById('sf-canvas');
+  if (cv && cv.getContext){
+    var w = cv.clientWidth || 600, h = cv.clientHeight || 170;
+    if (cv.width!==w) cv.width = w; if (cv.height!==h) cv.height = h;
+    var g = cv.getContext('2d'); g.clearRect(0,0,w,h);
+    var max = 1; for (var i=0;i<f.cols.length;i++) if (f.cols[i]>max) max=f.cols[i];
+    max *= 1.1;
+    g.strokeStyle='rgba(255,255,255,.07)'; g.lineWidth=1;
+    for (var k=1;k<4;k++){ var y=h*k/4; g.beginPath(); g.moveTo(0,y); g.lineTo(w,y); g.stroke(); }
+    g.fillStyle='rgba(255,138,0,.28)'; g.strokeStyle='#FF8A00'; g.lineWidth=1.5;
+    g.beginPath(); var first=true, lastx=0;
+    for (var c=0;c<SF_COLS;c++){
+      if (f.cols[c]==null) continue;
+      var x=c/SF_COLS*w, yy=h-(f.cols[c]/max)*h;
+      if (first){ g.moveTo(x,h); g.lineTo(x,yy); first=false; } else g.lineTo(x,yy);
+      lastx=x;
+    }
+    if (!first){ g.stroke(); g.lineTo(lastx,h); g.closePath(); g.fill(); }
+    g.fillStyle='rgba(255,255,255,.45)'; g.font='10px JetBrains Mono, monospace';
+    g.fillText(max.toFixed(0)+' МБ/с', 6, 12); g.fillText('0', 6, h-4);
+    var dk = f.disks && f.disks[f.sel]; if (dk){ g.fillText('0', 6, h-16); g.fillText(dk.size_gb+' ГБ', w-52, h-4); }
+    g.fillStyle='#E2574C';
+    f.bad.forEach(function(mb){ if (!dk) return; var abs=mb/1024/dk.size_gb; g.fillRect(abs*w, 0, 2, h); });
+  }
+}
+function fieldSurface(){
+  A.sfLoad();
+  var f = S.sf, disks = f.disks || [], r = f.res;
+  var ranges = [['all','Весь диск'],['first100','Первые 100 ГБ'],['first10','Первые 10 ГБ'],['last10','Последние 10 ГБ']];
+  var out = '<div class="runwrap">'+
+    '<div class="control"><div class="k">Диск</div><div class="opts">'+ (disks.length ? disks.map(function(x,i){
+      return '<button class="opt'+(f.sel===i?' on':'')+'" onclick="echips.sfPick('+i+')" '+(f.running?'disabled':'')+'>'+esc(x.name)+' · '+x.size_gb+' ГБ'+(x.is_system?' · системный':'')+'</button>';
+    }).join('') : '<span class="kbnote">'+(f.err?esc(f.err):'опрос дисков…')+'</span>') +'</div></div>'+
+    '<div class="control" style="margin-top:12px"><div class="k">Диапазон</div><div class="opts">'+ ranges.map(function(x){
+      return '<button class="opt mono'+(f.range===x[0]?' on':'')+'" onclick="echips.sfRange(\''+x[0]+'\')" '+(f.running?'disabled':'')+'>'+x[1]+'</button>';
+    }).join('') +'</div></div>'+
+    '<div class="runrow" style="margin-top:14px"><button class="btn btn-primary" onclick="echips.sfStart()" '+(f.running||!disks.length?'disabled':'')+'>'+(f.running?'Идёт сканирование…':r?'Повторить':'Запустить')+'</button>'+
+    (f.running?'<button class="btn btn-ghost" onclick="echips.sfStop()">Остановить</button>':'')+
+    '<span class="n">только чтение: данные не меняются, диск не изнашивается; весь диск — от минут (SSD) до нескольких часов (HDD)</span></div>';
+  if (f.running || r){
+    out += '<div class="bar" style="margin-top:14px"><div class="fill" id="sf-fill" style="width:'+(r?100:(f.total>0?f.pos/f.total*100:0))+'%"></div></div>'+
+      '<div class="mbtext" id="sf-txt"></div>'+
+      '<canvas id="sf-canvas" class="sfcanvas"></canvas>'+
+      '<div class="sfcls" id="sf-cls">'+sfClassesHtml(f.classes)+'</div>'+
+      '<div class="kbnote" id="sf-bad" style="color:var(--err)"></div>';
+  }
+  if (f.err && disks.length) out += '<div class="idle" style="color:var(--err);margin-top:10px"><span>'+esc(f.err)+'</span></div>';
+  if (r){
+    var total = r.classes.reduce(function(a,b){ return a+b; }, 0) || 1, bad = r.classes[6]>0, warn = r.classes[5]>0 || r.classes[4]/total>0.01;
+    out += '<div class="kbnote" style="margin-top:8px">'+(r.stopped?'Остановлено пользователем. ':'')+'Просканировано '+(r.scanned_mb/1024).toFixed(1)+' ГБ за '+r.elapsed_secs+' с · скорость средняя '+r.avg_mbps.toFixed(0)+', минимум '+r.min_mbps.toFixed(0)+', максимум '+r.max_mbps.toFixed(0)+' МБ/с. '+
+      (bad ? 'Есть нечитаемые блоки — на диске bad-блоки.' : warn ? 'Есть очень медленные блоки — возможна деградация поверхности.' : 'Ошибок и заметных задержек нет.')+'</div>';
+  }
+  return out+'</div>';
+}
+
 function autoBanner(){
   var a = S.auto; if (!a.on) return '';
   var n = a.ids.length;
@@ -1184,10 +1423,16 @@ function autoBanner(){
     '<div class="headactions">'+btns+'</div></div>';
 }
 
-function sparkBars(samples){
-  var max = Math.max.apply(null, samples.concat([1]));
-  return '<div class="spark">'+samples.map(function(v){ return '<i style="height:'+Math.max(3, v/max*100).toFixed(0)+'%" title="'+v.toFixed(0)+' МБ/с"></i>'; }).join('')+'</div>';
+function sparkInner(samples){
+  var MAXBARS = 120, arr = samples;
+  if (arr.length > MAXBARS){
+    var k = arr.length / MAXBARS; arr = [];
+    for (var i=0;i<MAXBARS;i++){ var a=Math.floor(i*k), b=Math.max(a+1, Math.floor((i+1)*k)), sum=0; for (var j=a;j<b;j++) sum+=samples[j]; arr.push(sum/(b-a)); }
+  }
+  var max = Math.max.apply(null, arr.concat([1]));
+  return arr.map(function(v){ return '<i style="height:'+Math.max(3, v/max*100).toFixed(0)+'%" title="'+v.toFixed(0)+' МБ/с"></i>'; }).join('');
 }
+function sparkBars(samples){ return '<div class="spark">'+sparkInner(samples)+'</div>'; }
 function fieldDiskRead(){
   A.drLoad();
   var d = S.dr, disks = d.disks || [], r = d.res;
@@ -1253,7 +1498,7 @@ function fieldRemovable(){
 function fieldDiskWrite(){
   A.dwLoad();
   var d = S.dw, vols = d.vols || [], r = d.res;
-  var modes = [[512,'Быстрый · 512 МБ'],[2048,'Расширенный · 2 ГБ']];
+  var modes = [[512,'512 МБ'],[2048,'2 ГБ'],[10240,'10 ГБ'],[51200,'50 ГБ'],[102400,'100 ГБ'],[0,'Максимум']];
   var out = '<div class="runwrap">'+
     '<div class="control"><div class="k">Том</div><div class="opts">'+ (vols.length ? vols.map(function(v,i){
       return '<button class="opt'+(d.sel===i?' on':'')+'" onclick="echips.dwPick('+i+')" '+(d.running?'disabled':'')+'>'+esc(v.letter)+': '+esc(v.label||'без метки')+' · '+v.size_gb+' ГБ, свободно '+v.free_gb+(v.is_system?' · системный':'')+'</button>';
@@ -1263,10 +1508,12 @@ function fieldDiskWrite(){
     }).join('') +'</div></div>'+
     '<div class="runrow" style="margin-top:14px"><button class="btn btn-primary" onclick="echips.dwStart()" '+(d.running||!vols.length?'disabled':'')+'>'+(d.running?'Идёт запись…':r?'Повторить':'Запустить')+'</button>'+
     (d.running?'<button class="btn btn-ghost" onclick="echips.dwStop()">Остановить</button>':'')+
-    '<span class="n">пишется временный файл, данные на диске не затрагиваются; файл удаляется после теста</span></div>';
+    '<span class="n">пишется временный файл, данные на диске не затрагиваются; файл удаляется после теста</span></div>'+
+    (d.mb===0||d.mb>=10240 ? '<div class="kbnote" style="margin-top:8px">Большие объёмы: '+(d.mb===0?'до 85% свободного места':(d.mb/1024)+' ГБ')+' записи. Для SSD с ресурсом 300 ТБ 100 ГБ — около 0,03% ресурса, диск это не убивает, но время теста растёт (запись + проверка чтением).</div>' : '');
   if (d.running || r){
     out += '<div class="bar" style="margin-top:14px"><div class="fill" id="dw-fill" style="width:'+(r?100:d.pct)+'%"></div></div>'+
-      '<div class="mbtext" id="dw-txt">'+(d.running ? d.pct+'% · '+(d.phase==='write'?'запись':'чтение')+' · '+d.mbps.toFixed(0)+' МБ/с' : '')+'</div>';
+      '<div class="mbtext" id="dw-txt">'+(d.running ? d.pct+'% · '+(d.phase==='write'?'запись':'чтение')+' · '+d.mbps.toFixed(0)+' МБ/с' : '')+'</div>'+
+      (d.running ? '<div class="spark" id="dw-live">'+sparkInner(d.live)+'</div>' : '');
   }
   if (d.err && vols.length) out += '<div class="idle" style="color:var(--err);margin-top:10px"><span>'+esc(d.err)+'</span></div>';
   if (r){
@@ -1323,6 +1570,8 @@ function screenTest(){
   else if(c.kind==='audio') field = fieldAudio();
   else if(c.kind==='diskread') field = fieldDiskRead();
   else if(c.kind==='diskwrite') field = fieldDiskWrite();
+  else if(c.kind==='smart') field = fieldSmart();
+  else if(c.kind==='surface') field = fieldSurface();
   else if(c.kind==='memtest') field = fieldMem();
   else if(c.kind==='brightness') field = fieldBrightness();
   else if(c.kind==='removable') field = fieldRemovable();
@@ -1687,6 +1936,7 @@ function render(){
     var inp = host.querySelector('input');
     if(inp){ inp.focus(); try{ inp.setSelectionRange(sel,sel); }catch(e){} }
   }
+  if (S.screen==='test' && cat().kind==='surface') paintSurface();
   var pad = document.getElementById('pad');
   if(pad){
     pad.addEventListener('pointerdown', padPoint);

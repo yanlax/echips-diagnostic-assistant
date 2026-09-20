@@ -440,3 +440,21 @@ h1.title{font-family:var(--grotesk);font-size:27px;font-weight:600;color:var(--t
 .range{width:100%;accent-color:var(--accent);margin-top:6px}
 .devrow2 .btn{white-space:nowrap}
 .side .btn{align-self:flex-start}
+
+/* ---------- SMART и сканирование поверхности ---------- */
+.sdot2{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;background:var(--faint);vertical-align:middle;flex:0 0 auto}
+.sdot2.st-good{background:var(--ok);box-shadow:0 0 6px var(--ok)}
+.sdot2.st-caution{background:#F0C24B;box-shadow:0 0 6px #F0C24B}
+.sdot2.st-bad{background:var(--err);box-shadow:0 0 6px var(--err)}
+.smtable{margin-top:12px;border:1px solid var(--line);border-radius:10px;overflow:hidden;font-size:12px}
+.smh,.smr{display:grid;grid-template-columns:64px 1fr 76px 76px 66px 190px;gap:8px;padding:7px 12px;align-items:center}
+.smh.nv,.smr.nv{grid-template-columns:1fr 1fr}
+.smh{background:var(--glass);font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
+.smr{border-top:1px solid var(--line-soft);color:var(--text-2)}
+.smr:hover{background:var(--glass)}
+.smr .mono{font-family:var(--mono);font-size:11px;color:var(--mute)}
+.sfcanvas{display:block;width:100%;height:170px;margin-top:12px;border-radius:10px;background:var(--glass);border:1px solid var(--line)}
+.sfcls{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.sfc{display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:7px;background:var(--glass);border:1px solid var(--line);font-family:var(--mono);font-size:11px;color:var(--mute)}
+.sfc i{width:10px;height:10px;border-radius:2px;display:inline-block}
+.sfc b{color:var(--text);font-weight:600}

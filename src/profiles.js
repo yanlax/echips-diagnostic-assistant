@@ -10,6 +10,9 @@
 //   batteryMinHealth  минимальный износ-порог: health% батареи, ниже — «не пройден»
 //   wifiMinSignal     порог лучшего сигнала Wi-Fi, % (null — не проверять); слабый
 //                     сигнал рядом с роутером указывает на антенну/шлейф
+//   smartCautionIsFail  «Тревога» SMART (переназначенные секторы и т. п.) считать неисправностью
+//   surfaceScanGb     сколько первых ГБ диска сканировать поверхность в автопрогоне
+//   surfaceSlowPct    допустимая доля медленных (150–500 мс) блоков при сканировании, %
 //   stressSecs        длительность стресс-теста CPU в автопрогоне, с
 //   memTestMb         объём проверяемой памяти в автопрогоне, МБ
 //   diskWriteMb       размер проверочного файла теста записи, МБ
@@ -30,12 +33,15 @@
 window.ECHIPS_PROFILES = {
   default: {
     name: "Стандартный",
-    tests: ["sys", "disk", "crash", "usb", "bt", "wifi", "lan", "kb", "lcd", "bright", "cam", "pad", "fp", "bat", "snd",
-            "diskread", "diskwrite", "mem", "sens", "stress"],
+    tests: ["sys", "disk", "smart", "crash", "usb", "bt", "wifi", "lan", "kb", "lcd", "bright", "cam", "pad", "fp", "bat", "snd",
+            "diskread", "surface", "diskwrite", "mem", "sens", "stress"],
     stopAtFail: false,
     batteryMinHealth: 80,
     wifiMinSignal: null,
     diskMaxWearPct: 90,
+    smartCautionIsFail: true,
+    surfaceScanGb: 20,
+    surfaceSlowPct: 1,
     stressSecs: 60,
     memTestMb: 1024,
     diskWriteMb: 512,

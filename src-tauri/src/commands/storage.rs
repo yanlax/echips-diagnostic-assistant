@@ -323,7 +323,7 @@ fn write_test(window: Window, letter: String, size_mb: u64) -> Result<DiskWriteR
     if letter.len() != 1 || !letter.chars().all(|c| c.is_ascii_alphabetic()) {
         return Err("Некорректная буква тома".to_string());
     }
-    let size_mb = size_mb.clamp(128, 4096);
+    let size_mb = size_mb.clamp(128, 512 * 1024);
 
     // Свободного места должно хватить с запасом — иначе можно забить системный диск.
     let free_mb = run_ps(&format!("(Get-Volume -DriveLetter {letter}).SizeRemaining"))
@@ -331,8 +331,10 @@ fn write_test(window: Window, letter: String, size_mb: u64) -> Result<DiskWriteR
         .and_then(|s| s.trim().parse::<u64>().ok())
         .map(|b| b / (1024 * 1024))
         .ok_or("Не удалось узнать свободное место на томе")?;
-    if free_mb < size_mb + 512 {
-        return Err(format!("Мало свободного места на {letter}: (доступно {free_mb} МБ, нужно не менее {} МБ)", size_mb + 512));
+    // запас: 512 МБ или 5% тома — чтобы не забить диск под ноль
+    let reserve = 512u64.max(free_mb / 20);
+    if free_mb < size_mb + reserve {
+        return Err(format!("Мало свободного места на {letter}: (доступно {free_mb} МБ, нужно не менее {} МБ)", size_mb + reserve));
     }
 
     let sys = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into()).trim_end_matches(':').to_uppercase();
@@ -438,4 +440,181 @@ fn write_test(window: Window, letter: String, size_mb: u64) -> Result<DiskWriteR
 #[cfg(not(target_os = "windows"))]
 fn write_test(_window: Window, _letter: String, _size_mb: u64) -> Result<DiskWriteResult, String> {
     Err("Тест записи диска доступен только в Windows-сборке".to_string())
+}
+
+// ------------------------------------- Диск: сканирование поверхности
+//
+// Как «Read» в Victoria: последовательное чтение всего диска (или диапазона)
+// блоками с замером времени каждого блока. Данные не меняются и диск не
+// изнашивается. Время блока раскладывается по классам задержки, скорость
+// уходит в интерфейс в реальном времени для графика.
+
+static S_STOP: AtomicBool = AtomicBool::new(false);
+static S_RUNNING: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug, Serialize, Clone)]
+pub struct SurfaceProgress {
+    pub pos_mb: u64,
+    pub total_mb: u64,
+    /// Скорость за последний интервал, МБ/с
+    pub mbps: f64,
+    /// Блоки по классам задержки: <5, <20, <50, <150, <500, >=500 мс, ошибка
+    pub classes: [u64; 7],
+    /// Новые смещения нечитаемых блоков (МБ) с прошлого события
+    pub new_bad_mb: Vec<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct SurfaceResult {
+    pub scanned_mb: u64,
+    pub avg_mbps: f64,
+    pub min_mbps: f64,
+    pub max_mbps: f64,
+    pub classes: [u64; 7],
+    pub bad_offsets_mb: Vec<u64>,
+    pub elapsed_secs: u64,
+    pub stopped: bool,
+}
+
+#[tauri::command]
+pub async fn run_surface_scan(
+    window: Window,
+    disk_number: u32,
+    size_gb: f64,
+    start_pct: f64,
+    end_pct: f64,
+    block_kb: u64,
+) -> Result<SurfaceResult, String> {
+    if S_RUNNING.swap(true, Ordering::SeqCst) {
+        return Err("Сканирование поверхности уже выполняется".to_string());
+    }
+    S_STOP.store(false, Ordering::SeqCst);
+    let res = tauri::async_runtime::spawn_blocking(move || surface_scan(window, disk_number, size_gb, start_pct, end_pct, block_kb))
+        .await
+        .map_err(|e| format!("Сканирование завершилось аварийно: {e}"))
+        .and_then(|r| r);
+    S_RUNNING.store(false, Ordering::SeqCst);
+    res
+}
+
+#[tauri::command]
+pub fn stop_surface_scan() {
+    S_STOP.store(true, Ordering::SeqCst);
+}
+
+#[cfg(target_os = "windows")]
+fn surface_scan(
+    window: Window,
+    disk_number: u32,
+    size_gb: f64,
+    start_pct: f64,
+    end_pct: f64,
+    block_kb: u64,
+) -> Result<SurfaceResult, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::time::{Duration, Instant};
+    use tauri::Emitter;
+
+    const NO_BUFFERING: u32 = 0x2000_0000;
+    const MB: u64 = 1024 * 1024;
+
+    let block = (block_kb.clamp(64, 4096) * 1024) / 4096 * 4096;
+    let total_bytes = (size_gb * 1024.0 * 1024.0 * 1024.0 * 0.995) as u64;
+    let start = ((total_bytes as f64 * start_pct.clamp(0.0, 100.0) / 100.0) as u64) / block * block;
+    let end = ((total_bytes as f64 * end_pct.clamp(0.0, 100.0) / 100.0) as u64) / block * block;
+    if end <= start + block {
+        return Err("Пустой диапазон сканирования".to_string());
+    }
+
+    let path = format!(r"\\.\PhysicalDrive{disk_number}");
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(NO_BUFFERING)
+        .open(&path)
+        .map_err(|e| format!("Не удалось открыть {path} (нужны права администратора): {e}"))?;
+    file.seek(SeekFrom::Start(start)).map_err(|e| format!("Не удалось встать на начало диапазона: {e}"))?;
+
+    let mut raw = vec![0u8; block as usize + 4096];
+    let off = raw.as_ptr().align_offset(4096);
+    let total_mb = (end - start) / MB;
+
+    let mut res = SurfaceResult::default();
+    let mut classes = [0u64; 7];
+    let mut new_bad: Vec<u64> = Vec::new();
+    let t0 = Instant::now();
+    let mut win_start = Instant::now();
+    let mut win_bytes = 0u64;
+    let mut pos = start;
+    let mut min_mbps = f64::INFINITY;
+    let mut max_mbps = 0.0f64;
+    let mut samples = 0u64;
+    let mut sum_mbps = 0.0f64;
+
+    while pos < end {
+        if S_STOP.load(Ordering::SeqCst) {
+            res.stopped = true;
+            break;
+        }
+        let buf = &mut raw[off..off + block as usize];
+        let t = Instant::now();
+        let r = file.read(buf);
+        let ms = t.elapsed().as_secs_f64() * 1000.0;
+        let mut step = block;
+        match r {
+            Ok(0) => break,
+            Ok(n) => {
+                step = n as u64;
+                win_bytes += n as u64;
+                let c = if ms < 5.0 { 0 } else if ms < 20.0 { 1 } else if ms < 50.0 { 2 } else if ms < 150.0 { 3 } else if ms < 500.0 { 4 } else { 5 };
+                classes[c] += 1;
+            }
+            Err(_) => {
+                classes[6] += 1;
+                let mb = pos / MB;
+                if res.bad_offsets_mb.len() < 500 {
+                    res.bad_offsets_mb.push(mb);
+                }
+                new_bad.push(mb);
+                // перепозиционируемся за проблемный блок
+                let _ = file.seek(SeekFrom::Start(pos + block));
+            }
+        }
+        pos += step;
+
+        if win_start.elapsed() >= Duration::from_millis(250) {
+            let secs = win_start.elapsed().as_secs_f64().max(0.001);
+            let mbps = win_bytes as f64 / MB as f64 / secs;
+            if win_bytes > 0 {
+                min_mbps = min_mbps.min(mbps);
+                max_mbps = max_mbps.max(mbps);
+                sum_mbps += mbps;
+                samples += 1;
+            }
+            let _ = window.emit(
+                "surface-progress",
+                SurfaceProgress { pos_mb: (pos - start) / MB, total_mb, mbps, classes, new_bad_mb: std::mem::take(&mut new_bad) },
+            );
+            win_start = Instant::now();
+            win_bytes = 0;
+        }
+    }
+
+    // хвост: последнее событие с итоговым положением
+    let _ = window.emit(
+        "surface-progress",
+        SurfaceProgress { pos_mb: (pos.min(end) - start) / MB, total_mb, mbps: 0.0, classes, new_bad_mb: std::mem::take(&mut new_bad) },
+    );
+    res.scanned_mb = (pos.min(end) - start) / MB;
+    res.classes = classes;
+    res.elapsed_secs = t0.elapsed().as_secs();
+    res.avg_mbps = if samples > 0 { sum_mbps / samples as f64 } else { 0.0 };
+    res.min_mbps = if min_mbps.is_finite() { min_mbps } else { 0.0 };
+    res.max_mbps = max_mbps;
+    Ok(res)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn surface_scan(_w: Window, _d: u32, _s: f64, _a: f64, _b: f64, _k: u64) -> Result<SurfaceResult, String> {
+    Err("Сканирование поверхности доступно только в Windows-сборке".to_string())
 }

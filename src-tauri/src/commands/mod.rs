@@ -11,3 +11,5 @@ pub mod crash;
 pub mod memtest;
 pub mod storage;
 pub mod peripherals;
+pub mod smart;
+pub mod smart_parse;

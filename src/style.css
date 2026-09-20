@@ -465,3 +465,13 @@ h1.title{font-family:var(--grotesk);font-size:27px;font-weight:600;color:var(--t
   background:rgba(255,255,255,.04);color:var(--mute);border:1px solid rgba(255,255,255,.10);transition:background-color .18s,border-color .18s,color .18s}
 .subtab:hover{color:var(--text)}
 .subtab.on{background:rgba(255,138,0,.14);color:var(--text-hi);border-color:rgba(255,138,0,.35)}
+
+/* ---------- прокрутка и отсутствие сжатия содержимого теста ---------- */
+.field{overflow-y:auto;min-height:170px}
+.runwrap{flex:1 0 auto}
+.runwrap > *{flex-shrink:0}
+.runwrap > .log{flex-shrink:1}
+.autobar .ab-row{display:flex;align-items:center;justify-content:space-between;gap:14px}
+.autobar .ab-row .ab-msg{flex:1;min-width:0}
+.autobar .ab-row .headactions{flex:0 0 auto}
+.autobar .btn{padding:8px 16px}

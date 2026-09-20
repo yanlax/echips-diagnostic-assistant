@@ -13,7 +13,8 @@
 //   smartCautionIsFail  «Тревога» SMART (переназначенные секторы и т. п.) считать неисправностью
 //   surfaceScanGb     сколько первых ГБ диска сканировать поверхность в автопрогоне
 //   surfaceSlowPct    допустимая доля медленных (150–500 мс) блоков при сканировании, %
-//   stressSecs        длительность стресс-теста CPU в автопрогоне, с
+//   stressSecs        длительность стресс-теста CPU, если добавить "stress" в tests
+//                     (по умолчанию в автопрогон не входит), с
 //   memTestMb         объём проверяемой памяти в автопрогоне, МБ
 //   diskWriteMb       размер проверочного файла теста записи, МБ
 //   diskSlowBlocksMax допустимо медленных (>250 мс) блоков в тестах чтения/записи
@@ -34,7 +35,7 @@ window.ECHIPS_PROFILES = {
   default: {
     name: "Стандартный",
     tests: ["sys", "disk", "smart", "crash", "usb", "bt", "wifi", "lan", "kb", "lcd", "bright", "cam", "pad", "fp", "bat", "snd",
-            "diskread", "surface", "diskwrite", "mem", "sens", "stress"],
+            "diskread", "surface", "diskwrite", "mem", "sens"],
     stopAtFail: false,
     batteryMinHealth: 80,
     wifiMinSignal: null,

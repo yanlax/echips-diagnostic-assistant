@@ -1404,13 +1404,17 @@ function fieldSurface(){
   A.sfLoad();
   var f = S.sf, disks = f.disks || [], r = f.res;
   var ranges = [['all','Весь диск'],['first100','Первые 100 ГБ'],['first10','Первые 10 ГБ'],['last10','Последние 10 ГБ']];
-  var out = '<div class="runwrap">'+
-    '<div class="control"><div class="k">Диск</div><div class="opts">'+ (disks.length ? disks.map(function(x,i){
-      return '<button class="opt'+(f.sel===i?' on':'')+'" onclick="echips.sfPick('+i+')" '+(f.running?'disabled':'')+'>'+esc(x.name)+' · '+x.size_gb+' ГБ'+(x.is_system?' · системный':'')+'</button>';
-    }).join('') : '<span class="kbnote">'+(f.err?esc(f.err):'опрос дисков…')+'</span>') +'</div></div>'+
-    '<div class="control" style="margin-top:12px"><div class="k">Диапазон</div><div class="opts">'+ ranges.map(function(x){
-      return '<button class="opt mono'+(f.range===x[0]?' on':'')+'" onclick="echips.sfRange(\''+x[0]+'\')" '+(f.running?'disabled':'')+'>'+x[1]+'</button>';
-    }).join('') +'</div></div>'+
+  var cur = disks[f.sel];
+  var rangeLabel = typeof f.range==='number' ? 'первые '+f.range+' ГБ' : (ranges.filter(function(x){ return x[0]===f.range; })[0]||[0,''])[1].toLowerCase();
+  var pickers = f.running
+    ? '<div class="kbnote">Диск: '+esc(cur?cur.name+' · '+cur.size_gb+' ГБ':'—')+' · диапазон: '+esc(rangeLabel)+'</div>'
+    : '<div class="control"><div class="k">Диск</div><div class="opts">'+ (disks.length ? disks.map(function(x,i){
+        return '<button class="opt'+(f.sel===i?' on':'')+'" onclick="echips.sfPick('+i+')">'+esc(x.name)+' · '+x.size_gb+' ГБ'+(x.is_system?' · системный':'')+'</button>';
+      }).join('') : '<span class="kbnote">'+(f.err?esc(f.err):'опрос дисков…')+'</span>') +'</div></div>'+
+      '<div class="control" style="margin-top:12px"><div class="k">Диапазон</div><div class="opts">'+ ranges.map(function(x){
+        return '<button class="opt mono'+(f.range===x[0]?' on':'')+'" onclick="echips.sfRange(\''+x[0]+'\')">'+x[1]+'</button>';
+      }).join('') +'</div></div>';
+  var out = '<div class="runwrap">'+pickers+
     '<div class="runrow" style="margin-top:14px"><button class="btn btn-primary" onclick="echips.sfStart()" '+(f.running||!disks.length?'disabled':'')+'>'+(f.running?'Идёт сканирование…':r?'Повторить':'Запустить')+'</button>'+
     (f.running?'<button class="btn btn-ghost" onclick="echips.sfStop()">Остановить</button>':'')+
     '<span class="n">только чтение: данные не меняются, диск не изнашивается; весь диск — от минут (SSD) до нескольких часов (HDD)</span></div>';
@@ -1447,8 +1451,8 @@ function autoBanner(){
   return '<div class="autobar"><div class="ab-top"><span class="eyebrow">Автопрогон · профиль «'+esc(profile().name)+'»</span>'+
     '<span class="idx">шаг '+(a.idx+1)+' из '+n+'</span></div>'+
     '<div class="bar"><div class="fill" style="width:'+(a.idx/n*100).toFixed(0)+'%"></div></div>'+
-    (a.msg ? '<div class="ab-msg '+a.cls+'">'+esc(a.msg)+'</div>' : '')+
-    '<div class="headactions">'+btns+'</div></div>';
+    '<div class="ab-row">'+(a.msg ? '<div class="ab-msg '+a.cls+'">'+esc(a.msg)+'</div>' : '<div class="ab-msg"></div>')+
+    '<div class="headactions">'+btns+'</div></div></div>';
 }
 
 function sparkInner(samples){
@@ -1527,13 +1531,17 @@ function fieldDiskWrite(){
   A.dwLoad();
   var d = S.dw, vols = d.vols || [], r = d.res;
   var modes = [[512,'512 МБ'],[2048,'2 ГБ'],[10240,'10 ГБ'],[51200,'50 ГБ'],[102400,'100 ГБ'],[0,'Максимум']];
-  var out = '<div class="runwrap">'+
-    '<div class="control"><div class="k">Том</div><div class="opts">'+ (vols.length ? vols.map(function(v,i){
-      return '<button class="opt'+(d.sel===i?' on':'')+'" onclick="echips.dwPick('+i+')" '+(d.running?'disabled':'')+'>'+esc(v.letter)+': '+esc(v.label||'без метки')+' · '+v.size_gb+' ГБ, свободно '+v.free_gb+(v.is_system?' · системный':'')+'</button>';
-    }).join('') : '<span class="kbnote">'+(d.err?esc(d.err):'опрос томов…')+'</span>') +'</div></div>'+
-    '<div class="control" style="margin-top:12px"><div class="k">Размер проверочного файла</div><div class="opts">'+ modes.map(function(m){
-      return '<button class="opt mono'+(d.mb===m[0]?' on':'')+'" onclick="echips.dwMode('+m[0]+')" '+(d.running?'disabled':'')+'>'+m[1]+'</button>';
-    }).join('') +'</div></div>'+
+  var curV = vols[d.sel];
+  var modeLabel = (modes.filter(function(m){ return m[0]===d.mb; })[0]||[0,d.mb+' МБ'])[1];
+  var pickersW = d.running
+    ? '<div class="kbnote">Том: '+esc(curV?curV.letter+': '+(curV.label||'без метки')+' · '+curV.size_gb+' ГБ':'—')+' · файл: '+esc(modeLabel)+'</div>'
+    : '<div class="control"><div class="k">Том</div><div class="opts">'+ (vols.length ? vols.map(function(v,i){
+        return '<button class="opt'+(d.sel===i?' on':'')+'" onclick="echips.dwPick('+i+')">'+esc(v.letter)+': '+esc(v.label||'без метки')+' · '+v.size_gb+' ГБ, свободно '+v.free_gb+(v.is_system?' · системный':'')+'</button>';
+      }).join('') : '<span class="kbnote">'+(d.err?esc(d.err):'опрос томов…')+'</span>') +'</div></div>'+
+      '<div class="control" style="margin-top:12px"><div class="k">Размер проверочного файла</div><div class="opts">'+ modes.map(function(m){
+        return '<button class="opt mono'+(d.mb===m[0]?' on':'')+'" onclick="echips.dwMode('+m[0]+')">'+m[1]+'</button>';
+      }).join('') +'</div></div>';
+  var out = '<div class="runwrap">'+pickersW+
     '<div class="runrow" style="margin-top:14px"><button class="btn btn-primary" onclick="echips.dwStart()" '+(d.running||!vols.length?'disabled':'')+'>'+(d.running?'Идёт запись…':r?'Повторить':'Запустить')+'</button>'+
     (d.running?'<button class="btn btn-ghost" onclick="echips.dwStop()">Остановить</button>':'')+
     '<span class="n">пишется временный файл, данные на диске не затрагиваются; файл удаляется после теста</span></div>'+

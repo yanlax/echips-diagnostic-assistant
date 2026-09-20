@@ -12,7 +12,7 @@ window.ECHIPS_TESTS = [
   { id: "audio", title: "Звук", group: "Аудио", manual: false },
   { id: "usb", title: "USB-порты", group: "Порты", manual: false },
   { id: "wifi_bt", title: "Wi-Fi / Bluetooth", group: "Сеть", manual: false },
-  { id: "fingerprint", title: "Отпечаток пальца", group: "Сенсоры", manual: true },
+  { id: "fingerprint", title: "Отпечаток пальца", group: "Сенсоры", manual: false },
   { id: "battery", title: "Батарея", group: "Питание", manual: false },
   { id: "sensors", title: "Температуры / кулер", group: "Сенсоры", manual: true },
   { id: "stress", title: "Стресс-тест", group: "Нагрузка", manual: false },

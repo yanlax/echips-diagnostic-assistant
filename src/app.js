@@ -660,6 +660,45 @@ function renderStressScreen() {
   });
 }
 
+// ---- Экран "Отпечаток пальца" ----
+function renderFingerprintScreen() {
+  showLoading("Поиск биометрического сенсора...");
+  invoke("get_biometric_devices")
+    .then(function (devices) {
+      var found = devices.length > 0;
+      var rows = devices.map(function (d) {
+        var st = d.error_code ? "Ошибка устройства (код " + d.error_code + ")" : (d.status || "Обнаружен");
+        return devRow(d.name, st);
+      }).join("");
+
+      screen.innerHTML =
+        '<div class="test-screen">' +
+        "<h2>Отпечаток пальца</h2>" +
+        (found
+          ? '<div class="devlist">' + rows + "</div>" +
+            '<p class="hint">Сенсор найден. Откройте Параметры Windows → Учётные записи → Варианты входа → Windows Hello (отпечаток) и проверьте сканирование пальца, затем отметьте результат.</p>'
+          : '<p class="hint">Биометрический сенсор в системе не обнаружен. Если в модели он должен быть — это неисправность; если сенсора нет по комплектации — пропустите.</p>') +
+        '<div class="btn-row">' +
+        (found ? '<button class="btn-primary" id="btn-pass">Сканирование работает</button>' : "") +
+        '<button class="btn-danger" id="btn-fail">Неисправно</button>' +
+        '<button class="btn-ghost" id="btn-skip">Пропустить</button>' +
+        "</div></div>";
+
+      var note = found ? devices[0].name : "Сенсор не обнаружен";
+      var pass = document.getElementById("btn-pass");
+      if (pass) pass.addEventListener("click", function () { setStatus("fingerprint", "pass", note); });
+      document.getElementById("btn-fail").addEventListener("click", function () {
+        setStatus("fingerprint", "fail", note);
+      });
+      document.getElementById("btn-skip").addEventListener("click", function () {
+        setStatus("fingerprint", "skipped", "");
+      });
+    })
+    .catch(function (err) {
+      showError(typeof err === "string" ? err : "Не удалось опросить биометрические устройства");
+    });
+}
+
 // ---- Экран "Батарея" ----
 function renderBatteryScreen() {
   showLoading("Опрос контроллера батареи...");
@@ -785,6 +824,7 @@ var RENDERERS = {
   usb: renderUsbScreen,
   wifi_bt: renderWifiBtScreen,
   stress: renderStressScreen,
+  fingerprint: renderFingerprintScreen,
   battery: renderBatteryScreen,
   report: renderReportScreen
 };

@@ -32,6 +32,7 @@ src-tauri/
       battery.rs               get_battery_info — WMI Win32_Battery
       network.rs               get_network_adapters — Wi-Fi/Bluetooth
       stress.rs                 run_cpu_stress/stop_cpu_stress
+      fingerprint.rs           get_biometric_devices — сенсор отпечатков
       usb.rs                   list_usb_devices — Win32_PnPEntity USB\*
       report.rs                 save_report — сохранение .txt отчёта
 ```
@@ -47,14 +48,15 @@ src-tauri/
 - USB-порты — список устройств (`list_usb_devices`, Win32_PnPEntity) + ручная отметка по портам
 - Wi-Fi/Bluetooth — статус адаптеров (`get_network_adapters`, Win32_NetworkAdapter) + ручная отметка
 - Стресс-тест CPU — нагрузка на все ядра (`run_cpu_stress`), прогресс-бар, скорость по секундам, отметка pass/fail
+- Отпечаток пальца — наличие сенсора (`get_biometric_devices`, PnP-класс Biometric) + ручная отметка
 - Батарея — заряд/статус, design и full charge capacity, health%, циклы (XML из `powercfg /batteryreport`)
 - Итоговый отчёт — сводка по всем пунктам + сохранение в
   `%APPDATA%/ru.echips.diagnostic-assistant/reports/*.txt`
 
 ## Что оформлено как заглушка (ручная отметка Исправно/Неисправно/Пропустить)
 
-отпечаток пальца, температуры/кулер — сами экраны в навигации уже есть,
-но без автоматической проверки. Реализуются по одному: добавить рендер-функцию в `app.js` и
+температуры/кулер — экран в навигации уже есть, но без автоматической
+проверки. Реализуются по одному: добавить рендер-функцию в `app.js` и
 зарегистрировать в объекте `RENDERERS`, при необходимости — новую
 Tauri-команду в `src-tauri/src/commands/`.
 

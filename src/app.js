@@ -580,6 +580,86 @@ function renderWifiBtScreen() {
     });
 }
 
+// ---- Экран "Стресс-тест" ----
+function renderStressScreen() {
+  var running = false, unlisten = null, rates = [];
+  cleanupScreen = function () {
+    if (running) invoke("stop_cpu_stress");
+    if (unlisten) { unlisten(); unlisten = null; }
+  };
+
+  screen.innerHTML =
+    '<div class="test-screen">' +
+    "<h2>Стресс-тест CPU</h2>" +
+    '<p class="hint">Нагрузка на все ядра процессора. Следите за поведением ноутбука: перезагрузка, зависание, синий экран, сильный шум кулера или падение скорости (троттлинг) считаются неисправностью.</p>' +
+    '<p class="hint">Длительность, сек: <input type="number" id="stress-dur" min="5" max="3600" value="60" style="width:6em"></p>' +
+    '<div class="progress-bar"><div class="progress-fill" id="stress-fill"></div></div>' +
+    '<div class="keylog" id="stress-status">Готово к запуску</div>' +
+    '<div class="btn-row">' +
+    '<button class="btn-ghost" id="btn-start">Запустить</button>' +
+    '<button class="btn-ghost" id="btn-stop" disabled>Остановить</button>' +
+    '<button class="btn-primary" id="btn-pass" disabled>Тест пройден</button>' +
+    '<button class="btn-danger" id="btn-fail">Неисправно</button>' +
+    "</div></div>";
+
+  var fill = document.getElementById("stress-fill");
+  var statusEl = document.getElementById("stress-status");
+  var startBtn = document.getElementById("btn-start");
+  var stopBtn = document.getElementById("btn-stop");
+  var passBtn = document.getElementById("btn-pass");
+  var summary = "";
+
+  function setRunning(v) {
+    running = v;
+    startBtn.disabled = v;
+    stopBtn.disabled = !v;
+    document.getElementById("stress-dur").disabled = v;
+  }
+
+  startBtn.addEventListener("click", function () {
+    var dur = Math.max(5, Math.min(3600, parseInt(document.getElementById("stress-dur").value, 10) || 60));
+    rates = [];
+    summary = "";
+    passBtn.disabled = true;
+    fill.style.width = "0%";
+    setRunning(true);
+    statusEl.textContent = "Запуск...";
+
+    window.__TAURI__.event.listen("stress-progress", function (e) {
+      var p = e.payload;
+      rates.push(p.mops);
+      fill.style.width = Math.round((p.elapsed_secs / p.total_secs) * 100) + "%";
+      statusEl.textContent = "Идёт нагрузка: " + p.elapsed_secs + " / " + p.total_secs +
+        " с, скорость " + p.mops.toFixed(0) + " Мопс";
+    }).then(function (un) { unlisten = un; });
+
+    invoke("run_cpu_stress", { durationSecs: dur })
+      .then(function (r) {
+        setRunning(false);
+        var drop = r.max_mops > 0 ? Math.round((1 - r.min_mops / r.max_mops) * 100) : 0;
+        summary = r.threads + " потоков, " + r.elapsed_secs + " с, средняя скорость " +
+          r.avg_mops.toFixed(0) + " Мопс, просадка до " + drop + "%";
+        statusEl.textContent = (r.cancelled ? "Остановлено. " : "Завершено. ") + summary;
+        if (!r.cancelled) { fill.style.width = "100%"; passBtn.disabled = false; }
+      })
+      .catch(function (err) {
+        setRunning(false);
+        statusEl.textContent = "Ошибка: " + err;
+      })
+      .then(function () { if (unlisten) { unlisten(); unlisten = null; } });
+  });
+
+  stopBtn.addEventListener("click", function () { invoke("stop_cpu_stress"); });
+  passBtn.addEventListener("click", function () {
+    cleanupScreen();
+    setStatus("stress", "pass", summary);
+  });
+  document.getElementById("btn-fail").addEventListener("click", function () {
+    cleanupScreen();
+    setStatus("stress", "fail", summary);
+  });
+}
+
 // ---- Экран "Батарея" ----
 function renderBatteryScreen() {
   showLoading("Опрос контроллера батареи...");
@@ -704,6 +784,7 @@ var RENDERERS = {
   audio: renderAudioScreen,
   usb: renderUsbScreen,
   wifi_bt: renderWifiBtScreen,
+  stress: renderStressScreen,
   battery: renderBatteryScreen,
   report: renderReportScreen
 };

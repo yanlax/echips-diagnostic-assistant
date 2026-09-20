@@ -15,6 +15,6 @@ window.ECHIPS_TESTS = [
   { id: "fingerprint", title: "Отпечаток пальца", group: "Сенсоры", manual: true },
   { id: "battery", title: "Батарея", group: "Питание", manual: false },
   { id: "sensors", title: "Температуры / кулер", group: "Сенсоры", manual: true },
-  { id: "stress", title: "Стресс-тест", group: "Нагрузка", manual: true },
+  { id: "stress", title: "Стресс-тест", group: "Нагрузка", manual: false },
   { id: "report", title: "Отчёт", group: "Итог", manual: false, isReport: true }
 ];

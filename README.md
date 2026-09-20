@@ -31,6 +31,7 @@ src-tauri/
       system.rs               get_system_info — WMI Win32_ComputerSystem/BIOS
       battery.rs               get_battery_info — WMI Win32_Battery
       network.rs               get_network_adapters — Wi-Fi/Bluetooth
+      stress.rs                 run_cpu_stress/stop_cpu_stress
       usb.rs                   list_usb_devices — Win32_PnPEntity USB\*
       report.rs                 save_report — сохранение .txt отчёта
 ```
@@ -45,15 +46,15 @@ src-tauri/
 - Звук — запись 5 с с микрофона и воспроизведение (`MediaRecorder`)
 - USB-порты — список устройств (`list_usb_devices`, Win32_PnPEntity) + ручная отметка по портам
 - Wi-Fi/Bluetooth — статус адаптеров (`get_network_adapters`, Win32_NetworkAdapter) + ручная отметка
+- Стресс-тест CPU — нагрузка на все ядра (`run_cpu_stress`), прогресс-бар, скорость по секундам, отметка pass/fail
 - Батарея — заряд/статус, design и full charge capacity, health%, циклы (XML из `powercfg /batteryreport`)
 - Итоговый отчёт — сводка по всем пунктам + сохранение в
   `%APPDATA%/ru.echips.diagnostic-assistant/reports/*.txt`
 
 ## Что оформлено как заглушка (ручная отметка Исправно/Неисправно/Пропустить)
 
-отпечаток пальца, температуры/кулер,
-стресс-тест — сами экраны в навигации уже есть, но без автоматической
-проверки. Реализуются по одному: добавить рендер-функцию в `app.js` и
+отпечаток пальца, температуры/кулер — сами экраны в навигации уже есть,
+но без автоматической проверки. Реализуются по одному: добавить рендер-функцию в `app.js` и
 зарегистрировать в объекте `RENDERERS`, при необходимости — новую
 Tauri-команду в `src-tauri/src/commands/`.
 
@@ -65,7 +66,7 @@ Tauri-команду в `src-tauri/src/commands/`.
 - Температуры/обороты кулера — нет прямого WMI-источника на всех платах;
   вероятно потребуется внешняя утилита (LibreHardwareMonitor CLI/DLL) или
   чтение через ACPI, если Echips-платы это поддерживают
-- Стресс-тест — нагрузка CPU через Rust-потоки + мониторинг троттлинга
+- Стресс-тест: мониторинг температур/частот во время нагрузки (зависит от задачи по сенсорам)
 
 ## Сборка
 

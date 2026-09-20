@@ -11,6 +11,8 @@ pub fn run() {
             commands::report::save_report,
             commands::usb::list_usb_devices,
             commands::network::get_network_adapters,
+            commands::stress::run_cpu_stress,
+            commands::stress::stop_cpu_stress,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

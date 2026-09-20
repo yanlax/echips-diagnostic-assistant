@@ -15,8 +15,8 @@ var getCurrentWindow = window.__TAURI__.window.getCurrentWindow;
 
 var CATS = [
   { id:'sys', tag:'SYS', name:'Системная информация', method:'Процессор, ОЗУ, диски, видеокарта, плата, BIOS + сверка с профилем модели', impl:'реальные данные', kind:'runner', fetch:'sys' },
-  { id:'disk', tag:'HDD', name:'Диск: здоровье', method:'Состояние, износ, температура и ошибки (Get-PhysicalDisk, счётчики надёжности)', impl:'реальные данные', kind:'runner', fetch:'disk' },
-  { id:'smart', tag:'SMART', name:'Диск: SMART', method:'Атрибуты SMART (SATA) и лог здоровья NVMe: износ, температура, ошибки — как в CrystalDiskInfo', impl:'реальные данные', kind:'smart' },
+  { id:'disk', group:'disk', sub:'Здоровье', tag:'HDD', name:'Диск: здоровье', method:'Состояние, износ, температура и ошибки (Get-PhysicalDisk, счётчики надёжности)', impl:'реальные данные', kind:'runner', fetch:'disk' },
+  { id:'smart', group:'disk', sub:'SMART', tag:'SMART', name:'Диск: SMART', method:'Атрибуты SMART (SATA) и лог здоровья NVMe: износ, температура, ошибки — как в CrystalDiskInfo', impl:'реальные данные', kind:'smart' },
   { id:'crash', tag:'BSOD', name:'Журнал сбоев', method:'Синие экраны и внезапные перезагрузки: события Windows + minidump', impl:'реальные данные', kind:'runner', fetch:'crash' },
   { id:'usb', tag:'USB', name:'USB-порты', method:'Список устройств на USB-шине (WMI PnP) + статус', impl:'реальные данные', kind:'runner', fetch:'usb' },
   { id:'rem', tag:'FLASH', name:'Накопитель USB', method:'Запись и чтение флешки на порту с проверкой данных и замером скорости', impl:'реальная нагрузка', kind:'removable' },
@@ -32,13 +32,25 @@ var CATS = [
   { id:'fp', tag:'FP', name:'Отпечаток', method:'Сенсор виден системе (WinBio) — регистрация вручную', impl:'частично', kind:'runner', fetch:'fp' },
   { id:'bat', tag:'BAT', name:'Аккумулятор', method:'Design vs Full charge capacity, циклы, износ (powercfg)', impl:'реальные данные', kind:'runner', fetch:'bat' },
   { id:'snd', tag:'SND', name:'Звук', method:'Тестовый сигнал (Web Audio) и echo-тест через микрофон', impl:'реально', kind:'audio' },
-  { id:'diskread', tag:'RD', name:'Диск: чтение', method:'Замер скорости чтения по всему диску, медленные блоки и ошибки чтения', impl:'реальная нагрузка', kind:'diskread' },
-  { id:'surface', tag:'SURF', name:'Диск: поверхность', method:'Чтение диска блоками с замером времени каждого блока и графиком скорости в реальном времени (как Victoria)', impl:'реальная нагрузка', kind:'surface' },
-  { id:'diskwrite', tag:'WR', name:'Диск: запись', method:'Запись и чтение проверочного файла на томе: скорость по участкам, медленные блоки, ошибки данных', impl:'реальная нагрузка', kind:'diskwrite' },
+  { id:'diskread', group:'disk', sub:'Чтение', tag:'RD', name:'Диск: чтение', method:'Замер скорости чтения по всему диску, медленные блоки и ошибки чтения', impl:'реальная нагрузка', kind:'diskread' },
+  { id:'surface', group:'disk', sub:'Поверхность', tag:'SURF', name:'Диск: поверхность', method:'Чтение диска блоками с замером времени каждого блока и графиком скорости в реальном времени (как Victoria)', impl:'реальная нагрузка', kind:'surface' },
+  { id:'diskwrite', group:'disk', sub:'Запись', tag:'WR', name:'Диск: запись', method:'Запись и чтение проверочного файла на томе: скорость по участкам, медленные блоки, ошибки данных', impl:'реальная нагрузка', kind:'diskwrite' },
   { id:'mem', tag:'RAM', name:'Память', method:'Многопоточная запись и проверка паттернов в ОЗУ, счётчик ошибок', impl:'реальная нагрузка', kind:'memtest' },
   { id:'sens', tag:'SNS', name:'Датчики', method:'Температуры через WMI ACPI — доступность зависит от платы', impl:'зависит от платы', kind:'sensors' },
   { id:'stress', tag:'STR', name:'Стресс-тест', method:'Реальная нагрузка CPU на всех ядрах на заданное время', impl:'CPU реально', kind:'stress' }
 ];
+/* Группы категорий: в ручном режиме показываются одной карточкой с подвкладками,
+   в автопрогоне и отчёте каждый тест остаётся отдельным шагом. */
+var GROUPS = {
+  disk:{ name:'Диск', tag:'DISK', method:'Здоровье, SMART, чтение, сканирование поверхности и запись — подвкладки', impl:'реальные данные и нагрузка' }
+};
+function groupTests(g){ return CATS.filter(function(c){ return c.group===g; }); }
+function groupStatus(g){
+  var ts = groupTests(g), done = 0, fail = false, pass = 0;
+  ts.forEach(function(c){ var st = S.results[c.id]; if (st && st!=='idle'){ done++; if (st==='fail') fail = true; if (st==='pass' || st==='na') pass++; } });
+  return { done:done, total:ts.length, st: fail ? 'fail' : (done===ts.length && ts.length) ? 'pass' : 'idle' };
+}
+
 var FILLS = [
   { name:'белый', color:'#FFFFFF' }, { name:'серый', color:'#8F8F8F' }, { name:'чёрный', color:'#000000' },
   { name:'красный', color:'#FF0000' }, { name:'зелёный', color:'#00FF00' }, { name:'синий', color:'#0000FF' },
@@ -1118,6 +1130,14 @@ function screenDash(){
     '<div class="progrow"><div class="bar"><div class="fill" style="width:'+(c.checked/CATS.length*100).toFixed(0)+'%"></div></div>'+
     '<div class="lbl">проверено '+c.checked+' из '+CATS.length+' · пройдено '+c.pass+' · ошибок '+c.fail+'</div></div>'+
     '<div class="cats">'+ CATS.map(function(x){
+      if (x.group){
+        if (groupTests(x.group)[0].id!==x.id) return '';
+        var g = GROUPS[x.group], gs = groupStatus(x.group);
+        return '<div class="cat '+STATUS[gs.st].cls+'" onclick="echips.openCat(\''+x.id+'\')">'+
+          '<div class="row"><span class="tag">'+g.tag+'</span><span class="name">'+g.name+'</span><span class="sdot"></span></div>'+
+          '<div class="method">'+g.method+'</div>'+
+          '<div class="foot"><span class="st">'+gs.done+' из '+gs.total+' · '+STATUS[gs.st].label+'</span><span>'+g.impl+'</span></div></div>';
+      }
       var st = statusOf(x.id), live = x.kind==='sensors';
       return '<div class="cat '+(live?'live ':'')+STATUS[st].cls+'" onclick="echips.openCat(\''+x.id+'\')">'+
         '<div class="row"><span class="tag">'+x.tag+'</span><span class="name">'+x.name+'</span><span class="sdot"></span></div>'+
@@ -1410,6 +1430,14 @@ function fieldSurface(){
   return out+'</div>';
 }
 
+function subTabs(c){
+  if (!c.group || S.auto.on) return '';
+  return '<div class="subtabs">'+ groupTests(c.group).map(function(t){
+    var st = statusOf(t.id);
+    return '<button class="subtab'+(t.id===c.id?' on':'')+'" onclick="echips.openCat(\''+t.id+'\')"><i class="sdot2 '+(st==='pass'?'st-good':st==='fail'?'st-bad':st==='na'?'':'')+'"></i>'+esc(t.sub||t.name)+'</button>';
+  }).join('') +'</div>';
+}
+
 function autoBanner(){
   var a = S.auto; if (!a.on) return '';
   var n = a.ids.length;
@@ -1579,7 +1607,7 @@ function screenTest(){
   return '<div class="pane">'+
     '<div class="crumbs"><button class="btn-link" onclick="echips.go(\'dash\')">← все категории</button>'+
     '<span class="idx">категория '+(CATS.indexOf(c)+1)+' из '+CATS.length+'</span></div>'+
-    autoBanner()+
+    autoBanner()+subTabs(c)+
     '<div class="testhead"><div><h2>'+c.name+'</h2><div class="hint">'+c.method+'</div></div>'+
     '<div class="base">'+c.tag+' · '+c.impl+'</div></div>'+
     '<div class="field">'+field+'</div>'+

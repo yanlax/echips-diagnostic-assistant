@@ -458,3 +458,10 @@ h1.title{font-family:var(--grotesk);font-size:27px;font-weight:600;color:var(--t
 .sfc{display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:7px;background:var(--glass);border:1px solid var(--line);font-family:var(--mono);font-size:11px;color:var(--mute)}
 .sfc i{width:10px;height:10px;border-radius:2px;display:inline-block}
 .sfc b{color:var(--text);font-weight:600}
+
+/* ---------- подвкладки группы тестов ---------- */
+.subtabs{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 2px}
+.subtab{display:inline-flex;align-items:center;font-family:var(--grotesk);font-size:13px;font-weight:500;padding:9px 16px;border-radius:9px;cursor:pointer;
+  background:rgba(255,255,255,.04);color:var(--mute);border:1px solid rgba(255,255,255,.10);transition:background-color .18s,border-color .18s,color .18s}
+.subtab:hover{color:var(--text)}
+.subtab.on{background:rgba(255,138,0,.14);color:var(--text-hi);border-color:rgba(255,138,0,.35)}

@@ -106,6 +106,26 @@ async fn yandex_get_download_href(public_key: &str, path: Option<&str>) -> Resul
     Ok(json["href"].as_str().unwrap_or_default().to_string())
 }
 
+#[tauri::command]
+pub async fn yandex_list_folder(public_key: String) -> Result<Vec<(String, String)>, String> {
+    let url = format!(
+        "https://cloud-api.yandex.net/v1/disk/public/resources?public_key={}&path=/&limit=200",
+        urlencoding::encode(&public_key)
+    );
+    let resp = reqwest::get(&url).await.map_err(|e| e.to_string())?;
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let items = json["_embedded"]["items"].as_array().cloned().unwrap_or_default();
+    let mut result = vec![];
+    for item in items {
+        if item["type"].as_str() == Some("file") {
+            let name = item["name"].as_str().unwrap_or_default().to_string();
+            let path = item["path"].as_str().unwrap_or_default().to_string();
+            result.push((name, path));
+        }
+    }
+    Ok(result)
+}
+
 fn app_data_dir() -> std::path::PathBuf {
     let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into());
     std::path::PathBuf::from(base).join("Echips").join("HardwareCheck")
@@ -312,6 +332,7 @@ async fn download_file(
             DownloadProgress { stage: "downloading".into(), downloaded, total, file_label: display_label.clone() },
         );
     }
+    let _ = window.emit("file-progress", serde_json::json!({ "index": file_index - 1, "status": "done" }));
     Ok(())
 }
 

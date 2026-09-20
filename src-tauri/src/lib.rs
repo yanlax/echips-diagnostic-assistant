@@ -5,9 +5,11 @@ mod powershell;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             commands::system::get_system_info,
             commands::system::get_problem_devices,
+            commands::system::list_problem_devices,
             commands::battery::get_battery_info,
             commands::hardware::list_usb_devices,
             commands::hardware::list_bluetooth_devices,
@@ -18,6 +20,7 @@ pub fn run() {
             commands::stress::run_cpu_stress,
             commands::drivers::find_by_name,
             commands::drivers::find_by_serial_prefix,
+            commands::drivers::yandex_list_folder,
             commands::drivers::fetch_public_json,
             commands::drivers::cache_manifest,
             commands::drivers::load_cached_manifest,

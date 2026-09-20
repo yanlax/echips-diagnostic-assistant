@@ -1,4 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
 /* Echips Hardware Check — режим диагностики. Тёмная тема Echips. */
 :root{
@@ -12,6 +11,11 @@
   --accent:#FF8A00; --accent-hover:#FF9C1F; --accent-hi:#FFB259; --accent-ink:#1A1204;
   --accent-soft:rgba(255,138,0,.12); --accent-line:rgba(255,138,0,.30); --accent-glow:rgba(255,138,0,.28);
   --ok:#4CAF7D; --err:#E2574C; --cool:#6E8FA8;
+  --glass-hover:rgba(255,255,255,.07); --glass-solid:rgba(255,255,255,.04); --line-input:rgba(255,255,255,.09);
+  --ctrl-border:rgba(255,255,255,.20); --ctrl-border-2:rgba(255,255,255,.22); --accent-deep:#B45E06; --err-glow:rgba(226,87,76,.8);
+  --rec-grad:linear-gradient(90deg,rgba(255,138,0,.18),rgba(255,138,0,.04) 55%,rgba(255,255,255,.03));
+  --cat-grad:linear-gradient(90deg,rgba(255,138,0,.13),rgba(255,255,255,.03) 60%);
+  --shimmer:rgba(255,255,255,.35); --shadow-row:0 6px 20px rgba(0,0,0,.28); --radius:12px;
   --mono:'JetBrains Mono',monospace; --grotesk:'Space Grotesk',sans-serif;
   color-scheme:dark;
 }
@@ -358,3 +362,55 @@ h1.title{font-family:var(--grotesk);font-size:27px;font-weight:600;color:var(--t
 .devlist2 .row{display:flex;justify-content:space-between;gap:12px;padding:9px 13px;background:var(--glass-2)}
 .devlist2 .row .lbl{font-family:var(--mono);font-size:10.5px;color:var(--faint)}
 .devlist2 .row .val{font-family:var(--grotesk);font-size:12.5px;color:var(--text-2);text-align:right}
+
+/* ---------- анимации из Echips Driver Assistant ---------- */
+@keyframes echRise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes echFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+@keyframes echShimmer{0%{transform:translateX(-100%)}100%{transform:translateX(320%)}}
+@keyframes echDash{0%{stroke-dashoffset:228}50%{stroke-dashoffset:40}100%{stroke-dashoffset:228}}
+.content > .pane, .content > .resultpane{animation:echRise .35s ease-out}
+.bar::after{content:'';position:absolute;top:0;bottom:0;left:0;width:22%;
+  background:linear-gradient(90deg,transparent,var(--shimmer),transparent);animation:echShimmer 1.8s linear infinite}
+.scanpane .hex{animation:echFloat 3.2s ease-in-out infinite}
+.hex.spin .arc{animation:echDash 1.9s ease-in-out infinite}
+.resultpane .ic{animation:echRise .4s ease-out}
+.brand .mark img{width:100%;height:100%;object-fit:contain;display:block}
+.brand .mark.logo{background:none;border:none}
+
+/* ---------- выбор модели и универсальный набор ---------- */
+.search-input{width:100%;background:var(--glass);border:1px solid var(--line-input);border-radius:10px;color:var(--text);
+  font-family:'Inter',sans-serif;font-size:12.5px;padding:11px 14px 11px 36px;margin-bottom:12px;outline:none;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238A8E95' stroke-width='1.8'><circle cx='11' cy='11' r='6'/><path d='M15.5 15.5 L20 20' stroke-linecap='round'/></svg>");
+  background-repeat:no-repeat;background-position:12px 50%;background-size:15px 15px;transition:border-color .18s,background-color .18s}
+.search-input:focus{border-color:var(--accent-line);background-color:var(--glass-hover)}
+.modellist,.catlist{flex:1;min-height:0;max-height:340px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding-right:4px;margin-bottom:16px}
+.modelrow,.catrow{display:flex;align-items:center;gap:13px;padding:14px 16px;border-radius:var(--radius);
+  background:var(--glass);border:1px solid var(--line);font-size:13.5px;color:var(--text-2);cursor:pointer;
+  transition:transform .18s,background-color .18s,border-color .18s,box-shadow .18s}
+.modelrow{font-family:var(--grotesk);font-size:15px;font-weight:500;min-height:52px}
+.catrow{font-family:var(--grotesk);font-size:14px;font-weight:500;gap:12px;padding:12px 15px;border-radius:11px;min-height:46px}
+.modelrow:hover,.catrow:hover{transform:translateY(-1px);background:var(--glass-hover);border-color:var(--accent-line);box-shadow:var(--shadow-row)}
+.modelrow.rec{background:var(--rec-grad);border-color:var(--accent-line);box-shadow:0 4px 18px var(--accent-soft);color:var(--text-hi)}
+.catrow:has(input:checked){background:var(--cat-grad);border-color:var(--accent-line)}
+.cat-icon{display:flex;align-items:center;color:var(--mute);transition:color .18s}
+.catrow:has(input:checked) .cat-icon{color:var(--accent-hi)}
+.modelrow .tag,.catrow .badge{margin-left:auto;white-space:nowrap;font-family:var(--mono);font-size:9.5px;font-weight:500;letter-spacing:.06em;
+  color:var(--accent-hi);background:var(--accent-soft);border:1px solid var(--accent-line);border-radius:6px;padding:4px 9px}
+.modelrow input[type=radio],.catrow input[type=checkbox]{appearance:none;-webkit-appearance:none;margin:0;flex:0 0 auto;cursor:pointer;
+  transition:background-color .15s,border-color .15s,box-shadow .15s}
+.modelrow input[type=radio]{width:17px;height:17px;border-radius:50%;border:2px solid var(--ctrl-border-2);background:transparent}
+.modelrow input[type=radio]:checked{border-color:var(--accent);box-shadow:inset 0 0 0 3px var(--bg),inset 0 0 0 9px var(--accent)}
+.catrow input[type=checkbox]{width:16px;height:16px;border-radius:5px;border:1.5px solid var(--ctrl-border);background:transparent;display:flex;align-items:center;justify-content:center}
+.catrow input[type=checkbox]:checked{background:var(--accent);border-color:var(--accent)}
+.catrow input[type=checkbox]:checked::after{content:'✓';color:var(--accent-ink);font-size:11px;font-weight:700;line-height:1}
+.devlist2{display:flex;flex-direction:column;gap:7px;margin-bottom:14px}
+.devrow2{display:flex;align-items:center;gap:13px;padding:12px 16px;border-radius:var(--radius);background:var(--glass);border:1px solid var(--line);font-size:13px;color:var(--text-2)}
+.devrow2 .dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;background:var(--err);box-shadow:0 0 8px var(--err-glow)}
+.devrow2 .cls{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--mute)}
+.filecheck-list{margin-top:14px;max-height:190px;overflow-y:auto;display:flex;flex-direction:column;gap:9px}
+.filecheck-row{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--mute);transition:color .2s}
+.filecheck-row.done{color:var(--ok)}
+.filecheck-icon{width:16px;display:inline-block;text-align:center}
+.mbtext{font-family:var(--mono);font-size:11px;color:var(--dim);margin-top:8px}
+.installed-list{font-family:var(--mono);font-size:10.5px;color:var(--dim);background:var(--glass);border:1px solid var(--line);
+  border-radius:8px;padding:9px 13px;margin-top:6px;max-height:110px;overflow-y:auto;text-align:left;min-width:280px}

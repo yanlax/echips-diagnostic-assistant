@@ -254,10 +254,11 @@ var A = {
 
   /* ---- установка драйверов ---- */
   drvStart:function(){
-    S.drv = { step:'scan' };
+    S.drv = { step:'scan', scanLabel:'СКАНИРОВАНИЕ ОБОРУДОВАНИЯ', restore:true };
     render();
     invoke('get_system_info').then(function(info){
-      S.device = info;
+      S.device = info; render();
+      S.drv.scanLabel = 'ПРОВЕРКА БАЗЫ ДРАЙВЕРОВ'; render();
       return invoke('fetch_public_json', { publicUrl: MANIFEST_PUBLIC_URL }).catch(function(){
         return invoke('load_cached_manifest');
       });
@@ -266,39 +267,97 @@ var A = {
       invoke('cache_manifest', { manifest: manifest }).catch(function(){});
       return invoke('find_by_name', { manifest: manifest, manufacturer: S.device.manufacturer, model: S.device.model });
     }).then(function(match){
-      if (!match){
-        return invoke('find_by_serial_prefix', { manifest: S.drv.manifest, serial: S.device.serial_number });
-      }
-      return match;
+      if (match) return match;
+      return invoke('find_by_serial_prefix', { manifest: S.drv.manifest, serial: S.device.serial_number });
     }).then(function(match){
-      if (!match){
-        S.drv.step='notfound'; render(); return;
-      }
-      S.drv.matchKey = match[0]; S.drv.entry = match[1]; S.drv.restore = true;
-      S.drv.step='found'; render();
+      S.drv.autoKey = match ? match[0] : null;
+      return invoke('list_problem_devices').catch(function(){ return []; });
+    }).then(function(problems){
+      S.drv.problems = problems;
+      S.drv.groups = buildModelGroups(S.drv.manifest, S.drv.autoKey);
+      S.drv.pickIdx = 0;
+      S.drv.step = 'pick'; render();
     }).catch(function(err){
-      S.drv.step='error'; S.drv.error = typeof err==='string'?err:'Не удалось получить каталог драйверов';
+      S.drv.step='error'; S.drv.backTo='start';
+      S.drv.error = typeof err==='string' ? err : 'Не удалось получить каталог драйверов. Проверьте подключение к интернету.';
       render();
     });
   },
+  drvSearch:function(v){
+    var q = String(v).trim().toLowerCase();
+    Array.prototype.forEach.call(document.querySelectorAll('#model-list .modelrow'), function(row){
+      row.style.display = (!q || row.getAttribute('data-search').indexOf(q)>=0) ? '' : 'none';
+    });
+  },
+  drvPick:function(i){ S.drv.pickIdx = i; },
+  drvSelect:function(){
+    var g = S.drv.groups[S.drv.pickIdx]; if(!g) return;
+    var key = g.keys.indexOf(S.drv.autoKey)>=0 ? S.drv.autoKey : g.keys[0];
+    S.drv.entry = { key:key, entry:S.drv.manifest[key], name:g.name };
+    S.drv.mode = 'model'; S.drv.step = 'confirm'; render();
+  },
+  drvUniversal:function(){
+    var uni = S.drv.manifest && S.drv.manifest['_universal'];
+    if(!uni){ S.drv.step='error'; S.drv.backTo='pick'; S.drv.error='Универсальный набор драйверов недоступен.'; render(); return; }
+    S.drv.step='scan'; S.drv.scanLabel='ЗАГРУЗКА СПИСКА КАТЕГОРИЙ'; render();
+    invoke('yandex_list_folder', { publicKey: uni.yandex_public_key }).then(function(files){
+      if(!files.length){ throw 'В универсальном наборе пока нет ни одного пакета драйверов.'; }
+      S.drv.uniFiles = files; S.drv.uniPicked = {};
+      var classes = {};
+      (S.drv.problems||[]).forEach(function(d){ if(d['class']) classes[d['class'].toLowerCase()] = true; });
+      files.forEach(function(f,i){
+        Object.keys(classes).forEach(function(c){ if(f[0].toLowerCase().indexOf(c)>=0) S.drv.uniPicked[i]=true; });
+      });
+      S.drv.step='universal'; render();
+    }).catch(function(err){
+      S.drv.step='error'; S.drv.backTo='pick';
+      S.drv.error = typeof err==='string' ? err : 'Не удалось получить список универсальных пакетов драйверов.';
+      render();
+    });
+  },
+  drvCat:function(i,on){ if(on) S.drv.uniPicked[i]=true; else delete S.drv.uniPicked[i]; },
+  drvUniNext:function(){
+    var files = S.drv.uniFiles.filter(function(f,i){ return S.drv.uniPicked[i]; });
+    if(!files.length) return;
+    S.drv.chosenFiles = files; S.drv.mode = 'universal'; S.drv.step='confirm'; render();
+  },
+  drvStep:function(step){ S.drv.step = step; render(); },
   drvRestore:function(v){ S.drv.restore=v; render(); },
+  drvDetails:function(){ S.drv.showDetails = !S.drv.showDetails; render(); },
   drvInstall:function(){
-    S.drv.step='installing'; S.drv.progress={ pct:0, label:'Подготовка...' }; render();
-    var unlisten = null;
+    var d = S.drv;
+    d.items = d.mode==='model' ? [d.entry.name] : d.chosenFiles.map(function(f){ return f[0].replace(/\.zip$/i,''); });
+    d.doneIdx = {}; d.step='installing'; d.progress={ pct:0, label:'Подготовка...', mb:'' }; render();
+    var unlisten = [];
     tauriEvent.listen('install-progress', function(ev){
       var p = ev.payload;
-      var pct = p.total>0 ? Math.round(p.downloaded/p.total*100) : (p.stage==='installing'?90:5);
-      S.drv.progress = { pct: pct, label: p.file_label };
-      render();
-    }).then(function(u){ unlisten = u; });
+      if (p.stage==='downloading' && p.total>0){
+        d.progress = { pct:Math.round(p.downloaded/p.total*100), label:'Загрузка '+p.file_label+'...',
+          mb:(p.downloaded/1048576).toFixed(1)+' / '+(p.total/1048576).toFixed(1)+' МБ' };
+      } else if (p.stage==='installing'){
+        d.progress = { pct:100, label:p.file_label, mb:'' };
+      } else {
+        d.progress = { pct:d.progress.pct, label:p.file_label, mb:d.progress.mb };
+      }
+      // Без полной перерисовки — иначе сбрасывается анимация блика на прогресс-баре.
+      var lb=document.getElementById('prog-label'), fl=document.getElementById('prog-fill'), mb=document.getElementById('prog-mb');
+      if (lb && fl){ lb.textContent=d.progress.label; fl.style.width=d.progress.pct+'%'; if(mb) mb.textContent=d.progress.mb; }
+      else render();
+    }).then(function(u){ unlisten.push(u); });
+    tauriEvent.listen('file-progress', function(ev){
+      if (ev.payload.status==='done'){ d.doneIdx[ev.payload.index]=true; render(); }
+    }).then(function(u){ unlisten.push(u); });
 
-    var files = [[S.drv.entry.yandex_public_key, S.drv.entry.path || null, S.drv.entry.display_name || S.drv.matchKey]];
-    invoke('download_and_install', { files: files, createRestore: S.drv.restore }).then(function(result){
-      if (unlisten) unlisten();
-      S.drv.step='done'; S.drv.result=result; render();
+    var files = d.mode==='model'
+      ? [[d.entry.entry.yandex_public_key, d.entry.entry.path || null, d.entry.name]]
+      : d.chosenFiles.map(function(f){ return [S.drv.manifest['_universal'].yandex_public_key, f[1], f[0]]; });
+    function done(){ unlisten.forEach(function(u){ u(); }); }
+    invoke('download_and_install', { files: files, createRestore: d.restore }).then(function(result){
+      done(); d.step='done'; d.result=result; render();
+      notifyDone('Echips Hardware Check', result.message);
     }).catch(function(err){
-      if (unlisten) unlisten();
-      S.drv.step='error'; S.drv.error = typeof err==='string'?err:'Ошибка установки'; render();
+      done(); d.step='error'; d.backTo='confirm';
+      d.error = typeof err==='string' ? err : 'Ошибка установки'; render();
     });
   },
 
@@ -662,42 +721,140 @@ function hexSpinner(label){
 }
 
 /* ---------- установка драйверов ---------- */
+function categoryIcon(name){
+  var n = name.toLowerCase(), st = ' fill="none" stroke="currentColor" stroke-width="1.6"';
+  var icons = {
+    net:'<circle cx="12" cy="12" r="1.6"/><path d="M5 15a10 10 0 0 1 14 0M8 11.5a6 6 0 0 1 8 0"'+st+'/>',
+    media:'<path d="M6 10h3l4-3v10l-4-3H6z"/><path d="M16 9a4 4 0 0 1 0 6"'+st+'/>',
+    bluetooth:'<path d="M8 7l8 6-5 4V3l5 4-8 6"'+st+' stroke-linejoin="round"/>',
+    display:'<rect x="4" y="5" width="16" height="11" rx="1"'+st+'/><path d="M9 19h6M12 16v3" stroke="currentColor" stroke-width="1.6"/>',
+    system:'<rect x="7" y="7" width="10" height="10" rx="1"'+st+'/><path d="M9 4v3M15 4v3M9 17v3M15 17v3M4 9h3M4 15h3M17 9h3M17 15h3" stroke="currentColor" stroke-width="1.4"/>',
+    hidclass:'<circle cx="12" cy="9" r="2.4"'+st+'/><path d="M6 19c0-3 3-5 6-5s6 2 6 5"'+st+'/>',
+    biometric:'<path d="M12 4a7 7 0 0 1 7 7c0 3-1 5-1 7M6 17c1-2 1-4 1-6a5 5 0 0 1 10 0c0 1 0 2-.3 3M9 20c1-2 1-4 1-6.2a2 2 0 0 1 4 0" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>',
+    screaders:'<rect x="4" y="7" width="16" height="10" rx="1.5"'+st+'/><rect x="7" y="10" width="4" height="3" fill="currentColor"/>',
+    usb:'<circle cx="12" cy="6" r="1.6"/><path d="M12 8v8M12 12h4a2 2 0 0 0 2-2V9M8 12v3a2 2 0 0 0 2 2h2"'+st+'/><circle cx="18" cy="9" r="1.4" fill="none" stroke="currentColor" stroke-width="1.4"/>',
+    image:'<rect x="4" y="8" width="16" height="10" rx="1.5"'+st+'/><circle cx="12" cy="13" r="3"'+st+'/><path d="M9 8l1.5-2h3L15 8"'+st+'/>',
+    audioprocessingobject:'<path d="M4 12h2l1.5-5 2 10 2-14 2 14 1.5-9 2 4h2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>',
+    softwarecomponent:'<rect x="5" y="5" width="7" height="7" rx="1"'+st+'/><rect x="12" y="12" width="7" height="7" rx="1"'+st+'/><path d="M12 8.5h4M8.5 12v4" stroke="currentColor" stroke-width="1.4"/>'
+  };
+  var body = '<rect x="5" y="5" width="14" height="14" rx="2"'+st+'/>';
+  Object.keys(icons).some(function(k){ if(n.indexOf(k)>=0){ body=icons[k]; return true; } return false; });
+  return '<svg viewBox="0 0 24 24" width="16" height="16">'+body+'</svg>';
+}
+
+/* Группирует модели по одинаковой ссылке на пакет: коды, использующие один
+   пакет драйверов, показываются одной строкой ("Taganay NB156D / NB156D-H"). */
+function buildModelGroups(manifest, autoKey){
+  var keys = Object.keys(manifest).filter(function(k){ return k.charAt(0)!=='_' && manifest[k] && manifest[k].yandex_public_key; });
+  var byLink = {}, order = [];
+  keys.forEach(function(k){
+    var l = manifest[k].yandex_public_key;
+    if(!byLink[l]){ byLink[l]=[]; order.push(l); }
+    byLink[l].push(k);
+  });
+  var groups = order.map(function(l){
+    var ks = byLink[l];
+    return { keys:ks, name:combineNames(ks, manifest), isAuto: autoKey ? ks.indexOf(autoKey)>=0 : false };
+  });
+  groups.sort(function(a,b){
+    if(a.isAuto!==b.isAuto) return a.isAuto ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  return groups;
+}
+function combineNames(ks, manifest){
+  function dn(k){ return manifest[k].display_name || k; }
+  if(ks.length===1) return dn(ks[0]);
+  var lines = ks.map(function(k){ var n=dn(k); return n.slice(-k.length)===k ? n.slice(0,n.length-k.length).trim() : null; });
+  var same = lines[0] && lines.every(function(l){ return l===lines[0]; });
+  return same ? lines[0]+' '+ks.join(' / ') : ks.map(dn).join(' / ');
+}
+function notifyDone(title, body){
+  try {
+    var n = window.__TAURI__.notification; if(!n) return;
+    n.isPermissionGranted().then(function(ok){
+      return ok ? 'granted' : n.requestPermission();
+    }).then(function(p){ if(p==='granted') n.sendNotification({ title:title, body:body }); }).catch(function(){});
+  } catch(e){}
+}
+
 function screenDrivers(){
   var d = S.drv, body;
   if(d.step==='idle' || d.step==='scan'){
-    body = hexSpinner('ОПРЕДЕЛЕНИЕ МОДЕЛИ И ПОИСК ПАКЕТА');
-  } else if (d.step==='notfound'){
-    body = '<div class="resultpane">'+resultIcon(false)+
-      '<div class="msg">Точный пакет для этой модели не найден в каталоге (по имени и по серийному номеру). '+
-      'Проверьте вручную на '+ '<a href="#" onclick="return false">echips.ru</a> или уточните модель у поддержки.</div>'+
-      '<div class="actions"><button class="btn btn-primary" onclick="echips.go(\'start\')">Назад</button></div></div>';
+    body = hexSpinner(d.scanLabel || 'СКАНИРОВАНИЕ ОБОРУДОВАНИЯ');
   } else if (d.step==='error'){
     body = '<div class="resultpane">'+resultIcon(false)+
       '<div class="msg">'+esc(d.error)+'</div>'+
-      '<div class="actions"><button class="btn btn-ghost" onclick="echips.go(\'start\')">Назад</button>'+
-      '<button class="btn btn-primary" onclick="echips.drvStart()">Повторить</button></div></div>';
-  } else if(d.step==='found'){
-    var name = d.entry.display_name || d.matchKey;
+      '<div class="actions"><button class="btn btn-ghost" onclick="echips.'+(d.backTo==='start'?"go('start')":"drvStep('"+(d.backTo||'pick')+"')")+'">Назад</button>'+
+      '<button class="btn btn-primary" onclick="echips.drvStart()">Начать заново</button></div></div>';
+  } else if (d.step==='pick'){
+    var auto = d.groups.filter(function(g){ return g.isAuto; })[0];
     body =
-      '<div class="card"><div class="k">Модель</div><div class="n">'+esc(deviceLabel())+'</div>'+
-      '<div class="s">SN '+esc(deviceSn())+' · совпадение по каталогу: '+esc(d.matchKey)+'</div></div>'+
-      '<div class="card"><div class="k">Пакет</div><div class="n">'+esc(name)+'</div></div>'+
+      '<div class="eyebrow">'+(d.autoKey?'Модель определена автоматически':'Модель не определена автоматически')+'</div>'+
+      '<div class="n" style="font-family:var(--grotesk);font-size:19px;font-weight:600;color:var(--text-hi);margin:7px 0 14px">'+
+      esc(auto ? auto.name : 'Выберите модель из списка')+'</div>'+
+      '<input type="text" class="search-input" placeholder="Поиск модели..." oninput="echips.drvSearch(this.value)">'+
+      '<div class="modellist" id="model-list">'+ d.groups.map(function(g,i){
+        return '<label class="modelrow'+(g.isAuto?' rec':'')+'" data-search="'+esc((g.name+' '+g.keys.join(' ')).toLowerCase())+'">'+
+          '<input type="radio" name="m" '+(i===d.pickIdx?'checked':'')+' onchange="echips.drvPick('+i+')">'+esc(g.name)+
+          (g.isAuto?'<span class="tag">★ ОПРЕДЕЛЕНО АВТОМАТИЧЕСКИ</span>':'')+'</label>';
+      }).join('') +'</div>'+
+      '<div class="headactions" style="justify-content:space-between">'+
+      '<button class="btn-link" onclick="echips.drvUniversal()">Не нашли модель? Универсальный набор →</button>'+
+      '<button class="btn btn-primary" onclick="echips.drvSelect()">Выбрать</button></div>';
+  } else if (d.step==='universal'){
+    var n = Object.keys(d.uniPicked).length, hasProblems = (d.problems||[]).length>0;
+    body =
+      '<div class="eyebrow">Универсальный набор драйверов</div>'+
+      '<div class="n" style="font-family:var(--grotesk);font-size:19px;font-weight:600;color:var(--text-hi);margin:7px 0 6px">Выберите категории для установки</div>'+
+      '<div class="hint" style="margin-bottom:14px">'+(hasProblems
+        ? 'Отмечены категории, соответствующие найденным проблемным устройствам — при желании выберите другие вручную.'
+        : 'Явных ошибок не найдено — можно установить любые категории вручную.')+'</div>'+
+      '<div class="catlist">'+ d.uniFiles.map(function(f,i){
+        var on = !!d.uniPicked[i];
+        return '<label class="catrow"><input type="checkbox" '+(on?'checked':'')+' onchange="echips.drvCat('+i+',this.checked)">'+
+          '<span class="cat-icon">'+categoryIcon(f[0])+'</span>'+esc(f[0].replace(/\.zip$/i,''))+'</label>';
+      }).join('') +'</div>'+
+      '<div class="headactions" style="justify-content:space-between">'+
+      '<button class="btn-link" onclick="echips.drvStep(\'pick\')">← Назад</button>'+
+      '<button class="btn btn-primary" onclick="echips.drvUniNext()">Далее</button></div>';
+  } else if(d.step==='confirm'){
+    var isModel = d.mode==='model', probs = d.problems||[];
+    body =
+      '<div class="card"><div class="k">'+(isModel?'Модель':'Универсальный набор')+'</div>'+
+      '<div class="n">'+esc(isModel ? d.entry.name : 'Выбранные категории драйверов')+'</div>'+
+      (isModel ? '<div class="s">Устройство: '+esc(deviceLabel())+' · SN '+esc(deviceSn())+'</div>'
+               : '<div class="s">'+esc(d.chosenFiles.map(function(f){ return f[0].replace(/\.zip$/i,''); }).join(', '))+'</div>')+'</div>'+
+      (probs.length
+        ? '<div class="hint" style="margin:14px 0 8px">Найдено устройств без драйверов: '+probs.length+'</div>'+
+          '<div class="devlist2">'+probs.map(function(x){
+            return '<div class="devrow2"><span class="dot"></span>'+esc(x.friendly_name)+'<span class="cls">'+esc(x['class'])+'</span></div>';
+          }).join('')+'</div>'
+        : (isModel ? '<div class="hint" style="margin-top:14px">Явных ошибок с драйверами не найдено — но можно установить полный пакет драйверов для этой модели.</div>' : ''))+
       '<label class="checkrow"><input type="checkbox" '+(d.restore?'checked':'')+' onchange="echips.drvRestore(this.checked)">'+
-      'Создать точку восстановления перед установкой</label>'+
-      '<div class="headactions" style="margin-top:20px;justify-content:flex-end">'+
-      '<button class="btn btn-ghost" onclick="echips.go(\'start\')">Отмена</button>'+
-      '<button class="btn btn-primary" onclick="echips.drvInstall()">Установить</button></div>';
+      'Создать точку восстановления системы перед установкой</label>'+
+      '<div class="headactions" style="margin-top:20px;justify-content:space-between">'+
+      '<button class="btn-link" onclick="echips.drvStep(\''+(isModel?'pick':'universal')+'\')">← Назад</button>'+
+      '<button class="btn btn-primary" onclick="echips.drvInstall()">Скачать и установить</button></div>';
   } else if(d.step==='installing'){
-    var p = d.progress || { pct:0, label:'' };
+    var p = d.progress || { pct:0, label:'', mb:'' };
     body =
-      '<div class="card"><div class="k">Установка</div><div class="n">'+esc(p.label)+'</div>'+
-      '<div class="bar" style="margin-top:14px"><div class="fill" style="width:'+p.pct+'%"></div></div></div>';
+      '<div class="card"><div class="k">Установка</div><div class="n" id="prog-label">'+esc(p.label)+'</div>'+
+      '<div class="bar" style="margin-top:14px"><div class="fill" id="prog-fill" style="width:'+p.pct+'%"></div></div>'+
+      '<div class="mbtext" id="prog-mb">'+esc(p.mb)+'</div>'+
+      ((d.items||[]).length>1 ? '<div class="filecheck-list">'+d.items.map(function(name,i){
+        var ok = !!d.doneIdx[i];
+        return '<div class="filecheck-row'+(ok?' done':'')+'"><span class="filecheck-icon">'+(ok?'✓':'○')+'</span>'+esc(name)+'</div>';
+      }).join('')+'</div>' : '')+'</div>';
   } else if(d.step==='done'){
-    var res = d.result || { message:'Готово.' };
+    var res = d.result || { message:'Готово.', installed_drivers:[] };
+    var inst = res.installed_drivers || [];
     body =
       '<div class="resultpane">'+resultIcon(true)+
       '<div class="msg">'+esc(res.message)+'</div>'+
-      '<div class="actions"><button class="btn btn-ghost" onclick="invoke_open_log(\''+esc(res.log_path||'')+'\')">Открыть лог</button>'+
+      (inst.length ? '<button class="btn-link" onclick="echips.drvDetails()">'+(d.showDetails?'Скрыть':'Показать')+' детали установки ('+inst.length+')</button>'+
+        (d.showDetails ? '<div class="installed-list">'+inst.map(function(x){ return '<div>'+esc(x)+'</div>'; }).join('')+'</div>' : '') : '')+
+      '<div class="actions"><button class="btn btn-ghost" onclick="invoke_open_log()">Открыть лог</button>'+
       '<button class="btn btn-ghost" onclick="echips.go(\'start\')">Позже</button>'+
       '<button class="btn btn-primary" onclick="echips_restart()">Перезагрузить сейчас</button></div></div>';
   }
@@ -705,7 +862,7 @@ function screenDrivers(){
     '<div class="crumbs"><button class="btn-link" onclick="echips.go(\'start\')">← режимы</button>'+
     '<span class="idx">установка драйверов</span></div>'+
     '<div class="testhead"><div><h2>Установка драйверов</h2>'+
-    '<div class="hint">Тот же поток, что в Echips Driver Assistant: определение модели → пакет → установка с точкой восстановления.</div></div></div>'+
+    '<div class="hint">Определение модели → выбор пакета (или универсальный набор) → установка с точкой восстановления.</div></div></div>'+
     '<div class="field" style="margin-top:16px">'+body+'</div></div>';
 }
 window.invoke_open_log = function(){ invoke('open_log_folder').catch(function(){}); };

@@ -62,3 +62,34 @@ pub fn get_problem_devices() -> Result<Vec<String>, String> {
         Err("Доступно только в Windows-сборке".to_string())
     }
 }
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, Default)]
+pub struct ProblemDevice {
+    #[serde(default)]
+    pub friendly_name: String,
+    #[serde(default)]
+    pub class: String,
+}
+
+/// Устройства с ошибкой драйвера вместе с PnP-классом — по классу экран
+/// универсального набора подсвечивает подходящие категории драйверов.
+#[tauri::command]
+pub fn list_problem_devices() -> Result<Vec<ProblemDevice>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let script = r#"
+            $items = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue |
+                Where-Object { $_.Status -eq 'Error' } |
+                ForEach-Object {
+                    [PSCustomObject]@{ friendly_name = [string]$_.FriendlyName; class = [string]$_.Class }
+                })
+            ConvertTo-Json -InputObject $items -Compress
+        "#;
+        crate::powershell::run_ps_json::<Vec<ProblemDevice>>(script)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Доступно только в Windows-сборке".to_string())
+    }
+}

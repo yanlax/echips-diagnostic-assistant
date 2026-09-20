@@ -23,9 +23,6 @@ jobs:
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
 
-      - name: Generate icons
-        run: cargo tauri icon icons-src/source.png
-
       - name: Build
         run: cargo tauri build --no-bundle
 

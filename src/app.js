@@ -32,6 +32,7 @@ var CATS = [
   { id:'bat', tag:'BAT', name:'Аккумулятор', method:'Design vs Full charge capacity, циклы, износ (powercfg)', impl:'реальные данные', kind:'runner', fetch:'bat' },
   { id:'snd', tag:'SND', name:'Звук', method:'Тестовый сигнал (Web Audio) и echo-тест через микрофон', impl:'реально', kind:'audio' },
   { id:'diskread', tag:'RD', name:'Диск: чтение', method:'Замер скорости чтения по всему диску, медленные блоки и ошибки чтения', impl:'реальная нагрузка', kind:'diskread' },
+  { id:'diskwrite', tag:'WR', name:'Диск: запись', method:'Запись и чтение проверочного файла на томе: скорость по участкам, медленные блоки, ошибки данных', impl:'реальная нагрузка', kind:'diskwrite' },
   { id:'mem', tag:'RAM', name:'Память', method:'Многопоточная запись и проверка паттернов в ОЗУ, счётчик ошибок', impl:'реальная нагрузка', kind:'memtest' },
   { id:'sens', tag:'SNS', name:'Датчики', method:'Температуры через WMI ACPI — доступность зависит от платы', impl:'зависит от платы', kind:'sensors' },
   { id:'stress', tag:'STR', name:'Стресс-тест', method:'Реальная нагрузка CPU на всех ядрах на заданное время', impl:'CPU реально', kind:'stress' }
@@ -91,6 +92,7 @@ var S = {
   hw:null, verdict:null, br:{ info:null, loading:false }, camClip:null,
   rm:{ drives:null, timer:null, running:null, log:[], err:null, size:64 },
   dr:{ disks:null, sel:0, mode:64, running:false, pct:0, mbps:0, res:null, err:null },
+  dw:{ vols:null, sel:0, mb:512, running:false, pct:0, phase:'', mbps:0, res:null, err:null },
   mem:{ size:1024, passes:1, running:false, pct:0, pass:1, pattern:'', errors:0, res:null, err:null },
   auto:{ on:false, ids:[], idx:-1, stopped:false, waiting:false, msg:'', cls:'' },
   drv:{ step:'idle' },
@@ -161,10 +163,12 @@ var A = {
     stopSensorPoll(); stopCamera(); stopAudio();
     if (S.rm.timer){ clearInterval(S.rm.timer); S.rm.timer=null; }
     S.br = { info:null, loading:false }; S.camClip = null;
+    if (S.stressTempT){ clearInterval(S.stressTempT); S.stressTempT=null; }
+    if (S.dw.running) invoke('stop_disk_write_test').catch(function(){});
     if (S.dr.running) invoke('stop_disk_read_test').catch(function(){});
     if (S.mem.running) invoke('stop_memory_test').catch(function(){});
     if (document.getElementById('fill-overlay')) A.fillClose();
-    if (S.auto.on && screen!=='test' && screen!=='report') A.autoOff();
+    if (S.auto.on && screen!=='test' && screen!=='report' && screen!=='sensors' && screen!=='stress') A.autoOff();
     S.screen=screen; if(id) S.cat=id; S.running=false; S.runLines=[]; S.runError=null; S.verdict=null; S.exported=null; S.tone=null;
     if(screen==='drivers'){ A.drvStart(); }
     if(screen==='mb'){ A.mbReset(); }
@@ -176,7 +180,14 @@ var A = {
     stopCamera(); stopAudio();
     A.go(c.kind==='sensors'?'sensors':c.kind==='stress'?'stress':'test', id);
     if (c.kind==='camera') A.camStart();
-    if (c.kind==='runner' && S.auto.on) A.run();
+    if (S.auto.on){
+      if (c.kind==='runner') A.run();
+      else if (c.kind==='diskread') A.drAuto();
+      else if (c.kind==='diskwrite') A.dwAuto();
+      else if (c.kind==='memtest') A.memAuto();
+      else if (c.kind==='sensors') A.sensorsAuto();
+      else if (c.kind==='stress') A.stressAuto();
+    }
   },
   reset:function(){ A.autoOff(); S.rm.log=[]; S.results={}; S.comments={}; S.keys={}; S.snapshot=false; render(); },
   press:function(id){ S.keys[id]=true; render(); },
@@ -219,6 +230,8 @@ var A = {
   },
   autoOff:function(){
     if (S.auto.timer) clearTimeout(S.auto.timer);
+    if (S.auto.probe) clearTimeout(S.auto.probe);
+    if (S.stressTempT){ clearInterval(S.stressTempT); S.stressTempT=null; }
     S.auto = { on:false, ids:[], idx:-1, stopped:false, waiting:false, msg:'', cls:'' };
   },
   autoStop:function(){ A.autoOff(); A.go('dash'); },
@@ -250,6 +263,56 @@ var A = {
     a.timer = setTimeout(function(){ if (S.auto.on && S.auto.idx===at) A.autoNext(); }, 1800);
   },
 
+  /* ---- автозапуск длинных тестов в автопрогоне ---- */
+  drAuto:function(){
+    S.dr.res=null; S.dr.err=null; S.dr.running=false; S.dr.disks=null;
+    invoke('get_disk_health').then(function(list){
+      if (!list.length) throw 'Физические диски не найдены';
+      S.dr.disks = list; S.dr.sel = 0; list.forEach(function(d,k){ if (d.is_system) S.dr.sel = k; });
+      S.dr.mode = 64; A.drStart();
+    }).catch(function(err){ S.dr.err = typeof err==='string'?err:'Не удалось получить список дисков'; render(); A.autoApply(null); });
+  },
+  dwAuto:function(){
+    S.dw.res=null; S.dw.err=null; S.dw.running=false; S.dw.vols=null;
+    invoke('list_fixed_volumes').then(function(list){
+      if (!list.length) throw 'Тома с буквами не найдены';
+      S.dw.vols = list; S.dw.sel = 0; list.forEach(function(v,k){ if (v.is_system) S.dw.sel = k; });
+      S.dw.mb = profile().diskWriteMb || 512; A.dwStart();
+    }).catch(function(err){ S.dw.err = typeof err==='string'?err:'Не удалось получить список томов'; render(); A.autoApply(null); });
+  },
+  memAuto:function(){
+    S.mem.size = profile().memTestMb || 1024; S.mem.passes = 1; S.mem.res=null; S.mem.err=null;
+    A.memStart();
+  },
+  sensorsAuto:function(){
+    S.sensorHistory=[]; S.gpuHistory=[];
+    var secs = profile().sensorsProbeSecs || 8, at = S.auto.idx;
+    S.auto.msg = 'Снимаем показания датчиков ('+secs+' с)…'; S.auto.cls=''; render();
+    S.auto.probe = setTimeout(function(){
+      if (!S.auto.on || S.auto.idx!==at) return;
+      var temps = S.sensorHistory.concat(S.gpuHistory), max = profile().maxTempC || 95;
+      if (!temps.length) A.autoApply({ status:'na', note:'Температурные датчики недоступны (ACPI/nvidia-smi) — см. LibreHardwareMonitor' });
+      else {
+        var t = Math.max.apply(null, temps);
+        A.autoApply(t>=max ? { status:'fail', note:'Температура '+t.toFixed(0)+' °C в простое не ниже порога '+max+' °C' }
+                           : { status:'pass', note:'Датчики отвечают, максимум '+t.toFixed(0)+' °C' });
+      }
+    }, secs*1000);
+  },
+  stressAuto:function(){
+    if (S.stressOn) return;
+    S.stressDur = profile().stressSecs || 60; S.stressTemps = [];
+    S.auto.msg = 'Нагрузка на все ядра: '+S.stressDur+' с…'; S.auto.cls=''; render();
+    function sample(){
+      invoke('get_thermal_reading').then(function(r){
+        if (r.available && r.cpu_temp_c!=null) S.stressTemps.push(r.cpu_temp_c);
+        if (r.gpu) S.stressTemps.push(r.gpu.temp_c);
+      }).catch(function(){});
+    }
+    sample(); S.stressTempT = setInterval(sample, 3000);
+    A.stress();
+  },
+
   /* ---- тест чтения диска ---- */
   drLoad:function(){
     if (S.dr.disks) return;
@@ -274,9 +337,56 @@ var A = {
     function fin(){ if(unlisten) unlisten(); S.dr.running=false; }
     invoke('run_disk_read_test', { diskNumber:d.number, sizeGb:d.size_gb, sampleMb:S.dr.mode }).then(function(r){
       fin(); S.dr.res=r; render();
-    }).catch(function(err){ fin(); S.dr.err = typeof err==='string'?err:'Ошибка теста чтения'; render(); });
+      if (S.auto.on && S.cat==='diskread'){
+        var slowMax = profile().diskSlowBlocksMax!=null ? profile().diskSlowBlocksMax : 3;
+        A.autoApply(r.stopped ? null
+          : r.errors>0 ? { status:'fail', note:'Ошибок чтения: '+r.errors+' (смещения, МБ: '+r.error_offsets_mb.slice(0,5).join(', ')+')' }
+          : r.slow_blocks>slowMax ? { status:'fail', note:'Медленных блоков: '+r.slow_blocks+' (допустимо '+slowMax+') — возможна деградация диска' }
+          : { status:'pass', note:'Чтение без ошибок: '+r.avg_mbps.toFixed(0)+' МБ/с в среднем, минимум '+r.min_mbps.toFixed(0)+', медленных блоков '+r.slow_blocks });
+      }
+    }).catch(function(err){
+      fin(); S.dr.err = typeof err==='string'?err:'Ошибка теста чтения'; render();
+      if (S.auto.on && S.cat==='diskread') A.autoApply(null);
+    });
   },
   drStop:function(){ invoke('stop_disk_read_test').catch(function(){}); },
+
+  /* ---- тест записи диска ---- */
+  dwLoad:function(){
+    if (S.dw.vols) return;
+    S.dw.vols = [];
+    invoke('list_fixed_volumes').then(function(list){
+      S.dw.vols = list; var i = 0; list.forEach(function(v,k){ if (v.is_system) i = k; });
+      S.dw.sel = i; render();
+    }).catch(function(err){ S.dw.err = typeof err==='string'?err:'Не удалось получить список томов'; render(); });
+  },
+  dwPick:function(i){ if(!S.dw.running){ S.dw.sel=i; render(); } },
+  dwMode:function(m){ if(!S.dw.running){ S.dw.mb=m; render(); } },
+  dwStart:function(){
+    var v = S.dw.vols && S.dw.vols[S.dw.sel]; if (!v || S.dw.running) return;
+    var d = S.dw; d.running=true; d.pct=0; d.mbps=0; d.phase='write'; d.res=null; d.err=null; render();
+    var unlisten=null;
+    tauriEvent.listen('diskw-progress', function(ev){
+      d.pct=ev.payload.pct; d.mbps=ev.payload.mbps; d.phase=ev.payload.phase;
+      var f=document.getElementById('dw-fill'), t=document.getElementById('dw-txt');
+      if (f && t){ f.style.width=d.pct+'%'; t.textContent=d.pct+'% · '+(d.phase==='write'?'запись':'чтение')+' · '+d.mbps.toFixed(0)+' МБ/с'; } else render();
+    }).then(function(u){ unlisten=u; });
+    function fin(){ if(unlisten) unlisten(); d.running=false; }
+    invoke('run_disk_write_test', { letter:v.letter, sizeMb:d.mb }).then(function(r){
+      fin(); d.res=r; render();
+      if (S.auto.on && S.cat==='diskwrite'){
+        var slowMax = profile().diskSlowBlocksMax!=null ? profile().diskSlowBlocksMax : 3;
+        A.autoApply(r.stopped ? null
+          : r.errors>0 ? { status:'fail', note:'Несовпадений данных при записи/чтении: '+r.errors }
+          : r.slow_blocks>slowMax ? { status:'fail', note:'Медленных блоков: '+r.slow_blocks+' (допустимо '+slowMax+') — возможна деградация диска' }
+          : { status:'pass', note:'Запись '+r.write_avg_mbps.toFixed(0)+' МБ/с (мин '+r.write_min_mbps.toFixed(0)+'), чтение '+r.read_mbps.toFixed(0)+' МБ/с, данные совпали, том '+r.letter+':' });
+      }
+    }).catch(function(err){
+      fin(); d.err = typeof err==='string'?err:'Ошибка теста записи'; render();
+      if (S.auto.on && S.cat==='diskwrite') A.autoApply(null);
+    });
+  },
+  dwStop:function(){ invoke('stop_disk_write_test').catch(function(){}); },
 
   /* ---- тест памяти ---- */
   memSize:function(v){ if(!S.mem.running){ S.mem.size=v; render(); } },
@@ -291,8 +401,17 @@ var A = {
       if (f && t){ f.style.width=m.pct+'%'; t.textContent=m.pct+'% · проход '+m.pass+' · '+m.pattern+' · ошибок '+m.errors; } else render();
     }).then(function(u){ unlisten=u; });
     function fin(){ if(unlisten) unlisten(); m.running=false; }
-    invoke('run_memory_test', { sizeMb:m.size, passes:m.passes }).then(function(r){ fin(); m.res=r; render(); })
-      .catch(function(err){ fin(); m.err = typeof err==='string'?err:'Ошибка теста памяти'; render(); });
+    invoke('run_memory_test', { sizeMb:m.size, passes:m.passes }).then(function(r){
+      fin(); m.res=r; render();
+      if (S.auto.on && S.cat==='mem'){
+        A.autoApply(r.stopped ? null
+          : r.errors>0 ? { status:'fail', note:'Ошибок памяти: '+r.errors+' на '+r.tested_mb+' МБ — модуль или слот неисправны' }
+          : { status:'pass', note:'Ошибок нет: проверено '+r.tested_mb+' МБ за '+r.elapsed_secs+' с'+(r.capped?' (объём урезан до 60% свободной)':'') });
+      }
+    }).catch(function(err){
+      fin(); m.err = typeof err==='string'?err:'Ошибка теста памяти'; render();
+      if (S.auto.on && S.cat==='mem') A.autoApply(null);
+    });
   },
   memStop:function(){ invoke('stop_memory_test').catch(function(){}); },
 
@@ -452,8 +571,16 @@ var A = {
     S.stressOn=true; S.stressT=0; S.stressResult=null; render();
     invoke('run_cpu_stress', { durationSecs: S.stressDur }).then(function(res){
       S.stressOn=false; S.stressResult=res; render();
+      if (S.auto.on && S.cat==='stress'){
+        if (S.stressTempT){ clearInterval(S.stressTempT); S.stressTempT=null; }
+        var temps = S.stressTemps||[], max = profile().maxTempC || 95, t = temps.length ? Math.max.apply(null, temps) : null;
+        var base = res.threads+' потоков, '+S.stressDur+' с без зависания';
+        A.autoApply(t!==null && t>=max ? { status:'fail', note:base+'; температура под нагрузкой '+t.toFixed(0)+' °C не ниже порога '+max+' °C' }
+          : { status:'pass', note:base+(t!==null ? '; максимум '+t.toFixed(0)+' °C' : '; температура недоступна') });
+      }
     }).catch(function(err){
       S.stressOn=false; S.runError = typeof err==='string'?err:'Ошибка стресс-теста'; render();
+      if (S.auto.on && S.cat==='stress'){ if (S.stressTempT){ clearInterval(S.stressTempT); S.stressTempT=null; } A.autoApply(null); }
     });
   },
 
@@ -1123,6 +1250,39 @@ function fieldRemovable(){
     }).join('')+'</div>';
   return out+'</div>';
 }
+function fieldDiskWrite(){
+  A.dwLoad();
+  var d = S.dw, vols = d.vols || [], r = d.res;
+  var modes = [[512,'Быстрый · 512 МБ'],[2048,'Расширенный · 2 ГБ']];
+  var out = '<div class="runwrap">'+
+    '<div class="control"><div class="k">Том</div><div class="opts">'+ (vols.length ? vols.map(function(v,i){
+      return '<button class="opt'+(d.sel===i?' on':'')+'" onclick="echips.dwPick('+i+')" '+(d.running?'disabled':'')+'>'+esc(v.letter)+': '+esc(v.label||'без метки')+' · '+v.size_gb+' ГБ, свободно '+v.free_gb+(v.is_system?' · системный':'')+'</button>';
+    }).join('') : '<span class="kbnote">'+(d.err?esc(d.err):'опрос томов…')+'</span>') +'</div></div>'+
+    '<div class="control" style="margin-top:12px"><div class="k">Размер проверочного файла</div><div class="opts">'+ modes.map(function(m){
+      return '<button class="opt mono'+(d.mb===m[0]?' on':'')+'" onclick="echips.dwMode('+m[0]+')" '+(d.running?'disabled':'')+'>'+m[1]+'</button>';
+    }).join('') +'</div></div>'+
+    '<div class="runrow" style="margin-top:14px"><button class="btn btn-primary" onclick="echips.dwStart()" '+(d.running||!vols.length?'disabled':'')+'>'+(d.running?'Идёт запись…':r?'Повторить':'Запустить')+'</button>'+
+    (d.running?'<button class="btn btn-ghost" onclick="echips.dwStop()">Остановить</button>':'')+
+    '<span class="n">пишется временный файл, данные на диске не затрагиваются; файл удаляется после теста</span></div>';
+  if (d.running || r){
+    out += '<div class="bar" style="margin-top:14px"><div class="fill" id="dw-fill" style="width:'+(r?100:d.pct)+'%"></div></div>'+
+      '<div class="mbtext" id="dw-txt">'+(d.running ? d.pct+'% · '+(d.phase==='write'?'запись':'чтение')+' · '+d.mbps.toFixed(0)+' МБ/с' : '')+'</div>';
+  }
+  if (d.err && vols.length) out += '<div class="idle" style="color:var(--err);margin-top:10px"><span>'+esc(d.err)+'</span></div>';
+  if (r){
+    var bad = r.errors>0, warn = r.slow_blocks>3;
+    out += sparkBars(r.write_samples)+
+      '<div class="stats4">'+
+      '<div class="stat4"><div class="k">запись, средняя</div><div class="v">'+r.write_avg_mbps.toFixed(0)+' МБ/с</div></div>'+
+      '<div class="stat4"><div class="k">запись мин / макс</div><div class="v">'+r.write_min_mbps.toFixed(0)+' / '+r.write_max_mbps.toFixed(0)+'</div></div>'+
+      '<div class="stat4"><div class="k">чтение обратно</div><div class="v">'+r.read_mbps.toFixed(0)+' МБ/с</div></div>'+
+      '<div class="stat4"><div class="k">ошибок данных</div><div class="v '+(bad?'err':'ok')+'">'+r.errors+'</div></div></div>'+
+      '<div class="kbnote" style="margin-top:8px">'+(r.stopped?'Остановлено пользователем. ':'')+
+      (bad ? 'Данные прочитались не так, как записаны — диск или контроллер неисправны.' :
+       warn ? 'Медленных блоков: '+r.slow_blocks+' — возможна деградация диска или перегрев SSD.' : 'Данные совпали, заметных просадок нет.')+'</div>';
+  }
+  return out+'</div>';
+}
 function fieldMem(){
   var m = S.mem, r = m.res;
   var sizes = [[512,'512 МБ'],[1024,'1 ГБ'],[2048,'2 ГБ'],[4096,'4 ГБ']];
@@ -1162,6 +1322,7 @@ function screenTest(){
   else if(c.kind==='camera') field = fieldCamera();
   else if(c.kind==='audio') field = fieldAudio();
   else if(c.kind==='diskread') field = fieldDiskRead();
+  else if(c.kind==='diskwrite') field = fieldDiskWrite();
   else if(c.kind==='memtest') field = fieldMem();
   else if(c.kind==='brightness') field = fieldBrightness();
   else if(c.kind==='removable') field = fieldRemovable();
@@ -1204,7 +1365,7 @@ function screenSensors(){
     ? '<div class="plot"><svg viewBox="0 0 1000 300" preserveAspectRatio="none">'+grid+
       '<polyline points="'+points+'" fill="none" stroke="'+(S.sensorHistory.length?'#FF8A00':'#6E8FA8')+'" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"></polyline></svg></div>'
     : '<div class="infoline" style="margin:0">'+(r && !r.available ? esc(r.note) : 'ожидание данных…')+'</div>';
-  return '<div class="pane">'+
+  return '<div class="pane">'+autoBanner()+
     '<div class="head"><div><div class="eyebrow">Live · WMI ACPI</div><h1 class="title">Датчики</h1></div>'+
     '<div class="lbl" style="font-family:var(--mono);font-size:11px;color:var(--dim);display:flex;align-items:center;gap:8px">'+
     '<span class="pulse'+(S.sensorPoll?' anim':'')+'"></span>опрос 2 с</div></div>'+
@@ -1221,7 +1382,7 @@ function screenStress(){
   var sd = S.stressResult;
   var durs = [[60,'1 мин'],[300,'5 мин'],[900,'15 мин'],[1800,'30 мин']];
   return '<div class="pane">'+
-    '<div class="eyebrow">Нагрузка</div><h1 class="title">Стресс-тест CPU</h1>'+
+    autoBanner()+'<div class="eyebrow">Нагрузка</div><h1 class="title">Стресс-тест CPU</h1>'+
     '<p class="lede" style="margin:6px 0 0">Реальная busy-loop нагрузка на все логические ядра. GPU-нагрузка и мониторинг throttling не реализованы — нет доступа к частотам/температурам на большинстве плат (см. вкладку «Датчики»).</p>'+
     '<div class="controls">'+
       '<div class="control"><div class="k">Длительность</div><div class="opts">'+

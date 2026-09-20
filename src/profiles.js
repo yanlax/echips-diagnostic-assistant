@@ -10,6 +10,12 @@
 //   batteryMinHealth  минимальный износ-порог: health% батареи, ниже — «не пройден»
 //   wifiMinSignal     порог лучшего сигнала Wi-Fi, % (null — не проверять); слабый
 //                     сигнал рядом с роутером указывает на антенну/шлейф
+//   stressSecs        длительность стресс-теста CPU в автопрогоне, с
+//   memTestMb         объём проверяемой памяти в автопрогоне, МБ
+//   diskWriteMb       размер проверочного файла теста записи, МБ
+//   diskSlowBlocksMax допустимо медленных (>250 мс) блоков в тестах чтения/записи
+//   sensorsProbeSecs  сколько секунд снимать показания датчиков в автопрогоне
+//   maxTempC          порог температуры (простой и под нагрузкой), °C
 //   diskMaxWearPct    порог износа SSD, %: выше — «не пройден»
 //   crashDays         окно поиска сбоев (синие экраны/перезагрузки), дней
 //   unexpectedShutdownsMax  сколько внезапных отключений (Kernel-Power 41 без
@@ -24,11 +30,18 @@
 window.ECHIPS_PROFILES = {
   default: {
     name: "Стандартный",
-    tests: ["sys", "disk", "crash", "usb", "bt", "wifi", "lan", "kb", "lcd", "bright", "cam", "pad", "fp", "bat", "snd"],
+    tests: ["sys", "disk", "crash", "usb", "bt", "wifi", "lan", "kb", "lcd", "bright", "cam", "pad", "fp", "bat", "snd",
+            "diskread", "diskwrite", "mem", "sens", "stress"],
     stopAtFail: false,
     batteryMinHealth: 80,
     wifiMinSignal: null,
     diskMaxWearPct: 90,
+    stressSecs: 60,
+    memTestMb: 1024,
+    diskWriteMb: 512,
+    diskSlowBlocksMax: 3,
+    sensorsProbeSecs: 8,
+    maxTempC: 95,
     crashDays: 30,
     unexpectedShutdownsMax: 2,
     required: ["wifi", "bt", "bat"],

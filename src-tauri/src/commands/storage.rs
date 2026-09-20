@@ -200,3 +200,242 @@ fn read_test(window: Window, disk_number: u32, size_gb: f64, sample_mb: u64) -> 
 fn read_test(_window: Window, _disk_number: u32, _size_gb: f64, _sample_mb: u64) -> Result<DiskReadResult, String> {
     Err("Тест чтения диска доступен только в Windows-сборке".to_string())
 }
+
+// ------------------------------------------------ Диск: тест записи
+//
+// Запись на сам физический диск уничтожила бы данные, поэтому пишем
+// проверочный файл на выбранный том, читаем обратно с проверкой и удаляем.
+// Кэш Windows обходим (NO_BUFFERING + WRITE_THROUGH) — иначе скорость
+// показала бы память, а не диск.
+
+static W_STOP: AtomicBool = AtomicBool::new(false);
+static W_RUNNING: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct VolumeInfo {
+    #[serde(default)]
+    pub letter: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub size_gb: f64,
+    #[serde(default)]
+    pub free_gb: f64,
+    #[serde(default)]
+    pub fs: String,
+    #[serde(default)]
+    pub is_system: bool,
+}
+
+#[tauri::command]
+pub fn list_fixed_volumes() -> Result<Vec<VolumeInfo>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let script = r#"
+            $sys = ($env:SystemDrive).TrimEnd(':')
+            $items = @(Get-Volume -ErrorAction SilentlyContinue |
+                Where-Object { $_.DriveType -eq 'Fixed' -and $_.DriveLetter } |
+                ForEach-Object {
+                    [PSCustomObject]@{
+                        letter = [string]$_.DriveLetter
+                        label = [string]$_.FileSystemLabel
+                        size_gb = [math]::Round($_.Size / 1GB, 1)
+                        free_gb = [math]::Round($_.SizeRemaining / 1GB, 1)
+                        fs = [string]$_.FileSystem
+                        is_system = ([string]$_.DriveLetter -eq $sys)
+                    }
+                })
+            ConvertTo-Json -InputObject $items -Compress
+        "#;
+        run_ps_json::<Vec<VolumeInfo>>(script)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Доступно только в Windows-сборке".to_string())
+    }
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct DiskWriteProgress {
+    pub pct: u32,
+    /// "write" | "read"
+    pub phase: String,
+    pub mbps: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DiskWriteResult {
+    pub letter: String,
+    pub size_mb: u64,
+    pub write_avg_mbps: f64,
+    pub write_min_mbps: f64,
+    pub write_max_mbps: f64,
+    /// Скорость записи по участкам файла, МБ/с
+    pub write_samples: Vec<f64>,
+    pub read_mbps: f64,
+    /// Блоки 1 МБ, записанные/прочитанные медленнее 250 мс
+    pub slow_blocks: u32,
+    /// Несовпадения данных при чтении обратно
+    pub errors: u64,
+    pub stopped: bool,
+}
+
+#[tauri::command]
+pub async fn run_disk_write_test(window: Window, letter: String, size_mb: u64) -> Result<DiskWriteResult, String> {
+    if W_RUNNING.swap(true, Ordering::SeqCst) {
+        return Err("Тест записи диска уже выполняется".to_string());
+    }
+    W_STOP.store(false, Ordering::SeqCst);
+    let res = tauri::async_runtime::spawn_blocking(move || write_test(window, letter, size_mb))
+        .await
+        .map_err(|e| format!("Тест записи завершился аварийно: {e}"))
+        .and_then(|r| r);
+    W_RUNNING.store(false, Ordering::SeqCst);
+    res
+}
+
+#[tauri::command]
+pub fn stop_disk_write_test() {
+    W_STOP.store(true, Ordering::SeqCst);
+}
+
+fn splitmix(mut z: u64) -> u64 {
+    z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+#[cfg(target_os = "windows")]
+fn write_test(window: Window, letter: String, size_mb: u64) -> Result<DiskWriteResult, String> {
+    use crate::powershell::run_ps;
+    use std::io::{Read, Write};
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::time::Instant;
+    use tauri::Emitter;
+
+    const NO_BUFFERING: u32 = 0x2000_0000;
+    const WRITE_THROUGH: u32 = 0x8000_0000;
+    const BLK: usize = 1 << 20;
+    const CHUNK: u64 = 32;
+
+    let letter = letter.trim().trim_end_matches(':').to_uppercase();
+    if letter.len() != 1 || !letter.chars().all(|c| c.is_ascii_alphabetic()) {
+        return Err("Некорректная буква тома".to_string());
+    }
+    let size_mb = size_mb.clamp(128, 4096);
+
+    // Свободного места должно хватить с запасом — иначе можно забить системный диск.
+    let free_mb = run_ps(&format!("(Get-Volume -DriveLetter {letter}).SizeRemaining"))
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .map(|b| b / (1024 * 1024))
+        .ok_or("Не удалось узнать свободное место на томе")?;
+    if free_mb < size_mb + 512 {
+        return Err(format!("Мало свободного места на {letter}: (доступно {free_mb} МБ, нужно не менее {} МБ)", size_mb + 512));
+    }
+
+    let sys = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into()).trim_end_matches(':').to_uppercase();
+    let dir = if letter == sys { std::env::temp_dir() } else { std::path::PathBuf::from(format!(r"{letter}:\")) };
+    let path = dir.join(format!("echips_write_test_{}.tmp", std::process::id()));
+
+    let mut raw = vec![0u8; BLK + 4096];
+    let off = raw.as_ptr().align_offset(4096);
+    let fill = |buf: &mut [u8], block: u64| {
+        for (i, c) in buf.chunks_exact_mut(8).enumerate() {
+            c.copy_from_slice(&splitmix((block << 32) | i as u64).to_le_bytes());
+        }
+    };
+
+    let mut run = || -> Result<DiskWriteResult, String> {
+        let mut res = DiskWriteResult { letter: letter.clone(), size_mb, ..Default::default() };
+        let total_ms = size_mb as f64;
+
+        // --- запись
+        {
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .custom_flags(NO_BUFFERING | WRITE_THROUGH)
+                .open(&path)
+                .map_err(|e| format!("Не удалось создать файл на {letter}: {e}"))?;
+            let mut chunk_start = Instant::now();
+            let started = Instant::now();
+            for b in 0..size_mb {
+                if W_STOP.load(Ordering::SeqCst) {
+                    res.stopped = true;
+                    break;
+                }
+                let buf = &mut raw[off..off + BLK];
+                fill(buf, b);
+                let t = Instant::now();
+                f.write_all(buf).map_err(|e| format!("Ошибка записи на {letter}: {e}"))?;
+                if t.elapsed().as_millis() > 250 {
+                    res.slow_blocks += 1;
+                }
+                if (b + 1) % CHUNK == 0 || b + 1 == size_mb {
+                    let n = if (b + 1) % CHUNK == 0 { CHUNK } else { (b + 1) % CHUNK };
+                    let mbps = n as f64 / chunk_start.elapsed().as_secs_f64().max(0.001);
+                    res.write_samples.push(mbps);
+                    chunk_start = Instant::now();
+                    let _ = window.emit(
+                        "diskw-progress",
+                        DiskWriteProgress { pct: ((b + 1) as f64 / total_ms * 50.0) as u32, phase: "write".into(), mbps },
+                    );
+                }
+            }
+            let _ = started;
+        }
+        if !res.write_samples.is_empty() {
+            res.write_avg_mbps = res.write_samples.iter().sum::<f64>() / res.write_samples.len() as f64;
+            res.write_min_mbps = res.write_samples.iter().cloned().fold(f64::INFINITY, f64::min);
+            res.write_max_mbps = res.write_samples.iter().cloned().fold(0.0, f64::max);
+        }
+        if res.stopped {
+            return Ok(res);
+        }
+
+        // --- чтение обратно с проверкой
+        let mut f = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(NO_BUFFERING)
+            .open(&path)
+            .map_err(|e| format!("Не удалось открыть проверочный файл: {e}"))?;
+        let mut expect = vec![0u8; BLK];
+        let read_started = Instant::now();
+        for b in 0..size_mb {
+            if W_STOP.load(Ordering::SeqCst) {
+                res.stopped = true;
+                break;
+            }
+            let buf = &mut raw[off..off + BLK];
+            let t = Instant::now();
+            f.read_exact(buf).map_err(|e| format!("Ошибка чтения с {letter}: {e}"))?;
+            if t.elapsed().as_millis() > 250 {
+                res.slow_blocks += 1;
+            }
+            fill(&mut expect, b);
+            if buf != &expect[..] {
+                res.errors += 1;
+            }
+            if (b + 1) % CHUNK == 0 || b + 1 == size_mb {
+                let mbps = (b + 1) as f64 / read_started.elapsed().as_secs_f64().max(0.001);
+                let _ = window.emit(
+                    "diskw-progress",
+                    DiskWriteProgress { pct: 50 + ((b + 1) as f64 / total_ms * 50.0) as u32, phase: "read".into(), mbps },
+                );
+            }
+        }
+        res.read_mbps = size_mb as f64 / read_started.elapsed().as_secs_f64().max(0.001);
+        Ok(res)
+    };
+    let result = run();
+    let _ = std::fs::remove_file(&path);
+    result
+}
+
+#[cfg(not(target_os = "windows"))]
+fn write_test(_window: Window, _letter: String, _size_mb: u64) -> Result<DiskWriteResult, String> {
+    Err("Тест записи диска доступен только в Windows-сборке".to_string())
+}

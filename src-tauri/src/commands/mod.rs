@@ -6,3 +6,4 @@ pub mod report;
 pub mod sensors;
 pub mod stress;
 pub mod system;
+pub mod summary;

@@ -8,6 +8,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             commands::system::get_system_info,
+            commands::summary::get_hardware_summary,
             commands::system::get_problem_devices,
             commands::system::list_problem_devices,
             commands::battery::get_battery_info,

@@ -98,7 +98,7 @@ h1.title{font-family:var(--grotesk);font-size:27px;font-weight:600;color:var(--t
 .bar .fill{height:100%;border-radius:4px;background:linear-gradient(90deg,#7A4A17,var(--accent));box-shadow:0 0 14px var(--accent-glow);transition:width .3s ease}
 
 /* ---------- стартовый экран ---------- */
-.modes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.modes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
 .mode{display:flex;flex-direction:column;min-height:262px;padding:20px;border-radius:12px;cursor:pointer;
   background:var(--glass);border:1px solid var(--line);transition:transform .18s,box-shadow .18s}
 .mode:hover{transform:translateY(-2px);box-shadow:0 12px 32px rgba(0,0,0,.38)}
@@ -422,3 +422,12 @@ h1.title{font-family:var(--grotesk);font-size:27px;font-weight:600;color:var(--t
 .btn-row-fs{display:flex;align-items:center;gap:14px;margin-bottom:10px}
 .pill.na{color:var(--dim);background:rgba(255,255,255,.05);border-color:var(--line-strong)}
 .cat.na .st{color:var(--mute)}
+
+/* ---------- автопрогон ---------- */
+.autobar{margin:10px 0 4px;padding:12px 14px;border-radius:11px;background:var(--glass);border:1px solid var(--accent-line);display:flex;flex-direction:column;gap:9px}
+.autobar .ab-top{display:flex;align-items:center;justify-content:space-between}
+.autobar .idx{font-family:var(--mono);font-size:10.5px;color:var(--faint)}
+.autobar .ab-msg{font-size:12.5px;color:var(--text-2);line-height:1.45}
+.autobar .ab-msg.ok{color:var(--ok)}
+.autobar .ab-msg.err{color:var(--err)}
+.autobar .headactions{justify-content:flex-end}

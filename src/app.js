@@ -14,6 +14,7 @@ var tauriEvent = window.__TAURI__.event;
 var getCurrentWindow = window.__TAURI__.window.getCurrentWindow;
 
 var CATS = [
+  { id:'sys', tag:'SYS', name:'Системная информация', method:'Процессор, ОЗУ, диски, видеокарта, плата, BIOS + сверка с профилем модели', impl:'реальные данные', kind:'runner', fetch:'sys' },
   { id:'usb', tag:'USB', name:'USB-порты', method:'Список устройств на USB-шине (WMI PnP) + статус', impl:'реальные данные', kind:'runner', fetch:'usb' },
   { id:'bt', tag:'BT', name:'Bluetooth', method:'Статус адаптера и список сопряжённых устройств', impl:'реальные данные', kind:'runner', fetch:'bt' },
   { id:'wifi', tag:'WIFI', name:'Wi-Fi', method:'Адаптер + список видимых сетей (netsh wlan)', impl:'реальные данные', kind:'runner', fetch:'wifi' },
@@ -72,6 +73,8 @@ var S = {
   sensorPoll:null, sensorReading:null, sensorHistory:[],
   stressOn:false, stressT:0, stressLoad:'CPU', stressDur:300, stressResult:null,
   snapshot:false, exported:null,
+  hw:null, verdict:null,
+  auto:{ on:false, ids:[], idx:-1, stopped:false, waiting:false, msg:'', cls:'' },
   drv:{ step:'idle' },
   mb:{ step:'login', techId:'', techName:'', pin:'', pinErr:'', ticket:'', serial:'', uuid:'', formErr:'', before:null, writeError:null }
 };
@@ -111,6 +114,7 @@ function loadDevice(){
   invoke('get_system_info').then(function(info){
     S.device = info;
     render();
+    invoke('get_hardware_summary').then(function(hw){ S.hw = hw; render(); }).catch(function(){});
   }).catch(function(err){
     S.deviceError = typeof err === 'string' ? err : 'Не удалось определить устройство';
     render();
@@ -138,7 +142,8 @@ var A = {
   go:function(screen,id){
     stopSensorPoll(); stopCamera(); stopAudio();
     if (document.getElementById('fill-overlay')) A.fillClose();
-    S.screen=screen; if(id) S.cat=id; S.running=false; S.runLines=[]; S.runError=null; S.exported=null; S.tone=null;
+    if (S.auto.on && screen!=='test' && screen!=='report') A.autoOff();
+    S.screen=screen; if(id) S.cat=id; S.running=false; S.runLines=[]; S.runError=null; S.verdict=null; S.exported=null; S.tone=null;
     if(screen==='drivers'){ A.drvStart(); }
     if(screen==='mb'){ A.mbReset(); }
     if(screen==='sensors'){ A.sensorsStart(); }
@@ -149,8 +154,9 @@ var A = {
     stopCamera(); stopAudio();
     A.go(c.kind==='sensors'?'sensors':c.kind==='stress'?'stress':'test', id);
     if (c.kind==='camera') A.camStart();
+    if (c.kind==='runner' && S.auto.on) A.run();
   },
-  reset:function(){ S.results={}; S.comments={}; S.keys={}; S.snapshot=false; render(); },
+  reset:function(){ A.autoOff(); S.results={}; S.comments={}; S.keys={}; S.snapshot=false; render(); },
   press:function(id){ S.keys[id]=true; render(); },
   nextFill:function(){ S.fill=(S.fill+1)%FILLS.length; render(); paintFill(); },
   prevFill:function(){ S.fill=(S.fill+FILLS.length-1)%FILLS.length; render(); paintFill(); },
@@ -174,19 +180,66 @@ var A = {
   },
   setFill:function(i){ S.fill=i; render(); },
   comment:function(v){ S.comments[S.cat]=v; },
-  mark:function(v){ S.results[S.cat]=v; A.go('dash'); },
+  mark:function(v){
+    S.results[S.cat]=v;
+    if (S.auto.on) A.autoAfter(v); else A.go('dash');
+  },
   snapshot:function(){ S.snapshot=true; render(); },
   exp:function(t){ A.exportReport(t); },
+
+  /* ---- автопрогон по профилю модели ---- */
+  autoStart:function(){
+    var ids = (profile().tests||[]).filter(function(id){ return CATS.some(function(c){ return c.id===id; }); });
+    if (!ids.length) return;
+    S.results={}; S.comments={}; S.keys={}; S.snapshot=false;
+    S.auto = { on:true, ids:ids, idx:-1, stopped:false, waiting:false, msg:'', cls:'', timer:null };
+    A.autoNext();
+  },
+  autoOff:function(){
+    if (S.auto.timer) clearTimeout(S.auto.timer);
+    S.auto = { on:false, ids:[], idx:-1, stopped:false, waiting:false, msg:'', cls:'' };
+  },
+  autoStop:function(){ A.autoOff(); A.go('dash'); },
+  autoReport:function(){ A.autoOff(); A.go('report'); },
+  autoNext:function(){
+    var a = S.auto; if (!a.on) return;
+    if (a.timer) clearTimeout(a.timer);
+    a.idx++; a.stopped=false; a.waiting=false; a.msg=''; a.cls='';
+    if (a.idx >= a.ids.length){ A.autoReport(); return; }
+    A.openCat(a.ids[a.idx]);
+  },
+  /* Итог шага: пройден/не применимо — идём дальше сами, ошибка — ждём техника. */
+  autoAfter:function(status){
+    var a = S.auto; if (!a.on) return;
+    if (status==='fail' && profile().stopAtFail){ a.stopped=true; a.msg='Тест не пройден — автопрогон остановлен (StopAtFail).'; a.cls='err'; render(); return; }
+    A.autoNext();
+  },
+  autoApply:function(v){
+    var a = S.auto; if (!a.on) return;
+    if (!v || !v.status){ a.waiting=true; a.msg='Автооценка невозможна — отметьте результат вручную.'; a.cls=''; render(); return; }
+    S.results[S.cat]=v.status; S.comments[S.cat]=v.note; renderNav();
+    var at = a.idx;
+    if (v.status==='fail'){
+      if (profile().stopAtFail){ a.stopped=true; a.msg='Не пройден: '+v.note+' — автопрогон остановлен.'; a.cls='err'; }
+      else { a.waiting=true; a.msg='Не пройден: '+v.note; a.cls='err'; }
+      render(); return;
+    }
+    a.msg=(v.status==='na'?'Не применимо: ':'Пройден: ')+v.note+' · переход к следующему…'; a.cls='ok'; render();
+    a.timer = setTimeout(function(){ if (S.auto.on && S.auto.idx===at) A.autoNext(); }, 1800);
+  },
 
   /* ---- runner-категории: реальные invoke-запросы ---- */
   run:function(){
     var c = cat();
     S.running = true; S.runLines=[]; S.runError=null; render();
-    fetchCategory(c.fetch).then(function(lines){
-      S.running=false; S.runLines=lines; render();
+    S.verdict = null;
+    fetchCategory(c.fetch).then(function(res){
+      S.running=false; S.runLines=res.lines; S.verdict=res.verdict; render();
+      if (S.auto.on && S.cat===c.id) A.autoApply(res.verdict);
     }).catch(function(err){
       S.running=false; S.runError = typeof err==='string' ? err : 'Ошибка получения данных';
       render();
+      if (S.auto.on && S.cat===c.id) A.autoApply({ status:'fail', note:S.runError });
     });
   },
 
@@ -457,18 +510,92 @@ var A = {
 window.echips = A;
 S.startedAt = new Date().toISOString();
 
-/* ---------- реальные данные для runner-категорий ---------- */
+/* ---------- профиль модели ---------- */
+function normCode(v){ return String(v||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
+function profile(){
+  var P = window.ECHIPS_PROFILES || { default:{ name:'Стандартный', tests:[], expect:{} }, models:{} };
+  var base = P['default'], hay = S.device ? normCode(S.device.manufacturer+' '+S.device.model) : '', found = null;
+  Object.keys(P.models||{}).forEach(function(k){
+    if (!found && normCode(k) && hay.indexOf(normCode(k))>=0) found = P.models[k];
+  });
+  var out = {};
+  Object.keys(base).forEach(function(k){ out[k] = base[k]; });
+  if (found){
+    Object.keys(found).forEach(function(k){ out[k] = found[k]; });
+    out.expect = {};
+    Object.keys(base.expect||{}).forEach(function(k){ out.expect[k] = base.expect[k]; });
+    Object.keys(found.expect||{}).forEach(function(k){ out.expect[k] = found.expect[k]; });
+  }
+  return out;
+}
+function isRequired(id){
+  var laptop = S.hw ? S.hw.is_laptop : true;
+  return laptop && (profile().required||[]).indexOf(id)>=0;
+}
+/* Узел не найден: на ноутбуке из списка required — неисправность, иначе «не применимо». */
+function absent(id, what){
+  return isRequired(id)
+    ? { status:'fail', note: what+' не обнаружен — обязателен для этой модели' }
+    : { status:'na', note: what+' не обнаружен в системе' };
+}
+
+function sysReport(hw){
+  var e = profile().expect || {}, lines = [], bad = [];
+  function chk(label, val, ok, exp){
+    lines.push((ok===null ? '•' : ok ? '✓' : '✗') + ' ' + label + ': ' + val + (exp!=null && exp!=='' ? ' (ожидается ' + exp + ')' : ''));
+    if (ok===false) bad.push(label);
+  }
+  function near(v, exp){ return exp>0 && Math.abs(v-exp)/exp <= 0.10; }
+  chk('Процессор', hw.cpu.name+' · '+hw.cpu.cores+' ядер / '+hw.cpu.threads+' потоков'+(hw.cpu.max_mhz?' · '+hw.cpu.max_mhz+' МГц':''),
+    e.cpu ? hw.cpu.name.toLowerCase().indexOf(String(e.cpu).toLowerCase())>=0 : null, e.cpu);
+  chk('ОЗУ', hw.ram_total_gb.toFixed(1)+' ГБ, модулей: '+hw.ram_modules.length, e.ramGb ? near(hw.ram_total_gb, e.ramGb) : null, e.ramGb ? e.ramGb+' ГБ' : '');
+  hw.ram_modules.forEach(function(m){
+    lines.push('    '+m.slot+': '+m.capacity_gb+' ГБ'+(m.speed_mhz?' · '+m.speed_mhz+' МГц':'')+(m.manufacturer?' · '+m.manufacturer:'')+(m.part_number?' · '+m.part_number:''));
+  });
+  var biggest = hw.disks.reduce(function(a,d){ return d.size_gb>(a?a.size_gb:0) ? d : a; }, null);
+  chk('Диск', hw.disks.length ? hw.disks.map(function(d){ return d.model+' '+d.size_gb+' ГБ'+(d.media?' '+d.media:'')+(d.health&&d.health!=='Healthy'?' ['+d.health+']':''); }).join('; ') : 'не найден',
+    e.diskGb ? (biggest ? near(biggest.size_gb, e.diskGb) : false) : (hw.disks.some(function(d){ return d.health && d.health!=='Healthy'; }) ? false : null), e.diskGb ? e.diskGb+' ГБ' : '');
+  hw.gpus.forEach(function(g){ chk('Видео', g.name+(g.vram_mb?' · '+g.vram_mb+' МБ':'')+(g.driver_version?' · драйвер '+g.driver_version:''), null); });
+  chk('Плата', hw.board || '—', null);
+  chk('BIOS', (hw.bios_version||'—')+(hw.bios_date?' от '+hw.bios_date:''),
+    e.biosContains ? (hw.bios_version||'').toLowerCase().indexOf(String(e.biosContains).toLowerCase())>=0 : null, e.biosContains);
+  chk('Тип корпуса', hw.is_laptop ? 'ноутбук' : 'настольный ПК / другое', null);
+  return { lines:lines, bad:bad };
+}
+
+/* ---------- реальные данные для runner-категорий ----------
+   Каждая ветка возвращает { lines, verdict }: verdict — автооценка по порогам
+   профиля ({status:'pass'|'fail'|'na', note}) или null, если оценить нельзя. */
 function fetchCategory(kind){
+  if (kind==='sys'){
+    return invoke('get_hardware_summary').then(function(hw){
+      S.hw = hw;
+      var r = sysReport(hw);
+      var hasExp = Object.keys(profile().expect||{}).length>0;
+      return { lines:r.lines, verdict: r.bad.length
+        ? { status:'fail', note:'Не совпадает с профилем «'+profile().name+'»: '+r.bad.join(', ') }
+        : { status:'pass', note: hasExp ? 'Железо совпадает с профилем «'+profile().name+'»' : 'Сводка собрана (эталона в профиле нет)' } };
+    });
+  }
   if (kind==='usb'){
     return invoke('list_usb_devices').then(function(list){
-      if (!list.length) return ['USB-устройства не обнаружены (кроме встроенных корневых хабов).'];
-      return list.map(function(d){ return d.name + ' — ' + (d.status==='OK'?'работает':d.status); });
+      var bad = list.filter(function(d){ return d.status!=='OK'; });
+      return {
+        lines: list.length ? list.map(function(d){ return d.name + ' — ' + (d.status==='OK'?'работает':d.status); }) : ['USB-устройства не обнаружены (кроме встроенных корневых хабов).'],
+        verdict: bad.length ? { status:'fail', note:'USB-устройства с ошибкой: '+bad.map(function(d){ return d.name; }).join(', ') }
+                            : { status:'pass', note: list.length ? 'USB-устройства без ошибок ('+list.length+')' : 'Ошибок USB нет; порты проверьте флешкой' }
+      };
     });
   }
   if (kind==='bt'){
     return invoke('list_bluetooth_devices').then(function(list){
-      if (!list.length) return ['Bluetooth-адаптер не обнаружен или отключён.'];
-      return list.map(function(d){ return d.name + ' — ' + (d.status==='OK'?'работает':d.status); });
+      var bad = list.filter(function(d){ return d.status!=='OK'; });
+      return {
+        lines: list.length ? list.map(function(d){ return d.name + ' — ' + (d.status==='OK'?'работает':d.status); }) : ['Bluetooth-адаптер не обнаружен или отключён.'],
+        verdict: !list.length ? absent('bt','Bluetooth-адаптер')
+          : bad.length ? { status:'fail', note:'Bluetooth с ошибкой: '+bad.map(function(d){ return d.name; }).join(', ') }
+          : { status:'pass', note:'Bluetooth-адаптер работает' }
+      };
     });
   }
   if (kind==='wifi'){
@@ -479,28 +606,42 @@ function fetchCategory(kind){
           ? adapters.map(function(a){ return 'Адаптер: ' + a.name + ' — ' + a.status + ' (' + a.mac + ')'; })
           : ['Wi-Fi адаптер не обнаружен.'];
         lines.push('Видимых сетей: ' + networks.length);
-        return lines.concat(networks.slice(0,8));
+        var off = adapters.filter(function(a){ return a.status==='Disabled' || a.status==='Not Present'; });
+        return { lines: lines.concat(networks.slice(0,8)),
+          verdict: !adapters.length ? absent('wifi','Wi-Fi адаптер')
+            : off.length ? { status:'fail', note:'Wi-Fi адаптер отключён или недоступен' }
+            : !networks.length ? { status:'fail', note:'Адаптер есть, но сетей не видит' }
+            : { status:'pass', note:'Wi-Fi работает, видимых сетей: '+networks.length } };
       });
   }
   if (kind==='fp'){
     return invoke('get_fingerprint_sensor').then(function(name){
-      return name ? ['Сенсор обнаружен системой: ' + name, 'Пробную регистрацию и сравнение выполните вручную через Windows Hello.']
-                   : ['Сенсор отпечатка не обнаружен в системе (WinBio).'];
+      return name
+        ? { lines:['Сенсор обнаружен системой: ' + name, 'Пробную регистрацию и сравнение выполните вручную через Windows Hello.'],
+            verdict:{ status:'pass', note:'Сенсор обнаружен ('+name+'); регистрацию пальца проверьте вручную' } }
+        : { lines:['Сенсор отпечатка не обнаружен в системе (WinBio).'], verdict:absent('fp','Сенсор отпечатка') };
     });
   }
   if (kind==='bat'){
     return invoke('get_battery_info').then(function(b){
-      if (!b.present) return ['Батарея не обнаружена системой.'];
+      if (!b.present) return { lines:['Батарея не обнаружена системой.'], verdict:absent('bat','Батарея') };
       var lines = ['Заряд: ' + b.charge_percent + '% (' + (b.charging?'заряжается':'от батареи') + ')'];
+      var min = profile().batteryMinHealth, verdict = null;
       if (b.design_capacity_mwh!=null && b.full_charge_capacity_mwh!=null){
         lines.push('Design capacity: ' + b.design_capacity_mwh + ' мВт·ч');
         lines.push('Full charge capacity: ' + b.full_charge_capacity_mwh + ' мВт·ч');
         lines.push('Износ: ' + (100 - (b.health_percent||0)).toFixed(1) + '% (health ' + (b.health_percent||0).toFixed(1) + '%)');
+        if (min!=null){
+          lines.push('Порог профиля: health не ниже ' + min + '%');
+          verdict = (b.health_percent||0) >= min
+            ? { status:'pass', note:'Здоровье батареи '+(b.health_percent||0).toFixed(1)+'% (порог '+min+'%)' }
+            : { status:'fail', note:'Здоровье батареи '+(b.health_percent||0).toFixed(1)+'% ниже порога '+min+'%' };
+        }
       } else {
         lines.push('powercfg /batteryreport не вернул данные о ёмкости на этой машине.');
       }
       if (b.cycle_count!=null) lines.push('Циклов заряда: ' + b.cycle_count);
-      return lines;
+      return { lines:lines, verdict:verdict };
     });
   }
   return Promise.reject('Неизвестная категория');
@@ -530,7 +671,8 @@ function renderNav(){
 function screenStart(){
   var modes = [
     { tag:'DRV', title:'Установка драйверов', desc:'Определение модели, выбор пакетов и установка с точкой восстановления.', meta:'та же логика, что в Driver Assistant', badge:'ГОТОВО', hot:false, go:'drivers' },
-    { tag:'DIA', title:'Диагностика оборудования', desc:CATS.length+' категорий тестов, датчики (где доступны), стресс-тест и отчёт.', meta:CATS.length+' категорий · TXT / JSON', badge:'НОВОЕ', hot:true, go:'dash' },
+    { tag:'AUTO', title:'Автопрогон', desc:'Последовательная проверка по профилю модели: сверка железа, пороги батареи, автоматические вердикты.', meta:'профиль: '+profile().name+' · '+(profile().tests||[]).length+' тестов', badge:'НОВОЕ', hot:true, act:'echips.autoStart()' },
+    { tag:'DIA', title:'Диагностика оборудования', desc:CATS.length+' категорий тестов, датчики (где доступны), стресс-тест и отчёт.', meta:CATS.length+' категорий · TXT / JSON', badge:'РУЧНОЙ', hot:false, go:'dash' },
     { tag:'MB', title:'Замена платы', desc:'Гарантийный случай: чтение SN/UUID и аудит-лог. Запись — требует донастройки.', meta:'частично · см. README', badge:'В РАБОТЕ', hot:false, go:'mb' }
   ];
   var detected = S.device
@@ -541,7 +683,7 @@ function screenStart(){
     '<h1 class="title">Что делаем с ноутбуком</h1>'+
     '<p class="lede" style="margin:7px 0 24px">Выберите режим — драйверы, полная проверка оборудования или гарантийная замена платы.</p>'+
     '<div class="modes">'+ modes.map(function(m){
-      return '<div class="mode'+(m.hot?' is-new':'')+'" onclick="echips.go(\''+m.go+'\')">'+
+      return '<div class="mode'+(m.hot?' is-new':'')+'" onclick="'+(m.act || "echips.go('"+m.go+"')")+'">'+
         '<div class="row"><div class="ic">'+m.tag+'</div><span class="badge'+(m.hot?' hot':'')+'">'+m.badge+'</span></div>'+
         '<h3>'+m.title+'</h3><p>'+m.desc+'</p><div class="foot">'+m.meta+'</div></div>';
     }).join('') +'</div>'+
@@ -555,6 +697,7 @@ function screenDash(){
     '<div class="head"><div><div class="eyebrow">Диагностика оборудования</div><h1 class="title">Категории тестов</h1></div>'+
     '<div class="headactions">'+
       '<button class="btn btn-ghost" onclick="echips.reset()">Сбросить</button>'+
+      '<button class="btn btn-primary" onclick="echips.autoStart()">Автопрогон</button>'+
       '<button class="btn btn-primary" onclick="echips.go(\'report\')">К отчёту</button>'+
     '</div></div>'+
     '<div class="progrow"><div class="bar"><div class="fill" style="width:'+(c.checked/CATS.length*100).toFixed(0)+'%"></div></div>'+
@@ -658,7 +801,8 @@ function fieldRunner(){
   return '<div class="runwrap"><div class="runrow">'+
     '<button class="btn btn-primary" onclick="echips.run()" '+(S.running?'disabled':'')+'>'+(S.running?'Идёт проверка…':S.runLines.length?'Повторить':'Запустить проверку')+'</button>'+
     '<span class="n">'+note+'</span></div>'+
-    '<div class="log">'+body+'</div></div>';
+    '<div class="log">'+body+'</div>'+
+    (S.verdict && S.verdict.status ? '<div class="kbnote" style="margin-top:8px">Автооценка: '+({pass:'пройден',fail:'не пройден',na:'не применимо'}[S.verdict.status])+' — '+esc(S.verdict.note)+'</div>' : '')+'</div>';
 }
 function fieldCamera(){
   return '<div class="camwrap"><div class="preview" style="position:relative;overflow:hidden">'+
@@ -696,6 +840,19 @@ function fieldAudio(){
     '<div class="spectrum">'+bars+'</div><div class="kbnote">'+note+'</div></div>';
 }
 
+function autoBanner(){
+  var a = S.auto; if (!a.on) return '';
+  var n = a.ids.length;
+  var btns = '<button class="btn btn-ghost" onclick="echips.autoStop()">Прервать автопрогон</button>';
+  if (a.stopped) btns = '<button class="btn btn-ghost" onclick="echips.autoNext()">Продолжить</button><button class="btn btn-primary" onclick="echips.autoReport()">К отчёту</button>';
+  else if (a.waiting) btns = '<button class="btn btn-primary" onclick="echips.autoNext()">Далее</button>' + btns;
+  return '<div class="autobar"><div class="ab-top"><span class="eyebrow">Автопрогон · профиль «'+esc(profile().name)+'»</span>'+
+    '<span class="idx">шаг '+(a.idx+1)+' из '+n+'</span></div>'+
+    '<div class="bar"><div class="fill" style="width:'+(a.idx/n*100).toFixed(0)+'%"></div></div>'+
+    (a.msg ? '<div class="ab-msg '+a.cls+'">'+esc(a.msg)+'</div>' : '')+
+    '<div class="headactions">'+btns+'</div></div>';
+}
+
 function screenTest(){
   var c = cat(), field = '';
   if(c.kind==='keyboard') field = fieldKeyboard();
@@ -707,6 +864,7 @@ function screenTest(){
   return '<div class="pane">'+
     '<div class="crumbs"><button class="btn-link" onclick="echips.go(\'dash\')">← все категории</button>'+
     '<span class="idx">категория '+(CATS.indexOf(c)+1)+' из '+CATS.length+'</span></div>'+
+    autoBanner()+
     '<div class="testhead"><div><h2>'+c.name+'</h2><div class="hint">'+c.method+'</div></div>'+
     '<div class="base">'+c.tag+' · '+c.impl+'</div></div>'+
     '<div class="field">'+field+'</div>'+

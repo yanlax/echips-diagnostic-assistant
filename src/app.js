@@ -605,8 +605,12 @@ function renderBatteryScreen() {
         '<div class="devlist">' +
         devRow("Заряд", info.charge_percent + " %") +
         devRow("Статус", info.charging ? "Заряжается" : "От батареи") +
+        (info.design_capacity_mwh != null ? devRow("Проектная ёмкость", info.design_capacity_mwh + " мВт·ч") : "") +
+        (info.full_charge_capacity_mwh != null ? devRow("Текущая полная ёмкость", info.full_charge_capacity_mwh + " мВт·ч") : "") +
+        (info.health_percent != null ? devRow("Здоровье батареи", info.health_percent + " %") : "") +
+        (info.cycle_count != null ? devRow("Циклов заряда", info.cycle_count) : "") +
         "</div>" +
-        '<p class="hint">Точный износ (design vs full charge capacity) — TODO: разбор powercfg /batteryreport.</p>' +
+        (info.health_percent == null ? '<p class="hint">Данные об износе недоступны (не удалось построить отчёт powercfg).</p>' : "") +
         '<div class="btn-row">' +
         '<button class="btn-primary" id="btn-pass">Исправно</button>' +
         '<button class="btn-danger" id="btn-fail">Неисправно</button>' +
@@ -614,7 +618,8 @@ function renderBatteryScreen() {
         "</div>";
 
       document.getElementById("btn-pass").addEventListener("click", function () {
-        setStatus("battery", "pass", info.charge_percent + "%");
+        setStatus("battery", "pass", info.charge_percent + "%" +
+          (info.health_percent != null ? ", здоровье " + info.health_percent + "%" : ""));
       });
       document.getElementById("btn-fail").addEventListener("click", function () {
         setStatus("battery", "fail", "");

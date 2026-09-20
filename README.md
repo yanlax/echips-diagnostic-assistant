@@ -45,7 +45,7 @@ src-tauri/
 - Звук — запись 5 с с микрофона и воспроизведение (`MediaRecorder`)
 - USB-порты — список устройств (`list_usb_devices`, Win32_PnPEntity) + ручная отметка по портам
 - Wi-Fi/Bluetooth — статус адаптеров (`get_network_adapters`, Win32_NetworkAdapter) + ручная отметка
-- Батарея — текущий заряд/статус (полный health% — TODO)
+- Батарея — заряд/статус, design и full charge capacity, health%, циклы (XML из `powercfg /batteryreport`)
 - Итоговый отчёт — сводка по всем пунктам + сохранение в
   `%APPDATA%/ru.echips.diagnostic-assistant/reports/*.txt`
 
@@ -62,8 +62,6 @@ Tauri-команду в `src-tauri/src/commands/`.
 - `logo.png` — нужно скопировать из `echips-driver-assistant`
 - Иконки для бандла (`src-tauri/icons/`) — скопировать оттуда же или
   сгенерировать через `tauri icon`
-- Батарея: design/full charge capacity и health% — разбор XML из
-  `powercfg /batteryreport`
 - Температуры/обороты кулера — нет прямого WMI-источника на всех платах;
   вероятно потребуется внешняя утилита (LibreHardwareMonitor CLI/DLL) или
   чтение через ACPI, если Echips-платы это поддерживают

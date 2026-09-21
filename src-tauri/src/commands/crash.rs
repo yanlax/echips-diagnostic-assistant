@@ -75,7 +75,7 @@ struct RawEvent {
     text: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_crash_history(days: u32) -> Result<CrashHistory, String> {
     #[cfg(target_os = "windows")]
     {

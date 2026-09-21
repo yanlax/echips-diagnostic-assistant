@@ -41,7 +41,7 @@ pub struct DiskHealth {
     pub write_errors: Option<u64>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_disk_health() -> Result<Vec<DiskHealth>, String> {
     #[cfg(target_os = "windows")]
     {
@@ -119,7 +119,7 @@ pub async fn run_disk_read_test(
     res
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn stop_disk_read_test() {
     STOP.store(true, Ordering::SeqCst);
 }
@@ -227,7 +227,7 @@ pub struct VolumeInfo {
     pub is_system: bool,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_fixed_volumes() -> Result<Vec<VolumeInfo>, String> {
     #[cfg(target_os = "windows")]
     {
@@ -294,7 +294,7 @@ pub async fn run_disk_write_test(window: Window, letter: String, size_mb: u64) -
     res
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn stop_disk_write_test() {
     W_STOP.store(true, Ordering::SeqCst);
 }
@@ -497,7 +497,7 @@ pub async fn run_surface_scan(
     res
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn stop_surface_scan() {
     S_STOP.store(true, Ordering::SeqCst);
 }

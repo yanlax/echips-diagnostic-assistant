@@ -20,7 +20,7 @@ pub struct LanAdapter {
     pub mac: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_lan_adapters() -> Result<Vec<LanAdapter>, String> {
     #[cfg(target_os = "windows")]
     {
@@ -58,7 +58,7 @@ pub struct WifiNetwork {
 
 /// Видимые сети с максимальным уровнем сигнала (%) по каждой. Разбор не зависит
 /// от языка Windows: SSID ищется по слову SSID, сигнал — по числу с «%».
-#[tauri::command]
+#[tauri::command(async)]
 pub fn scan_wifi_detailed() -> Result<Vec<WifiNetwork>, String> {
     #[cfg(target_os = "windows")]
     {
@@ -99,7 +99,7 @@ pub struct MonitorInfo {
     pub internal: bool,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_monitors() -> Result<Vec<MonitorInfo>, String> {
     #[cfg(target_os = "windows")]
     {
@@ -151,7 +151,7 @@ pub struct BrightnessInfo {
     pub max: u32,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_brightness() -> Result<BrightnessInfo, String> {
     #[cfg(target_os = "windows")]
     {
@@ -173,7 +173,7 @@ pub fn get_brightness() -> Result<BrightnessInfo, String> {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_brightness(level: u32) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -207,7 +207,7 @@ pub struct UsbDrive {
     pub fs: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_removable_drives() -> Result<Vec<UsbDrive>, String> {
     #[cfg(target_os = "windows")]
     {

@@ -1,5 +1,6 @@
 mod commands;
 mod powershell;
+mod sysutil;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -54,6 +55,11 @@ pub fn run() {
             commands::report::save_report_txt,
             commands::report::save_report_json,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            if let tauri::RunEvent::Exit = event {
+                powershell::shutdown();
+            }
+        });
 }

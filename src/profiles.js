@@ -15,7 +15,8 @@
 //   surfaceSlowPct    допустимая доля медленных (150–500 мс) блоков при сканировании, %
 //   stressSecs        длительность стресс-теста CPU, если добавить "stress" в tests
 //                     (по умолчанию в автопрогон не входит), с
-//   memTestMb         объём проверяемой памяти в автопрогоне, МБ
+//   memTestMb         объём проверяемой памяти в автопрогоне, МБ (урезается до 75% свободной ОЗУ)
+//   memPasses         число проходов теста памяти в автопрогоне
 //   diskWriteMb       размер проверочного файла теста записи, МБ
 //   diskSlowBlocksMax допустимо медленных (>250 мс) блоков в тестах чтения/записи
 //   sensorsProbeSecs  сколько секунд снимать показания датчиков в автопрогоне
@@ -44,7 +45,8 @@ window.ECHIPS_PROFILES = {
     surfaceScanGb: 20,
     surfaceSlowPct: 1,
     stressSecs: 60,
-    memTestMb: 1024,
+    memTestMb: 4096,
+    memPasses: 4,
     diskWriteMb: 512,
     diskSlowBlocksMax: 3,
     sensorsProbeSecs: 8,

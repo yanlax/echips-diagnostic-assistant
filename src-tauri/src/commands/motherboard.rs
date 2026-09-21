@@ -24,7 +24,7 @@ pub struct BoardIdentity {
     pub uuid: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn read_board_identity() -> Result<BoardIdentity, String> {
     #[cfg(target_os = "windows")]
     {
@@ -122,7 +122,7 @@ fn is_valid_uuid(v: &str) -> bool {
     parts.iter().zip(expected_lens).all(|(p, len)| p.len() == len && p.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn write_smbios_identity(
     technician: String,
     ticket: String,
@@ -169,7 +169,7 @@ pub fn write_smbios_identity(
     ))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn read_audit_log() -> Result<Vec<AuditEntry>, String> {
     let path = audit_log_path();
     let content = match std::fs::read_to_string(&path) {

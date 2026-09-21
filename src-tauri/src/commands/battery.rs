@@ -33,7 +33,7 @@ struct WmiBattery {
     charging: Option<bool>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_battery_info() -> Result<BatteryInfo, String> {
     #[cfg(target_os = "windows")]
     {

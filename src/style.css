@@ -475,3 +475,22 @@ h1.title{font-family:var(--grotesk);font-size:27px;font-weight:600;color:var(--t
 .autobar .ab-row .ab-msg{flex:1;min-width:0}
 .autobar .ab-row .headactions{flex:0 0 auto}
 .autobar .btn{padding:8px 16px}
+
+/* ---------- клавиатура: numpad, счётчики, дребезг, залипание ---------- */
+.kbboth{display:flex;gap:16px;align-items:flex-start}
+.kbboth .kbrows{flex:1;min-width:0}
+.numpad{display:grid;grid-template-columns:repeat(4,38px);grid-auto-rows:36px;gap:5px;flex:0 0 auto}
+.key{position:relative}
+.key .kcnt{position:absolute;top:1px;right:3px;font-size:9px;font-family:var(--mono);color:var(--accent-hi)}
+.key.on .kcnt{color:var(--accent-ink)}
+.key.hold{background:rgba(240,194,75,.35);border-color:#F0C24B}
+.key.stuck{outline:2px solid var(--err);background:rgba(226,87,76,.35)}
+.key.chat{box-shadow:inset 0 0 0 2px #F0C24B}
+.kbmedia{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.kbmedia .mk{flex:0 0 auto;padding:0 12px;height:30px}
+
+/* ---------- отчёт: клик по строке, причина смены вердикта ---------- */
+.tr.clickable{cursor:pointer}
+.tr.clickable:hover{background:var(--glass)}
+.markerr{margin-top:10px;padding:10px 14px;border-radius:9px;background:rgba(226,87,76,.10);border:1px solid rgba(226,87,76,.40);color:var(--err);font-size:12.5px;line-height:1.45}
+.winbtn svg path{stroke:currentColor;stroke-width:1.2}

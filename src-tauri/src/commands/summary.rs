@@ -77,7 +77,7 @@ pub struct HardwareSummary {
     pub is_laptop: bool,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_hardware_summary() -> Result<HardwareSummary, String> {
     #[cfg(target_os = "windows")]
     {

@@ -14,6 +14,22 @@ pub struct TestResult {
     /// "pass" | "fail" | "idle"
     pub status: String,
     pub comment: Option<String>,
+    /// Автоматическая оценка теста ("pass" | "fail" | "na") и её пояснение
+    #[serde(default)]
+    pub auto_status: Option<String>,
+    #[serde(default)]
+    pub auto_note: Option<String>,
+    /// Причина, если техник изменил автоматический вердикт
+    #[serde(default)]
+    pub override_reason: Option<String>,
+    /// Подробности теста (строки лога, измерения)
+    #[serde(default)]
+    pub details: Vec<String>,
+    /// Входит ли тест в профиль модели (вне профиля — не «не проверено»)
+    #[serde(default)]
+    pub in_profile: Option<bool>,
+    #[serde(default)]
+    pub finished_at: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -46,13 +62,22 @@ fn render_txt(report: &DiagnosticReport) -> String {
     out.push_str(&format!("Окончание: {}\n\n", report.finished_at));
     out.push_str("Результаты проверок:\n---------------------\n");
     for r in &report.results {
-        out.push_str(&format!("[{}] {}", status_label(&r.status), r.title));
+        let label = if r.status == "idle" && r.in_profile == Some(false) { "ВНЕ ПРОФИЛЯ" } else { status_label(&r.status) };
+        out.push_str(&format!("[{}] {}", label, r.title));
         if let Some(c) = &r.comment {
             if !c.trim().is_empty() {
                 out.push_str(&format!(" — {c}"));
             }
         }
         out.push('\n');
+        if let (Some(st), Some(note)) = (&r.auto_status, &r.auto_note) {
+            if let Some(reason) = &r.override_reason {
+                out.push_str(&format!("    Автооценка: {st} — {note}; изменено техником: {reason}\n"));
+            }
+        }
+        for line in &r.details {
+            out.push_str(&format!("    {line}\n"));
+        }
     }
 
     let failed: Vec<&TestResult> = report.results.iter().filter(|r| r.status == "fail").collect();
@@ -83,7 +108,7 @@ fn reports_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(dir)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_report_txt(app: tauri::AppHandle, report: DiagnosticReport) -> Result<String, String> {
     let dir = reports_dir(&app)?;
     let filename = format!(
@@ -96,7 +121,7 @@ pub fn save_report_txt(app: tauri::AppHandle, report: DiagnosticReport) -> Resul
     Ok(path.to_string_lossy().to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_report_json(app: tauri::AppHandle, report: DiagnosticReport) -> Result<String, String> {
     let dir = reports_dir(&app)?;
     let filename = format!(

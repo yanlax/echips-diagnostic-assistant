@@ -103,7 +103,7 @@ var S = {
   sensorPoll:null, sensorReading:null, sensorHistory:[], gpuHistory:[],
   stressOn:false, stressT:0, stressLoad:'CPU', stressDur:300, stressResult:null,
   snapshot:false, exported:null,
-  hw:null, verdict:null, br:{ info:null, loading:false }, camClip:null,
+  hw:null, verdict:null, detail:{}, kstat:{}, repId:null, markErr:null, br:{ info:null, loading:false }, camClip:null,
   rm:{ drives:null, timer:null, running:null, log:[], err:null, size:64 },
   dr:{ disks:null, sel:0, mode:64, running:false, pct:0, mbps:0, res:null, err:null },
   sm:{ disks:null, sel:0, err:null, loading:false },
@@ -115,8 +115,32 @@ var S = {
   mb:{ step:'login', techId:'', techName:'', pin:'', pinErr:'', ticket:'', serial:'', uuid:'', formErr:'', before:null, writeError:null }
 };
 
+/* Кэш дорогих запросов (WMI/PowerShell): один и тот же список дисков не запрашивается
+   заново в каждом тесте автопрогона. */
+var _icache = {};
+function invokeCached(cmd, args, ttl){
+  var k = cmd + JSON.stringify(args||{}), e = _icache[k];
+  if (e && Date.now()-e.t < ttl) return Promise.resolve(e.v);
+  return invoke(cmd, args).then(function(v){ _icache[k] = { t:Date.now(), v:v }; return v; });
+}
+
 function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function cat(){ for (var i=0;i<CATS.length;i++) if (CATS[i].id===S.cat) return CATS[i]; return CATS[0]; }
+/* Сохранение подробностей теста для отчёта: строки лога, автовердикт, ряд точек графика. */
+function recordDetail(id, patch){
+  var d = S.detail[id] || {};
+  Object.keys(patch).forEach(function(k){ d[k] = patch[k]; });
+  d.ts = new Date().toISOString();
+  S.detail[id] = d;
+}
+function downsample(arr, n){
+  if (arr.length <= n) return arr.slice();
+  var out = [], k = arr.length / n;
+  for (var i=0;i<n;i++){ var a=Math.floor(i*k), b=Math.max(a+1, Math.floor((i+1)*k)), sum=0; for (var j=a;j<b;j++) sum+=arr[j]; out.push(Math.round(sum/(b-a))); }
+  return out;
+}
+function inProfile(id){ return (profile().tests||[]).indexOf(id) >= 0; }
+
 function statusOf(id){ return S.results[id] || 'idle'; }
 function counts(){
   var p=0,f=0,n=0;
@@ -136,8 +160,23 @@ function deviceSn(){ return S.device ? S.device.serial_number : ''; }
   var win = getCurrentWindow();
   var minBtn = document.getElementById('win-minimize');
   var closeBtn = document.getElementById('win-close');
+  var maxBtn = document.getElementById('win-maximize');
+  var fsBtn = document.getElementById('win-fullscreen');
   if (minBtn) minBtn.addEventListener('click', function(){ win.minimize(); });
   if (closeBtn) closeBtn.addEventListener('click', function(){ win.close(); });
+  function toggleMax(){
+    win.isMaximized().then(function(m){ return m ? win.unmaximize() : win.maximize(); }).catch(function(){});
+  }
+  function toggleFs(){
+    win.isFullscreen().then(function(f){ return win.setFullscreen(!f); }).catch(function(){});
+  }
+  if (maxBtn) maxBtn.addEventListener('click', toggleMax);
+  if (fsBtn) fsBtn.addEventListener('click', toggleFs);
+  var tb = document.querySelector('.titlebar');
+  if (tb) tb.addEventListener('dblclick', function(e){ if (!e.target.closest('.winbtn')) toggleMax(); });
+  document.addEventListener('keydown', function(e){
+    if (e.key==='F11' && !document.getElementById('fill-overlay')){ e.preventDefault(); toggleFs(); }
+  });
   var siteLink = document.getElementById('site-link');
   if (siteLink) siteLink.addEventListener('click', function(e){
     e.preventDefault();
@@ -178,6 +217,7 @@ var A = {
   go:function(screen,id){
     stopSensorPoll(); stopCamera(); stopAudio();
     if (S.rm.timer){ clearInterval(S.rm.timer); S.rm.timer=null; }
+    if (S.kbT){ clearInterval(S.kbT); S.kbT=null; }
     S.br = { info:null, loading:false }; S.camClip = null;
     if (S.stressTempT){ clearInterval(S.stressTempT); S.stressTempT=null; }
     if (S.sf.running) invoke('stop_surface_scan').catch(function(){});
@@ -208,8 +248,9 @@ var A = {
       else if (c.kind==='stress') A.stressAuto();
     }
   },
-  reset:function(){ A.autoOff(); S.rm.log=[]; S.results={}; S.comments={}; S.keys={}; S.snapshot=false; render(); },
+  reset:function(){ _icache = {}; S.detail = {}; A.autoOff(); S.rm.log=[]; S.results={}; S.comments={}; S.keys={}; S.snapshot=false; render(); },
   press:function(id){ S.keys[id]=true; render(); },
+  kbReset:function(){ S.keys={}; S.kstat={}; S.lastUnknown=null; render(); },
   nextFill:function(){ S.fill=(S.fill+1)%FILLS.length; render(); paintFill(); },
   prevFill:function(){ S.fill=(S.fill+FILLS.length-1)%FILLS.length; render(); paintFill(); },
   fillOpen:function(){
@@ -219,7 +260,10 @@ var A = {
     o.innerHTML = '<span id="fill-hint"></span>';
     o.addEventListener('click', function(){ A.nextFill(); });
     document.body.appendChild(o);
-    try { getCurrentWindow().setFullscreen(true); } catch(e){}
+    try {
+      var w = getCurrentWindow();
+      w.isFullscreen().then(function(f){ S.fsBefore = f; return f ? null : w.setFullscreen(true); }).catch(function(){});
+    } catch(e){}
     paintFill();
     clearTimeout(S.fillHintT);
     S.fillHintT = setTimeout(function(){ var h=document.getElementById('fill-hint'); if(h) h.style.opacity='0'; }, 3500);
@@ -227,17 +271,32 @@ var A = {
   fillClose:function(){
     var o = document.getElementById('fill-overlay');
     if (o) o.parentNode.removeChild(o);
-    try { getCurrentWindow().setFullscreen(false); } catch(e){}
+    try { if (!S.fsBefore) getCurrentWindow().setFullscreen(false).catch(function(){}); } catch(e){}
     render();
   },
   setFill:function(i){ S.fill=i; render(); },
-  comment:function(v){ S.comments[S.cat]=v; },
+  comment:function(v){ S.comments[S.cat]=v; if (S.markErr && S.markErr.id===S.cat){ S.markErr=null; var m=document.getElementById('mark-err'); if(m) m.style.display='none'; } },
   mark:function(v){
-    S.results[S.cat]=v;
+    var id = S.cat, d = S.detail[id] || {}, auto = d.auto;
+    // автовердикт можно изменить, но только с объяснением в комментарии — иначе
+    // отчёт получается противоречивым («пройден» рядом с «SMART — тревога»)
+    if (auto && auto.status && auto.status!==v){
+      var cm = (S.comments[id]||'').trim();
+      if (!cm || cm===auto.note){
+        S.markErr = { id:id, text:'Автооценка: '+({pass:'пройден',fail:'не пройден',na:'не применимо'}[auto.status]||auto.status)+' — '+auto.note+'. Чтобы выбрать другой результат, допишите в комментарии причину.' };
+        render(); return;
+      }
+      recordDetail(id, { override:{ from:auto.status, to:v, reason:cm } });
+    } else if (d.override){ recordDetail(id, { override:null }); }
+    S.markErr = null;
+    if (cat().kind==='keyboard') recordDetail(id, { lines: kbSummaryLines() });
+    recordDetail(id, { final:v });
+    S.results[id]=v;
     if (S.auto.on) A.autoAfter(v); else A.go('dash');
   },
   snapshot:function(){ S.snapshot=true; render(); },
   exp:function(t){ A.exportReport(t); },
+  repOpen:function(id){ S.repId = id; A.go('repdetail'); },
 
   /* ---- автопрогон по профилю модели ---- */
   autoStart:function(){
@@ -272,6 +331,7 @@ var A = {
     var a = S.auto; if (!a.on) return;
     if (!v || !v.status){ a.waiting=true; a.msg='Автооценка невозможна — отметьте результат вручную.'; a.cls=''; render(); return; }
     S.results[S.cat]=v.status; S.comments[S.cat]=v.note; renderNav();
+    recordDetail(S.cat, { auto: { status:v.status, note:v.note } });
     var at = a.idx;
     if (v.status==='fail'){
       if (profile().stopAtFail){ a.stopped=true; a.msg='Не пройден: '+v.note+' — автопрогон остановлен.'; a.cls='err'; }
@@ -287,7 +347,7 @@ var A = {
     if (S.sm.disks || S.sm.loading) return;
     S.sm.loading = true;
     invoke('get_smart_report').then(function(list){
-      S.sm.disks = list; S.sm.loading = false; S.sm.sel = 0; render();
+      S.sm.disks = list; S.sm.loading = false; S.sm.sel = 0; list.forEach(function(d,k){ if (d.is_system) S.sm.sel = k; }); render();
     }).catch(function(err){
       S.sm.loading = false; S.sm.disks = []; S.sm.err = typeof err==='string'?err:'Не удалось получить SMART'; render();
     });
@@ -296,7 +356,8 @@ var A = {
   smAuto:function(){
     S.sm.disks = null; S.sm.err = null; S.sm.loading = true;
     invoke('get_smart_report').then(function(list){
-      S.sm.disks = list; S.sm.loading = false; S.sm.sel = 0; render();
+      S.sm.disks = list; S.sm.loading = false; S.sm.sel = 0; list.forEach(function(d,k){ if (d.is_system) S.sm.sel = k; }); render();
+      recordDetail('smart', { lines: smartLines(list) });
       A.autoApply(judgeSmart(list));
     }).catch(function(err){
       S.sm.loading = false; S.sm.disks = []; S.sm.err = typeof err==='string'?err:'Не удалось получить SMART'; render(); A.autoApply(null);
@@ -307,7 +368,7 @@ var A = {
   sfLoad:function(){
     if (S.sf.disks) return;
     S.sf.disks = [];
-    invoke('get_disk_health').then(function(list){
+    invokeCached('get_disk_health', {}, 30000).then(function(list){
       S.sf.disks = list; var i = 0; list.forEach(function(d,k){ if (d.is_system) i = k; });
       S.sf.sel = i; render();
     }).catch(function(err){ S.sf.err = typeof err==='string'?err:'Не удалось получить список дисков'; render(); });
@@ -334,6 +395,7 @@ var A = {
     function fin(){ if(unlisten) unlisten(); f.running=false; f.lastCol=null; }
     invoke('run_surface_scan', { diskNumber:d.number, sizeGb:d.size_gb, startPct:start, endPct:end, blockKb:512 }).then(function(res){
       fin(); f.res=res; render(); paintSurface();
+      recordDetail('surface', { lines:['Просканировано '+(res.scanned_mb/1024).toFixed(1)+' ГБ за '+res.elapsed_secs+' с: скорость средняя '+res.avg_mbps.toFixed(0)+', мин '+res.min_mbps.toFixed(0)+', макс '+res.max_mbps.toFixed(0)+' МБ/с', 'Задержки блоков: <5 мс '+res.classes[0]+' · <20 '+res.classes[1]+' · <50 '+res.classes[2]+' · <150 '+res.classes[3]+' · <500 '+res.classes[4]+' · ≥500 '+res.classes[5]+' · ошибок '+res.classes[6]].concat(res.bad_offsets_mb.length?['Нечитаемые блоки (МБ): '+res.bad_offsets_mb.slice(0,50).join(', ')]:[]), series: downsample(f.cols.filter(function(v){ return v!=null; }), 200) });
       if (S.auto.on && S.cat==='surface'){
         var total = res.classes.reduce(function(a,b){ return a+b; }, 0) || 1;
         var slowPct = res.classes[4]/total*100, maxSlow = profile().surfaceSlowPct!=null ? profile().surfaceSlowPct : 1;
@@ -351,7 +413,7 @@ var A = {
   sfStop:function(){ invoke('stop_surface_scan').catch(function(){}); },
   sfAuto:function(){
     var f=S.sf; f.res=null; f.err=null; f.running=false; f.disks=null;
-    invoke('get_disk_health').then(function(list){
+    invokeCached('get_disk_health', {}, 30000).then(function(list){
       if (!list.length) throw 'Физические диски не найдены';
       f.disks=list; f.sel=0; list.forEach(function(d,k){ if (d.is_system) f.sel=k; });
       f.range = profile().surfaceScanGb || 20; A.sfStart();
@@ -361,7 +423,7 @@ var A = {
   /* ---- автозапуск длинных тестов в автопрогоне ---- */
   drAuto:function(){
     S.dr.res=null; S.dr.err=null; S.dr.running=false; S.dr.disks=null;
-    invoke('get_disk_health').then(function(list){
+    invokeCached('get_disk_health', {}, 30000).then(function(list){
       if (!list.length) throw 'Физические диски не найдены';
       S.dr.disks = list; S.dr.sel = 0; list.forEach(function(d,k){ if (d.is_system) S.dr.sel = k; });
       S.dr.mode = 64; A.drStart();
@@ -369,14 +431,14 @@ var A = {
   },
   dwAuto:function(){
     S.dw.res=null; S.dw.err=null; S.dw.running=false; S.dw.vols=null;
-    invoke('list_fixed_volumes').then(function(list){
+    invokeCached('list_fixed_volumes', {}, 30000).then(function(list){
       if (!list.length) throw 'Тома с буквами не найдены';
       S.dw.vols = list; S.dw.sel = 0; list.forEach(function(v,k){ if (v.is_system) S.dw.sel = k; });
       S.dw.mb = profile().diskWriteMb || 512; A.dwStart();
     }).catch(function(err){ S.dw.err = typeof err==='string'?err:'Не удалось получить список томов'; render(); A.autoApply(null); });
   },
   memAuto:function(){
-    S.mem.size = profile().memTestMb || 1024; S.mem.passes = 1; S.mem.res=null; S.mem.err=null;
+    S.mem.size = profile().memTestMb || 4096; S.mem.passes = profile().memPasses || 4; S.mem.res=null; S.mem.err=null;
     A.memStart();
   },
   sensorsAuto:function(){
@@ -386,6 +448,7 @@ var A = {
     S.auto.probe = setTimeout(function(){
       if (!S.auto.on || S.auto.idx!==at) return;
       var temps = S.sensorHistory.concat(S.gpuHistory), max = profile().maxTempC || 95;
+      recordDetail('sens', { lines: temps.length ? ['Замеров: '+temps.length+', максимум '+Math.max.apply(null,temps).toFixed(0)+' °C, минимум '+Math.min.apply(null,temps).toFixed(0)+' °C'] : ['Температурные датчики недоступны'] });
       if (!temps.length) A.autoApply({ status:'na', note:'Температурные датчики недоступны (ACPI/nvidia-smi) — см. LibreHardwareMonitor' });
       else {
         var t = Math.max.apply(null, temps);
@@ -412,7 +475,7 @@ var A = {
   drLoad:function(){
     if (S.dr.disks) return;
     S.dr.disks = [];
-    invoke('get_disk_health').then(function(list){
+    invokeCached('get_disk_health', {}, 30000).then(function(list){
       S.dr.disks = list;
       var i = 0; list.forEach(function(d,k){ if (d.is_system) i = k; });
       S.dr.sel = i; render();
@@ -432,6 +495,7 @@ var A = {
     function fin(){ if(unlisten) unlisten(); S.dr.running=false; }
     invoke('run_disk_read_test', { diskNumber:d.number, sizeGb:d.size_gb, sampleMb:S.dr.mode }).then(function(r){
       fin(); S.dr.res=r; render();
+      recordDetail('diskread', { lines:['Чтение 24 участков диска: средняя '+r.avg_mbps.toFixed(0)+' МБ/с, мин '+r.min_mbps.toFixed(0)+', макс '+r.max_mbps.toFixed(0), 'Медленных блоков: '+r.slow_blocks+', ошибок чтения: '+r.errors+', прочитано '+r.read_mb+' МБ'+(r.stopped?' (остановлено)':'')], series: r.samples.map(Math.round) });
       if (S.auto.on && S.cat==='diskread'){
         var slowMax = profile().diskSlowBlocksMax!=null ? profile().diskSlowBlocksMax : 3;
         A.autoApply(r.stopped ? null
@@ -450,7 +514,7 @@ var A = {
   dwLoad:function(){
     if (S.dw.vols) return;
     S.dw.vols = [];
-    invoke('list_fixed_volumes').then(function(list){
+    invokeCached('list_fixed_volumes', {}, 30000).then(function(list){
       S.dw.vols = list; var i = 0; list.forEach(function(v,k){ if (v.is_system) i = k; });
       S.dw.sel = i; render();
     }).catch(function(err){ S.dw.err = typeof err==='string'?err:'Не удалось получить список томов'; render(); });
@@ -472,6 +536,7 @@ var A = {
     var sizeMb = d.mb===0 ? Math.max(128, Math.floor(v.free_gb*1024*0.85)) : d.mb;
     invoke('run_disk_write_test', { letter:v.letter, sizeMb:sizeMb }).then(function(r){
       fin(); d.res=r; render();
+      recordDetail('diskwrite', { lines:['Том '+r.letter+': файл '+r.size_mb+' МБ · запись средняя '+r.write_avg_mbps.toFixed(0)+' МБ/с (мин '+r.write_min_mbps.toFixed(0)+', макс '+r.write_max_mbps.toFixed(0)+') · чтение обратно '+r.read_mbps.toFixed(0)+' МБ/с','Медленных блоков: '+r.slow_blocks+', несовпадений данных: '+r.errors+(r.stopped?' (остановлено)':'')], series: downsample(r.write_samples, 200) });
       if (S.auto.on && S.cat==='diskwrite'){
         var slowMax = profile().diskSlowBlocksMax!=null ? profile().diskSlowBlocksMax : 3;
         A.autoApply(r.stopped ? null
@@ -501,6 +566,7 @@ var A = {
     function fin(){ if(unlisten) unlisten(); m.running=false; }
     invoke('run_memory_test', { sizeMb:m.size, passes:m.passes }).then(function(r){
       fin(); m.res=r; render();
+      recordDetail('mem', { lines:['Проверено '+r.tested_mb+' МБ, проходов '+r.passes+', время '+r.elapsed_secs+' с'+(r.capped?' (объём урезан до 75% свободной ОЗУ)':'')+(r.stopped?' (остановлено)':''),'Ошибок: '+r.errors].concat(r.first_errors) });
       if (S.auto.on && S.cat==='mem'){
         A.autoApply(r.stopped ? null
           : r.errors>0 ? { status:'fail', note:'Ошибок памяти: '+r.errors+' на '+r.tested_mb+' МБ — модуль или слот неисправны' }
@@ -580,6 +646,7 @@ var A = {
     S.verdict = null;
     fetchCategory(c.fetch).then(function(res){
       S.running=false; S.runLines=res.lines; S.verdict=res.verdict; render();
+      recordDetail(c.id, { lines: res.lines.slice(0,200), auto: res.verdict || null });
       if (S.auto.on && S.cat===c.id) A.autoApply(res.verdict);
     }).catch(function(err){
       S.running=false; S.runError = typeof err==='string' ? err : 'Ошибка получения данных';
@@ -672,6 +739,7 @@ var A = {
       if (S.auto.on && S.cat==='stress'){
         if (S.stressTempT){ clearInterval(S.stressTempT); S.stressTempT=null; }
         var temps = S.stressTemps||[], max = profile().maxTempC || 95, t = temps.length ? Math.max.apply(null, temps) : null;
+        recordDetail('stress', { lines:[res.threads+' потоков, '+S.stressDur+' с', temps.length ? 'Температура: макс '+Math.max.apply(null,temps).toFixed(0)+' °C, мин '+Math.min.apply(null,temps).toFixed(0)+' °C' : 'Температура недоступна'] });
         var base = res.threads+' потоков, '+S.stressDur+' с без зависания';
         A.autoApply(t!==null && t>=max ? { status:'fail', note:base+'; температура под нагрузкой '+t.toFixed(0)+' °C не ниже порога '+max+' °C' }
           : { status:'pass', note:base+(t!==null ? '; максимум '+t.toFixed(0)+' °C' : '; температура недоступна') });
@@ -686,7 +754,7 @@ var A = {
   drvStart:function(){
     S.drv = { step:'scan', scanLabel:'СКАНИРОВАНИЕ ОБОРУДОВАНИЯ', restore:true };
     render();
-    invoke('get_system_info').then(function(info){
+    invokeCached('get_system_info', {}, 600000).then(function(info){
       S.device = info; render();
       S.drv.scanLabel = 'ПРОВЕРКА БАЗЫ ДРАЙВЕРОВ'; render();
       return invoke('fetch_public_json', { publicUrl: MANIFEST_PUBLIC_URL }).catch(function(){
@@ -850,7 +918,11 @@ var A = {
       started_at: S.startedAt || new Date().toISOString(),
       finished_at: new Date().toISOString(),
       results: testable.map(function(c){
-        return { id:c.id, title:c.name, status: statusOf(c.id), comment: S.comments[c.id] || null };
+        var d = S.detail[c.id] || {}, a = d.auto || null;
+        return { id:c.id, title:c.name, status: statusOf(c.id), comment: S.comments[c.id] || null,
+          auto_status: a ? a.status : null, auto_note: a ? a.note : null,
+          override_reason: d.override ? d.override.reason : null,
+          details: (d.lines||[]).slice(0,200), in_profile: inProfile(c.id), finished_at: d.ts || null };
       })
     };
     var command = kind==='json' ? 'save_report_json' : 'save_report_txt';
@@ -927,7 +999,7 @@ function statusRu(st){ return st==='OK' ? 'работает' : st==='Error' ? '�
    профиля ({status:'pass'|'fail'|'na', note}) или null, если оценить нельзя. */
 function fetchCategory(kind){
   if (kind==='sys'){
-    return invoke('get_hardware_summary').then(function(hw){
+    return invokeCached('get_hardware_summary', {}, 60000).then(function(hw){
       S.hw = hw;
       var r = sysReport(hw);
       var hasExp = Object.keys(profile().expect||{}).length>0;
@@ -937,7 +1009,7 @@ function fetchCategory(kind){
     });
   }
   if (kind==='disk'){
-    return invoke('get_disk_health').then(function(list){
+    return invokeCached('get_disk_health', {}, 30000).then(function(list){
       var P = profile(), maxWear = P.diskMaxWearPct!=null ? P.diskMaxWearPct : 90, lines = [], bad = [];
       if (!list.length) return { lines:['Физические диски не найдены.'], verdict:{ status:'fail', note:'Диск не обнаружен' } };
       list.forEach(function(d){
@@ -1076,7 +1148,7 @@ function fetchCategory(kind){
 
 /* ---------- сайдбар ---------- */
 function renderNav(){
-  var active = { start:'start', drivers:'start', mb:'start', dash:'dash', test:'dash', sensors:'sensors', stress:'stress', report:'report' }[S.screen];
+  var active = { start:'start', drivers:'start', mb:'start', dash:'dash', test:'dash', sensors:'sensors', stress:'stress', report:'report', repdetail:'report' }[S.screen];
   var c = counts();
   var items = [
     { k:'start', label:'Режим', meta:'' },
@@ -1147,10 +1219,21 @@ function screenDash(){
 }
 
 /* Соответствие KeyboardEvent.code позициям клавиш в раскладке KEYROWS. */
+/* Цифровой блок (id клавиш 'n:<code>') и мультимедиа-клавиши для Fn-комбинаций ('m:<code>').
+   Сама клавиша Fn у большинства ноутбуков обрабатывается прошивкой и системе не видна —
+   реально проверяются её комбинации (Fn+F-клавиши дают громкость, воспроизведение и т. п.). */
+var NUMPAD = [
+  ['NumLock','Num',1,1],['NumpadDivide','/',1,2],['NumpadMultiply','*',1,3],['NumpadSubtract','−',1,4],
+  ['Numpad7','7',2,1],['Numpad8','8',2,2],['Numpad9','9',2,3],['NumpadAdd','+',2,4,2,1],
+  ['Numpad4','4',3,1],['Numpad5','5',3,2],['Numpad6','6',3,3],
+  ['Numpad1','1',4,1],['Numpad2','2',4,2],['Numpad3','3',4,3],['NumpadEnter','Enter',4,4,2,1],
+  ['Numpad0','0',5,1,1,2],['NumpadDecimal','.',5,3]
+];
+var MEDIA = [['AudioVolumeUp','Гром. +'],['AudioVolumeDown','Гром. −'],['AudioVolumeMute','Mute'],['MediaPlayPause','Play/Pause'],['MediaTrackNext','След.'],['MediaTrackPrevious','Пред.']];
 var CODEMAP = (function(){
   var named = { 'Esc':['Escape'],'Del':['Delete'],'`':['Backquote'],'-':['Minus'],'=':['Equal'],'Bksp':['Backspace'],'Tab':['Tab'],
     '[':['BracketLeft'],']':['BracketRight'],'\\':['Backslash'],'Caps':['CapsLock'],';':['Semicolon'],"'":['Quote'],
-    'Enter':['Enter','NumpadEnter'],',':['Comma'],'.':['Period'],'/':['Slash'],'Ctrl':['ControlLeft','ControlRight'],
+    'Enter':['Enter'],',':['Comma'],'.':['Period'],'/':['Slash'],'Ctrl':['ControlLeft','ControlRight'],
     'Win':['MetaLeft','MetaRight'],'Space':['Space'],'←':['ArrowLeft'],'↑':['ArrowUp'],'↓':['ArrowDown'],'→':['ArrowRight'] };
   var map = {};
   KEYROWS.forEach(function(row,ri){
@@ -1160,36 +1243,111 @@ var CODEMAP = (function(){
       else if (label==='Alt') codes = [ki===3 ? 'AltLeft' : 'AltRight'];
       else if (named[label]) codes = named[label];
       else if (/^F\d+$/.test(label)) codes = [label];
-      else if (/^\d$/.test(label)) codes = ['Digit'+label, 'Numpad'+label];
+      else if (/^\d$/.test(label)) codes = ['Digit'+label];
       else if (/^[A-Z]$/.test(label)) codes = ['Key'+label];
       else codes = [];
       codes.forEach(function(c){ map[c] = id; });
     });
   });
+  NUMPAD.forEach(function(k){ map[k[0]] = 'n:'+k[0]; });
+  MEDIA.forEach(function(k){ map[k[0]] = 'm:'+k[0]; });
   return map;
 })();
+
+/* Статистика по клавишам: число нажатий, автоповтор, дребезг (два нажатия быстрее 25 мс),
+   удержание/залипание (нажата дольше 3 с). */
+function kbStat(id){ return S.kstat[id] || (S.kstat[id] = { n:0, rep:0, chat:0, down:false, downAt:0, lastUp:0 }); }
+function kbIssues(){
+  var now = Date.now(), r = { chat:[], stuck:[], repeated:[] };
+  Object.keys(S.kstat).forEach(function(id){
+    var k = S.kstat[id];
+    if (k.chat>0) r.chat.push(id);
+    if (k.down && now-k.downAt>3000) r.stuck.push(id);
+    if (k.n>1) r.repeated.push(id);
+  });
+  return r;
+}
+function kbLabel(id){
+  if (id.indexOf('n:')===0){ var c=id.slice(2); var f=NUMPAD.filter(function(k){ return k[0]===c; })[0]; return 'Num '+(f?f[1]:c); }
+  if (id.indexOf('m:')===0){ var c2=id.slice(2); var f2=MEDIA.filter(function(k){ return k[0]===c2; })[0]; return f2?f2[1]:c2; }
+  var p = id.split(':'); return KEYROWS[p[0]] ? KEYROWS[p[0]][p[1]] : id;
+}
+function kbSummaryLines(){
+  var total = NUMPAD.length + MEDIA.length; KEYROWS.forEach(function(r){ total += r.length; });
+  var is = kbIssues(), lines = ['Нажато разных клавиш: '+Object.keys(S.keys).length+' из '+total];
+  if (is.chat.length) lines.push('Дребезг (двойное срабатывание): '+is.chat.map(kbLabel).join(', '));
+  if (is.stuck.length) lines.push('Залипание (нажата >3 с): '+is.stuck.map(kbLabel).join(', '));
+  var many = Object.keys(S.kstat).filter(function(id){ return S.kstat[id].rep>0; }).map(kbLabel);
+  if (many.length) lines.push('Автоповтор при удержании: '+many.join(', '));
+  if (S.lastUnknown) lines.push('Клавиша не в раскладке: '+S.lastUnknown);
+  return lines;
+}
+document.addEventListener('keyup', function(e){
+  if (S.screen!=='test' || cat().kind!=='keyboard') return;
+  var id = CODEMAP[e.code]; if (!id) return;
+  var k = kbStat(id); k.down = false; k.lastUp = Date.now();
+  render();
+});
+window.addEventListener('blur', function(){ Object.keys(S.kstat).forEach(function(id){ S.kstat[id].down = false; }); });
 document.addEventListener('keydown', function(e){
   if (S.screen!=='test' || cat().kind!=='keyboard') return;
   if (e.target && (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA')) return;
   e.preventDefault();
   var id = CODEMAP[e.code];
-  if (id && !S.keys[id]){ S.keys[id] = true; render(); }
-  else if (!id) { S.lastUnknown = e.code; }
+  if (!id){ S.lastUnknown = e.code; return; }
+  var k = kbStat(id), now = Date.now();
+  if (e.repeat){ k.rep++; return; }
+  k.n++;
+  if (k.n>1 && k.lastUp && now-k.lastUp<25) k.chat++;
+  k.down = true; k.downAt = now;
+  S.keys[id] = true;
+  // пока есть нажатые клавиши, раз в 0,4 с обновляем признак залипания
+  if (!S.kbT) S.kbT = setInterval(function(){
+    var any = Object.keys(S.kstat).some(function(i){ return S.kstat[i].down; });
+    if (S.screen==='test' && cat().kind==='keyboard' && any) render(); else if (!any){ clearInterval(S.kbT); S.kbT = null; }
+  }, 400);
+  render();
 });
 
+function keyCls(id){
+  var k = S.kstat[id], now = Date.now(), c = 'key';
+  if (S.keys[id]) c += ' on';
+  if (k){
+    if (k.down) c += (now-k.downAt>3000 ? ' stuck' : ' hold');
+    if (k.chat>0) c += ' chat';
+  }
+  return c;
+}
+function keyBadge(id){ var k = S.kstat[id]; return k && k.n>1 ? '<b class="kcnt">×'+k.n+'</b>' : ''; }
 function fieldKeyboard(){
-  var pressed = Object.keys(S.keys).length, total = 0;
+  var pressed = Object.keys(S.keys).length, total = NUMPAD.length + MEDIA.length;
   KEYROWS.forEach(function(r){ total += r.length; });
+  var is = kbIssues();
+  var main = '<div class="kbrows">'+ KEYROWS.map(function(row,ri){
+      return '<div class="kbrow">'+ row.map(function(label,ki){
+        var id = ri+':'+ki;
+        return '<div class="'+keyCls(id)+'" style="flex:'+(WIDE[label]||1)+' 1 0" onclick="echips.press(\''+id+'\')">'+esc(label)+keyBadge(id)+'</div>';
+      }).join('') +'</div>';
+    }).join('') +'</div>';
+  var num = '<div class="numpad">'+ NUMPAD.map(function(k){
+      var id = 'n:'+k[0];
+      return '<div class="'+keyCls(id)+'" style="grid-row:'+k[2]+(k[4]?' / span '+k[4]:'')+';grid-column:'+k[3]+(k[5]?' / span '+k[5]:'')+'" onclick="echips.press(\''+id+'\')">'+esc(k[1])+keyBadge(id)+'</div>';
+    }).join('') +'</div>';
+  var media = '<div class="kbmedia"><span class="kbnote">Fn-комбинации (мультимедиа):</span>'+ MEDIA.map(function(k){
+      var id = 'm:'+k[0];
+      return '<div class="'+keyCls(id)+' mk" onclick="echips.press(\''+id+'\')">'+esc(k[1])+keyBadge(id)+'</div>';
+    }).join('') +'</div>';
+  var st = [];
+  if (is.chat.length) st.push('<span style="color:#F0C24B">дребезг: '+esc(is.chat.map(kbLabel).join(', '))+'</span>');
+  if (is.stuck.length) st.push('<span style="color:var(--err)">залипание: '+esc(is.stuck.map(kbLabel).join(', '))+'</span>');
+  var rep = Object.keys(S.kstat).filter(function(id){ return S.kstat[id].rep>0; }).length;
   return '<div class="kbwrap">'+
     '<div class="kbmeta"><span>RAW INPUT · нажмите каждую клавишу на ноутбуке</span>'+
     '<span>нажато '+pressed+' из '+total+' · rollover '+(pressed>3?'n-key ok':'—')+'</span></div>'+
-    '<div class="kbrows">'+ KEYROWS.map(function(row,ri){
-      return '<div class="kbrow">'+ row.map(function(label,ki){
-        var id = ri+':'+ki;
-        return '<div class="key'+(S.keys[id]?' on':'')+'" style="flex:'+(WIDE[label]||1)+' 1 0" onclick="echips.press(\''+id+'\')">'+esc(label)+'</div>';
-      }).join('') +'</div>';
-    }).join('') +'</div>'+
-    '<div class="kbnote">Клавиши подсвечиваются при нажатии на самой клавиатуре. Fn обычно не виден системе — отметьте её кликом мыши.'+(S.lastUnknown?' Не найдена в раскладке: '+esc(S.lastUnknown)+'.':'')+'</div></div>';
+    '<div class="kbboth">'+main+num+'</div>'+media+
+    '<div class="kbnote">'+(st.length ? st.join(' · ')+' · ' : '')+'на клавише ×N — число нажатий (видно повторные нажатия); жёлтая рамка — дребезг (два срабатывания быстрее 25 мс); красная — клавиша нажата дольше 3 с (залипание). '+
+    'Автоповтор при удержании: '+rep+' клавиш. Сама клавиша Fn системе не видна — проверяйте её комбинации (ряд выше) или отметьте кликом.'+(S.lastUnknown?' Не найдена в раскладке: '+esc(S.lastUnknown)+'.':'')+
+    ' <button class="btn-link" onclick="echips.kbReset()">Сбросить счётчики</button></div></div>';
 }
 function paintFill(){
   var o = document.getElementById('fill-overlay'); if(!o) return;
@@ -1308,6 +1466,17 @@ function judgeSmart(list){
   if (caution.length && cautionFail) return { status:'fail', note:'SMART — тревога. '+caution.join('; ') };
   if (!have) return null;
   return { status:'pass', note:'SMART без предупреждений ('+have+' диск.)'+(caution.length?'; замечания: '+caution.join('; '):'') };
+}
+function smartLines(list){
+  var out = [];
+  list.forEach(function(d){
+    out.push(d.name+' · '+d.size_gb+' ГБ · '+(d.bus||'')+(d.is_system?' · системный':'')+' · '+SMART_LABEL[d.status]+(d.health_pct!=null?' · ресурс '+d.health_pct.toFixed(0)+'%':''));
+    out.push('    температура '+(d.temp_c!=null?d.temp_c.toFixed(0)+' °C':'—')+' · наработка '+(d.power_on_hours!=null?d.power_on_hours+' ч':'—')+' · включений '+(d.power_cycles!=null?d.power_cycles:'—')+' · записано '+(d.written_gb!=null?d.written_gb.toFixed(0)+' ГБ':'—'));
+    d.attrs.forEach(function(a){ out.push('    '+String(a.id).padStart(3,' ')+' '+a.name+' · тек '+a.current+' худш '+a.worst+' порог '+a.threshold+' raw '+a.raw+(a.status!=='ok'?' ['+a.status+']':'')); });
+    if (d.nvme){ var h=d.nvme; out.push('    NVMe: резерв '+h.available_spare+'% (порог '+h.spare_threshold+'%), износ '+h.percentage_used+'%, ошибки целостности '+h.media_errors+', небезопасных выключений '+h.unsafe_shutdowns); }
+    d.notes.forEach(function(n){ out.push('    ! '+n); });
+  });
+  return out;
 }
 function fmtRaw(a){ var v=a.raw; return v.toString(16).toUpperCase().padStart(12,'0')+' · '+(v<=9007199254740991?String(v):'—'); }
 function fieldSmart(){
@@ -1619,6 +1788,7 @@ function screenTest(){
     '<div class="testhead"><div><h2>'+c.name+'</h2><div class="hint">'+c.method+'</div></div>'+
     '<div class="base">'+c.tag+' · '+c.impl+'</div></div>'+
     '<div class="field">'+field+'</div>'+
+    (S.markErr && S.markErr.id===c.id ? '<div class="markerr" id="mark-err">'+esc(S.markErr.text)+'</div>' : '')+
     '<div class="verdict">'+
       '<input placeholder="Комментарий техника — попадёт в отчёт" value="'+esc(S.comments[c.id]||'')+'" oninput="echips.comment(this.value)">'+
       '<button class="btn btn-ghost" onclick="echips.mark(\'na\')" title="Такого узла нет в этой модели (например, тачпад на настольном ПК)">Не применимо</button>'+
@@ -1933,17 +2103,17 @@ function screenReport(){
     '<div class="repstats">'+
       '<div class="repstat ok"><div class="k">пройдено</div><div class="v ok">'+c.pass+'</div></div>'+
       '<div class="repstat'+(c.fail?' err':'')+'"><div class="k">ошибки</div><div class="v '+(c.fail?'err':'dim')+'">'+c.fail+'</div></div>'+
-      '<div class="repstat"><div class="k">не проверено</div><div class="v dim">'+(CATS.length-c.checked)+'</div></div>'+
+      '<div class="repstat"><div class="k">не проверено</div><div class="v dim">'+(profile().tests||[]).filter(function(id){ return statusOf(id)==='idle'; }).length+'</div></div>'+
       '<div class="repstat"><div class="k">вердикт</div><div class="v '+(c.fail?'err':full?'ok':'dim')+'" style="font-size:'+(verdict.length>8?'19px':'25px')+'">'+verdict+'</div></div>'+
     '</div>'+
     '<div class="table"><div class="th"><span class="c-num">№</span><span class="c-name">Компонент</span>'+
       '<span class="c-impl">Метод</span><span class="c-st">Статус</span><span class="c-cm">Комментарий техника</span></div>'+
       '<div class="tb">'+ CATS.map(function(x,i){
-        var st = statusOf(x.id);
+        var st = statusOf(x.id), out = st==='idle' && !inProfile(x.id);
         var cm = S.comments[x.id] || (x.id==='sens' && S.snapshot ? 'приложен снимок датчиков' : '—');
-        return '<div class="tr"><span class="c-num">'+String(i+1).padStart(2,'0')+'</span>'+
+        return '<div class="tr clickable" onclick="echips.repOpen(\''+x.id+'\')" title="Открыть подробности"><span class="c-num">'+String(i+1).padStart(2,'0')+'</span>'+
           '<span class="c-name">'+x.name+'</span><span class="c-impl">'+x.impl+'</span>'+
-          '<span class="c-st"><span class="pill '+STATUS[st].cls+'"><i></i>'+STATUS[st].label+'</span></span>'+
+          '<span class="c-st"><span class="pill '+STATUS[st].cls+'"><i></i>'+(out?'вне профиля':STATUS[st].label)+'</span></span>'+
           '<span class="c-cm">'+esc(cm)+'</span></div>';
       }).join('') +'</div></div>'+
     '<div class="footrow"><span class="mono">'+esc(deviceLabel())+' · SN '+esc(deviceSn())+'</span>'+
@@ -1953,6 +2123,32 @@ function screenReport(){
 }
 
 /* ---------- рендер ---------- */
+/* ---------- подробности теста из отчёта ---------- */
+function screenRepDetail(){
+  var id = S.repId, c = null;
+  CATS.forEach(function(x){ if (x.id===id) c = x; });
+  if (!c) return screenReport();
+  var d = S.detail[id] || {}, st = statusOf(id), out = st==='idle' && !inProfile(id);
+  var a = d.auto, meta = [];
+  if (d.ts) meta.push('время: '+new Date(d.ts).toLocaleString('ru-RU'));
+  if (a && a.status) meta.push('автооценка: '+({pass:'пройден',fail:'не пройден',na:'не применимо'}[a.status]||a.status)+' — '+esc(a.note));
+  if (d.override) meta.push('<span style="color:var(--err)">вердикт изменён техником ('+({pass:'пройден',fail:'не пройден',na:'не применимо'}[d.override.to]||d.override.to)+'): '+esc(d.override.reason)+'</span>');
+  var lines = (d.lines||[]);
+  return '<div class="pane">'+
+    '<div class="crumbs"><button class="btn-link" onclick="echips.go(\'report\')">← к отчёту</button><span class="idx">подробности теста</span></div>'+
+    '<div class="testhead"><div><h2>'+esc(c.name)+'</h2><div class="hint">'+esc(c.method)+'</div></div>'+
+    '<div class="base"><span class="pill '+STATUS[st].cls+'"><i></i>'+(out?'вне профиля':STATUS[st].label)+'</span></div></div>'+
+    '<div class="field">'+
+      (S.comments[id] ? '<div class="kbnote" style="margin-bottom:10px;color:var(--text-2)">Комментарий: '+esc(S.comments[id])+'</div>' : '')+
+      (meta.length ? '<div class="kbnote" style="margin-bottom:10px">'+meta.join('<br>')+'</div>' : '')+
+      (d.series && d.series.length ? sparkBars(d.series)+'<div class="kbnote" style="margin-top:6px">график скорости по ходу теста, МБ/с</div>' : '')+
+      (lines.length ? '<div class="log" style="margin-top:12px">'+lines.map(function(t,i){ return '<div><span class="t">'+String(i+1).padStart(2,'0')+'</span><span style="white-space:pre-wrap">'+esc(t)+'</span></div>'; }).join('')+'</div>'
+        : '<div class="idle" style="margin-top:8px"><span class="t">--</span><span>'+(out?'Тест не входит в профиль этой модели и в прогоне не участвовал.':'Подробных данных нет — тест выполнялся вручную, результат и комментарий указаны выше.')+'</span></div>')+
+    '</div>'+
+    '<div class="verdict"><button class="btn btn-ghost" onclick="echips.go(\'report\')">К отчёту</button>'+
+      '<button class="btn btn-primary" onclick="echips.openCat(\''+id+'\')">Открыть тест</button></div></div>';
+}
+
 function render(){
   renderNav();
   var host = document.getElementById('screen');
@@ -1965,6 +2161,7 @@ function render(){
     : S.screen==='mb' ? screenMb()
     : S.screen==='dash' ? screenDash()
     : S.screen==='test' ? screenTest()
+    : S.screen==='repdetail' ? screenRepDetail()
     : S.screen==='sensors' ? screenSensors()
     : S.screen==='stress' ? screenStress() : screenReport();
   if (isNewView && host.firstElementChild) host.firstElementChild.classList.add('enter');

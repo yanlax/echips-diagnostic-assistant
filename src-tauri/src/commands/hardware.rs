@@ -32,7 +32,7 @@ fn parse_pnp_lines(raw: &str) -> Vec<PnpDevice> {
         .collect()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_usb_devices() -> Result<Vec<PnpDevice>, String> {
     #[cfg(target_os = "windows")]
     {
@@ -48,7 +48,7 @@ pub fn list_usb_devices() -> Result<Vec<PnpDevice>, String> {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_bluetooth_devices() -> Result<Vec<PnpDevice>, String> {
     #[cfg(target_os = "windows")]
     {
@@ -71,7 +71,7 @@ pub struct NetworkAdapter {
     pub mac: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_wifi_adapters() -> Result<Vec<NetworkAdapter>, String> {
     #[cfg(target_os = "windows")]
     {
@@ -107,7 +107,7 @@ fn parse_adapters(raw: &str) -> Vec<NetworkAdapter> {
 /// то же, что в дизайн-прототипе ("скан сетей"), без реального замера
 /// скорости (нужна тестовая точка доступа и известный SSID, это конфигурация
 /// конкретного сервисного центра, а не то, что можно захардкодить).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn scan_wifi_networks() -> Result<Vec<String>, String> {
     #[cfg(target_os = "windows")]
     {
@@ -127,7 +127,7 @@ pub fn scan_wifi_networks() -> Result<Vec<String>, String> {
 /// Biometric в PnP). Пробную регистрацию/сравнение штатными средствами без
 /// диалогов Windows Hello не вызвать — это техник делает вручную и отмечает
 /// результат сам.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_fingerprint_sensor() -> Result<Option<String>, String> {
     #[cfg(target_os = "windows")]
     {

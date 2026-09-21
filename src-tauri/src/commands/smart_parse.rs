@@ -33,6 +33,9 @@ pub struct NvmeHealth {
     pub error_log_entries: u64,
 }
 
+/// Порог тревоги для UltraDMA CRC Error Count (единичные ошибки не считаются).
+pub const CRC_WARN_THRESHOLD: u64 = 20;
+
 pub fn hex_decode(s: &str) -> Vec<u8> {
     let s = s.trim();
     let b = s.as_bytes();
@@ -185,8 +188,13 @@ pub fn attr_status(a: &SmartAttr) -> &'static str {
     if a.threshold > 0 && a.current <= a.threshold {
         return "bad";
     }
-    let counter_ids: [u8; 9] = [5, 10, 183, 184, 187, 196, 197, 198, 199];
+    let counter_ids: [u8; 8] = [5, 10, 183, 184, 187, 196, 197, 198];
     if counter_ids.contains(&a.id) && (a.raw & 0xFFFF_FFFF) > 0 {
+        return "warn";
+    }
+    // Ошибки CRC интерфейса (UDMA) чаще связаны с контактом/шлейфом, а не с
+    // износом носителя: единичные значения — норма, тревога только от порога.
+    if a.id == 199 && (a.raw & 0xFFFF_FFFF) >= CRC_WARN_THRESHOLD {
         return "warn";
     }
     "ok"
@@ -308,6 +316,14 @@ mod tests {
         assert_eq!(ssd_life_percent(&attrs), Some(88.0));
         assert_eq!(ata_overall(&attrs, Some(false), Some(88.0)), "caution");
         assert_eq!(ata_overall(&attrs, Some(true), Some(88.0)), "bad");
+    }
+
+    #[test]
+    fn crc_errors_only_warn_from_threshold() {
+        let one = block(&[(199, 100, 100, [1, 0, 0, 0, 0, 0])]);
+        assert_eq!(parse_ata(&one, &[])[0].status, "ok");
+        let many = block(&[(199, 100, 100, [25, 0, 0, 0, 0, 0])]);
+        assert_eq!(parse_ata(&many, &[])[0].status, "warn");
     }
 
     #[test]

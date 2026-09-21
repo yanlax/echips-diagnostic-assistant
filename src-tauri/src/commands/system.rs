@@ -16,7 +16,7 @@ pub struct SystemInfo {
     pub ram_total_gb: f64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_system_info() -> Result<SystemInfo, String> {
     #[cfg(target_os = "windows")]
     {
@@ -46,7 +46,7 @@ pub fn get_system_info() -> Result<SystemInfo, String> {
 
 /// Список устройств с ошибкой в диспетчере устройств (Status = 'Error') —
 /// быстрый индикатор явных проблем при старте диагностики.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_problem_devices() -> Result<Vec<String>, String> {
     #[cfg(target_os = "windows")]
     {
@@ -73,7 +73,7 @@ pub struct ProblemDevice {
 
 /// Устройства с ошибкой драйвера вместе с PnP-классом — по классу экран
 /// универсального набора подсвечивает подходящие категории драйверов.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_problem_devices() -> Result<Vec<ProblemDevice>, String> {
     #[cfg(target_os = "windows")]
     {

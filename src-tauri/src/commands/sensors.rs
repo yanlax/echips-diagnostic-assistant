@@ -51,7 +51,7 @@ fn read_nvidia() -> Option<GpuSensor> {
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_thermal_reading() -> Result<SensorReading, String> {
     #[cfg(target_os = "windows")]
     {

@@ -1,6 +1,6 @@
 // Тест памяти (аналог TestMem5, упрощённый): выделяем блок ОЗУ, многопоточно
 // пишем и проверяем набор паттернов (нули/единицы, шахматка, бегущая единица,
-// адрес-как-данные, псевдослучайные). Блок не больше 60% свободной памяти —
+// адрес-как-данные, псевдослучайные). Блок не больше 75% свободной памяти —
 // иначе система начнёт свопиться и тест ничего не покажет. Из пользовательского
 // процесса недоступна вся физическая память, поэтому это быстрая проверка на
 // явный брак, а не полноценная замена аппаратным тестерам.
@@ -76,7 +76,7 @@ pub async fn run_memory_test(window: Window, size_mb: u64, passes: u32) -> Resul
     res
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn stop_memory_test() {
     STOP.store(true, Ordering::SeqCst);
 }
@@ -93,7 +93,7 @@ fn run(window: Window, size_mb: u64, passes: u32) -> Result<MemResult, String> {
     let mut want = size_mb.clamp(64, 16 * 1024);
     let mut capped = false;
     if let Some(free) = free_mb() {
-        let cap = (free as f64 * 0.6) as u64;
+        let cap = (free as f64 * 0.75) as u64;
         if cap >= 64 && want > cap {
             want = cap;
             capped = true;
@@ -105,7 +105,8 @@ fn run(window: Window, size_mb: u64, passes: u32) -> Result<MemResult, String> {
         .map_err(|_| format!("Не удалось выделить {want} МБ — недостаточно свободной памяти"))?;
     mem.resize(len, 0);
 
-    let threads = num_cpus::get().max(1);
+    // одно ядро оставляем интерфейсу — иначе на слабых процессорах окно замирает
+    let threads = num_cpus::get().saturating_sub(1).max(1);
     let chunk = (len + threads - 1) / threads;
     let errors = AtomicU64::new(0);
     let first: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -128,6 +129,7 @@ fn run(window: Window, size_mb: u64, passes: u32) -> Result<MemResult, String> {
                         let errors = &errors;
                         let first = &first;
                         s.spawn(move || {
+                            crate::sysutil::lower_thread_priority();
                             if !verify {
                                 for (i, v) in part.iter_mut().enumerate() {
                                     unsafe { std::ptr::write_volatile(v, expected(p, base + i as u64, pass)) };

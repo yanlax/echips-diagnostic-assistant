@@ -18,6 +18,8 @@ pub struct SmartDisk {
     pub bus: String,
     pub media: String,
     pub size_gb: f64,
+    /// Системный диск (с ним связан том C:)
+    pub is_system: bool,
     /// "ata" | "nvme" | "basic" — откуда получены данные
     pub kind: String,
     /// "good" | "caution" | "bad" | "unknown"
@@ -52,6 +54,8 @@ struct RawDisk {
     #[serde(default)]
     size_gb: f64,
     #[serde(default)]
+    is_system: bool,
+    #[serde(default)]
     ata_hex: String,
     #[serde(default)]
     thr_hex: String,
@@ -65,11 +69,13 @@ struct RawDisk {
     rel_hours: Option<u64>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_smart_report() -> Result<Vec<SmartDisk>, String> {
     #[cfg(target_os = "windows")]
     {
         let script = r#"
+            $sysDisk = $null
+            try { $sysDisk = (Get-Partition -DriveLetter C -ErrorAction Stop).DiskNumber } catch {}
             $phys = @{}
             Get-PhysicalDisk -ErrorAction SilentlyContinue | ForEach-Object { $phys[[int]$_.DeviceId] = $_ }
             $smart = @(Get-CimInstance -Namespace root/wmi -ClassName MSStorageDriver_ATAPISmartData -ErrorAction SilentlyContinue)
@@ -94,6 +100,7 @@ pub fn get_smart_report() -> Result<Vec<SmartDisk>, String> {
                     bus = if ($ph) { [string]$ph.BusType } else { [string]$dd.InterfaceType }
                     media = if ($ph) { [string]$ph.MediaType } else { '' }
                     size_gb = [math]::Round($dd.Size / 1GB, 0)
+                    is_system = ($null -ne $sysDisk -and [int]$dd.Index -eq [int]$sysDisk)
                     ata_hex = if ($s) { ToHex $s.VendorSpecific } else { '' }
                     thr_hex = if ($t) { ToHex $t.VendorSpecific } else { '' }
                     predict_failure = if ($p) { [bool]$p.PredictFailure } else { $null }
@@ -123,6 +130,7 @@ fn build_disk(r: RawDisk) -> SmartDisk {
         bus: r.bus.clone(),
         media: r.media.clone(),
         size_gb: r.size_gb,
+        is_system: r.is_system,
         status: "unknown".into(),
         ..Default::default()
     };

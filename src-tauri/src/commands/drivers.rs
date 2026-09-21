@@ -43,7 +43,7 @@ fn normalize_code(value: &str) -> String {
     value.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_uppercase()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn find_by_name(manifest: serde_json::Value, manufacturer: String, model: String) -> Option<(String, ManifestEntry)> {
     let haystack = format!("{manufacturer} {model}").to_lowercase();
     let obj = manifest.as_object()?;
@@ -61,7 +61,7 @@ pub fn find_by_name(manifest: serde_json::Value, manufacturer: String, model: St
     None
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn find_by_serial_prefix(manifest: serde_json::Value, serial: String) -> Option<(String, ManifestEntry)> {
     let norm_serial = normalize_code(&serial);
     if norm_serial.is_empty() {
@@ -135,7 +135,7 @@ fn manifest_cache_path() -> std::path::PathBuf {
     app_data_dir().join("manifest_cache.json")
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn cache_manifest(manifest: serde_json::Value) -> Result<(), String> {
     let path = manifest_cache_path();
     if let Some(parent) = path.parent() {
@@ -144,7 +144,7 @@ pub fn cache_manifest(manifest: serde_json::Value) -> Result<(), String> {
     std::fs::write(&path, manifest.to_string()).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn load_cached_manifest() -> Result<serde_json::Value, String> {
     let path = manifest_cache_path();
     let content = std::fs::read_to_string(&path)
@@ -152,7 +152,7 @@ pub fn load_cached_manifest() -> Result<serde_json::Value, String> {
     serde_json::from_str(&content).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_restore_point() -> Result<(), String> {
     let (stdout, ok) = run_ps_with_status(
         "Checkpoint-Computer -Description 'Echips Hardware Check' -RestorePointType 'DEVICE_DRIVER_INSTALL'",
@@ -343,7 +343,7 @@ fn extract_zip(zip_path: &std::path::Path, extract_to: &std::path::Path) -> Resu
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn restart_system() {
     let mut cmd = Command::new("shutdown");
     cmd.args(["/r", "/t", "5"]);
@@ -352,7 +352,7 @@ pub fn restart_system() {
     let _ = cmd.spawn();
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn open_log_folder() -> Result<(), String> {
     let dir = log_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("Не удалось создать папку с логами ({}): {e}", dir.display()))?;

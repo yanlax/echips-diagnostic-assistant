@@ -10,6 +10,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::system::get_system_info,
             commands::summary::get_hardware_summary,
+            commands::activation::get_activation_status,
+            commands::activation::run_activation_step,
+            commands::activation::open_activation_settings,
             commands::storage::get_disk_health,
             commands::smart::get_smart_report,
             commands::peripherals::list_lan_adapters,

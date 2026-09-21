@@ -494,3 +494,10 @@ h1.title{font-family:var(--grotesk);font-size:27px;font-weight:600;color:var(--t
 .tr.clickable:hover{background:var(--glass)}
 .markerr{margin-top:10px;padding:10px 14px;border-radius:9px;background:rgba(226,87,76,.10);border:1px solid rgba(226,87,76,.40);color:var(--err);font-size:12.5px;line-height:1.45}
 .winbtn svg path{stroke:currentColor;stroke-width:1.2}
+
+/* ---------- активация Windows и рекомендации журнала сбоев ---------- */
+.actpanel{margin-top:12px;padding:14px;border-radius:11px;background:var(--glass);border:1px solid var(--line)}
+.actconfirm{padding:12px 14px;border-radius:9px;background:var(--accent-soft);border:1px solid var(--accent-line);font-size:13px;color:var(--text-2)}
+.keyinput{flex:1;min-width:0;padding:11px 14px;border-radius:10px;background:var(--glass);border:1px solid rgba(255,255,255,.09);color:var(--text);font-family:var(--mono);font-size:13px;letter-spacing:.06em;outline:none}
+.keyinput:focus{border-color:var(--accent-line)}
+.recbox{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}

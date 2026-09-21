@@ -13,3 +13,5 @@ pub mod storage;
 pub mod peripherals;
 pub mod smart;
 pub mod smart_parse;
+pub mod crash_logic;
+pub mod activation;

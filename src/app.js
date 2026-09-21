@@ -15,6 +15,7 @@ var getCurrentWindow = window.__TAURI__.window.getCurrentWindow;
 
 var CATS = [
   { id:'sys', tag:'SYS', name:'Системная информация', method:'Процессор, ОЗУ, диски, видеокарта, плата, BIOS + сверка с профилем модели', impl:'реальные данные', kind:'runner', fetch:'sys' },
+  { id:'winact', tag:'WIN', name:'Активация Windows', method:'Статус лицензии и канал, ключ OEM в BIOS; устранение: онлайн-активация, ключ OEM, служба, время', impl:'реальные данные', kind:'runner', fetch:'winact' },
   { id:'disk', group:'disk', sub:'Здоровье', tag:'HDD', name:'Диск: здоровье', method:'Состояние, износ, температура и ошибки (Get-PhysicalDisk, счётчики надёжности)', impl:'реальные данные', kind:'runner', fetch:'disk' },
   { id:'smart', group:'disk', sub:'SMART', tag:'SMART', name:'Диск: SMART', method:'Атрибуты SMART (SATA) и лог здоровья NVMe: износ, температура, ошибки — как в CrystalDiskInfo', impl:'реальные данные', kind:'smart' },
   { id:'crash', tag:'BSOD', name:'Журнал сбоев', method:'Синие экраны и внезапные перезагрузки: события Windows + minidump', impl:'реальные данные', kind:'runner', fetch:'crash' },
@@ -103,7 +104,7 @@ var S = {
   sensorPoll:null, sensorReading:null, sensorHistory:[], gpuHistory:[],
   stressOn:false, stressT:0, stressLoad:'CPU', stressDur:300, stressResult:null,
   snapshot:false, exported:null,
-  hw:null, verdict:null, detail:{}, kstat:{}, repId:null, markErr:null, br:{ info:null, loading:false }, camClip:null,
+  hw:null, verdict:null, runActions:[], act:{ confirm:null, busy:false, msg:'', err:'', keyOpen:false, key:'' }, actRaw:null, detail:{}, kstat:{}, repId:null, markErr:null, br:{ info:null, loading:false }, camClip:null,
   rm:{ drives:null, timer:null, running:null, log:[], err:null, size:64 },
   dr:{ disks:null, sel:0, mode:64, running:false, pct:0, mbps:0, res:null, err:null },
   sm:{ disks:null, sel:0, err:null, loading:false },
@@ -224,7 +225,7 @@ var A = {
     if (S.mem.running) invoke('stop_memory_test').catch(function(){});
     if (document.getElementById('fill-overlay')) A.fillClose();
     if (S.auto.on && screen!=='test' && screen!=='report' && screen!=='sensors' && screen!=='stress') A.autoOff();
-    S.screen=screen; if(id) S.cat=id; S.running=false; S.runLines=[]; S.runError=null; S.verdict=null; S.exported=null; S.tone=null;
+    S.screen=screen; if(id) S.cat=id; S.running=false; S.runLines=[]; S.runError=null; S.verdict=null; S.runActions=[]; S.act={ confirm:null, busy:false, msg:'', err:'', keyOpen:false, key:'' }; S.exported=null; S.tone=null;
     if(screen==='drivers'){ A.drvStart(); }
     if(screen==='mb'){ A.mbReset(); }
     if(screen==='sensors'){ A.sensorsStart(); }
@@ -338,6 +339,27 @@ var A = {
     }
     a.msg=(v.status==='na'?'Не применимо: ':'Пройден: ')+v.note+' · переход к следующему…'; a.cls='ok'; render();
     a.timer = setTimeout(function(){ if (S.auto.on && S.auto.idx===at) A.autoNext(); }, 1800);
+  },
+
+  /* ---- активация Windows: устранение (каждый шаг — с подтверждением) ---- */
+  actAsk:function(step){ S.act.confirm = step; S.act.msg=''; S.act.err=''; render(); },
+  actCancel:function(){ S.act.confirm = null; render(); },
+  actKeyToggle:function(){ S.act.keyOpen = !S.act.keyOpen; render(); },
+  actKey:function(v){ S.act.key = v; },
+  actOpen:function(){ invoke('open_activation_settings').catch(function(){}); },
+  actRun:function(){
+    var step = S.act.confirm; if (!step || S.act.busy) return;
+    S.act.busy = true; S.act.err=''; render();
+    invoke('run_activation_step', { step:step, key: step==='install_key' ? S.act.key : null }).then(function(r){
+      S.act.busy = false; S.act.confirm = null; S.act.msg = r; S.act.key = '';
+      A.run();   // повторная проверка статуса; в автопрогоне при успехе шаг завершится сам
+    }).catch(function(err){
+      var t = typeof err==='string' ? err : 'Не удалось выполнить шаг';
+      var m = t.match(/0x[0-9A-Fa-f]{8}/);
+      S.act.busy = false; S.act.confirm = null;
+      S.act.err = t + (m && ACT_ERRORS[m[0].toUpperCase().replace('0X','0X')] ? ' — '+ACT_ERRORS[m[0].toUpperCase()] : '');
+      render();
+    });
   },
 
   /* ---- SMART ---- */
@@ -643,7 +665,7 @@ var A = {
     S.running = true; S.runLines=[]; S.runError=null; render();
     S.verdict = null;
     fetchCategory(c.fetch).then(function(res){
-      S.running=false; S.runLines=res.lines; S.verdict=res.verdict; render();
+      S.running=false; S.runLines=res.lines; S.verdict=res.verdict; S.runActions=res.actions||[]; render();
       recordDetail(c.id, { lines: res.lines.slice(0,200), auto: res.verdict || null });
       if (S.auto.on && S.cat===c.id) A.autoApply(res.verdict);
     }).catch(function(err){
@@ -987,6 +1009,13 @@ function sysReport(hw){
   return { lines:lines, bad:bad };
 }
 
+var ACT_ERRORS = {
+  '0XC004F074':'не найден сервер KMS (корпоративная активация)', '0XC004F050':'ключ недействителен для этой редакции Windows',
+  '0XC004C003':'ключ заблокирован или недействителен', '0XC004F034':'лицензия не найдена',
+  '0X8007232B':'не найдено DNS-имя сервера KMS', '0X80072EE7':'нет доступа к интернету/DNS', '0XC004F009':'льготный период истёк',
+  '0XC004F213':'в BIOS не найден ключ для этой машины (материнская плата заменена)', '0XC004C008':'ключ уже использован на другом количестве машин',
+  '0XC004F014':'ключ не подходит для этой версии', '0XC004E016':'ключ не подходит для этой версии'
+};
 /* Статус PnP: неисправность — только Error/Degraded; Unknown бывает у составных
    устройств и корневых хабов без драйвера-фильтра и ошибкой не является. */
 function isBadStatus(d){ return d.status==='Error' || d.status==='Degraded'; }
@@ -1028,26 +1057,62 @@ function fetchCategory(kind){
       return { lines:lines, verdict: bad.length ? { status:'fail', note:bad.join('; ') } : { status:'pass', note:'Диски в порядке ('+list.length+' шт.)' } };
     });
   }
+  if (kind==='winact'){
+    return invoke('get_activation_status').then(function(a){
+      S.actRaw = a;
+      var LS = { 0:'нет лицензии (не активирована)', 1:'лицензирована (активирована)', 2:'льготный период (OOB)', 3:'льготный период (OOT)', 4:'льготный период (не подлинная копия)', 5:'режим уведомлений (не активирована)', 6:'расширенный льготный период' };
+      var lines = ['Windows: '+(a.os_caption||'—')+' · сборка '+(a.os_build||'—')];
+      if (a.found){
+        lines.push('Продукт: '+a.name);
+        lines.push('Статус лицензии: '+(LS[a.license_status]!==undefined ? LS[a.license_status] : a.license_status));
+        lines.push('Канал: '+(a.channel||'—')+' · ключ …'+a.partial_key);
+        if (a.grace_minutes>0) lines.push('Осталось льготного периода: '+(a.grace_minutes/1440).toFixed(1)+' дн.');
+        if (a.kms_machine) lines.push('Сервер KMS: '+a.kms_machine);
+        if (a.reason && a.license_status!==1) lines.push('Код причины: '+a.reason+(ACT_ERRORS[a.reason.toUpperCase()] ? ' — '+ACT_ERRORS[a.reason.toUpperCase()] : ''));
+      } else lines.push('Ключ продукта Windows не установлен.');
+      lines.push('Ключ OEM в BIOS: '+(a.oem_key_present ? 'есть (…'+a.oem_key_tail+')' : 'нет'));
+      var licensed = a.found && a.license_status===1, corp = /volume|kms|mak/i.test(a.channel||'') || !!a.kms_machine;
+      var verdict = licensed
+        ? { status:'pass', note:'Windows активирована ('+(a.channel||'канал не указан')+(corp?', корпоративная лицензия KMS/MAK — не OEM':'')+')' }
+        : { status:'fail', note:'Windows не активирована: '+(a.found ? (LS[a.license_status]!==undefined ? LS[a.license_status] : 'статус '+a.license_status) : 'ключ не установлен')+(a.oem_key_present ? '. В BIOS есть OEM-ключ — можно установить и активировать' : '') };
+      return { lines:lines, verdict:verdict };
+    });
+  }
   if (kind==='crash'){
     var days = profile().crashDays || 30;
     return invoke('get_crash_history', { days: Math.max(days, 90) }).then(function(h){
+      var SRC = { bugcheck:'событие WER', minidump:'minidump', 'kernel-power':'Kernel-Power' };
       var lines = [];
+      var realCrashes = h.entries.filter(function(e){ return e.code!=='0x0'; }).length;
+      lines.push('Сбоев: '+realCrashes+' · внезапных отключений: '+(h.entries.length-realCrashes)+' · записей журнала до склейки: '+h.raw_records+' (сбой из нескольких источников считается один раз, окно 2 мин) · minidump-файлов: '+h.minidump_files);
       if (!h.entries.length) lines.push('Сбоев и внезапных перезагрузок в журнале не найдено.');
       h.entries.forEach(function(e){
-        lines.push(e.time+' · '+e.code+' '+e.name+' ['+({bugcheck:'событие',minidump:'minidump','kernel-power':'Kernel-Power'}[e.source]||e.source)+']');
-        lines.push('    '+e.hint);
+        lines.push(e.time+' · '+e.code+' '+e.name+' · '+e.sources.map(function(x){ return SRC[x]||x; }).join(' + ')+(e.records>1?' (записей: '+e.records+')':''));
+        lines.push('    '+e.hint+(e.params && e.params.length ? ' · параметры: '+e.params.join(', ') : ''));
       });
-      lines.push('Minidump-файлов в C:\\Windows\\Minidump: '+h.minidump_files);
+      if (h.hw_counts.whea || h.hw_counts.disk || h.hw_counts.tdr){
+        lines.push('Аппаратные события за период: WHEA '+h.hw_counts.whea+' · ошибки диска '+h.hw_counts.disk+' · сбросы видеодрайвера (TDR) '+h.hw_counts.tdr);
+        h.hw_events.slice(0,8).forEach(function(e){ lines.push('    '+e.time+' · '+e.provider+' #'+e.id+' — '+e.text); });
+      }
+      var actions = [];
+      if (h.diagnosis.length){
+        lines.push('— Диагноз по шаблону сбоев —');
+        h.diagnosis.forEach(function(d){
+          lines.push((d.level==='warn'?'⚠ ':'ℹ ')+d.title);
+          lines.push('    '+d.text);
+          d.actions.forEach(function(x){ if (actions.indexOf(x)<0) actions.push(x); });
+        });
+      }
       var cutoff = Date.now() - days*86400000;
       var recent = h.entries.filter(function(e){ return new Date(e.time.replace(' ','T')).getTime() >= cutoff; });
       var crashes = recent.filter(function(e){ return e.code!=='0x0'; });
       var power = recent.filter(function(e){ return e.code==='0x0'; });
       var maxPower = profile().unexpectedShutdownsMax!=null ? profile().unexpectedShutdownsMax : 2;
       var v;
-      if (crashes.length) v = { status:'fail', note:'Синих экранов за '+days+' дн.: '+crashes.length+' (последний '+crashes[0].code+' '+crashes[0].name+')' };
+      if (crashes.length) v = { status:'fail', note:'Синих экранов за '+days+' дн.: '+crashes.length+' (последний '+crashes[0].code+' '+crashes[0].name+')'+(h.diagnosis.length && h.diagnosis[0].level==='warn' ? '. '+h.diagnosis[0].title : '') };
       else if (power.length > maxPower) v = { status:'fail', note:'Внезапных отключений/перезагрузок за '+days+' дн.: '+power.length+' (допустимо не более '+maxPower+') — питание, перегрев, плата' };
       else v = { status:'pass', note:'Синих экранов за '+days+' дн. нет'+(power.length?'; внезапных отключений: '+power.length+' (в пределах допуска)':'') };
-      return { lines:lines, verdict:v };
+      return { lines:lines, verdict:v, actions:actions };
     });
   }
   if (kind==='usb'){
@@ -1393,7 +1458,47 @@ function fieldRunner(){
     '<button class="btn btn-primary" onclick="echips.run()" '+(S.running?'disabled':'')+'>'+(S.running?'Идёт проверка…':S.runLines.length?'Повторить':'Запустить проверку')+'</button>'+
     '<span class="n">'+note+'</span></div>'+
     '<div class="log">'+body+'</div>'+
-    (S.verdict && S.verdict.status ? '<div class="kbnote" style="margin-top:8px">Автооценка: '+({pass:'пройден',fail:'не пройден',na:'не применимо'}[S.verdict.status])+' — '+esc(S.verdict.note)+'</div>' : '')+'</div>';
+    (S.verdict && S.verdict.status ? '<div class="kbnote" style="margin-top:8px">Автооценка: '+({pass:'пройден',fail:'не пройден',na:'не применимо'}[S.verdict.status])+' — '+esc(S.verdict.note)+'</div>' : '')+
+    (c.fetch==='winact' ? winactPanel() : '')+
+    (S.runActions.length && !S.auto.on ? '<div class="recbox"><span class="kbnote">Рекомендуемые проверки по итогам анализа:</span>'+ S.runActions.map(function(id){
+        var t = CATS.filter(function(x){ return x.id===id; })[0]; if (!t) return '';
+        return '<button class="btn btn-ghost" onclick="echips.openCat(\''+id+'\')">'+esc(t.name)+'</button>';
+      }).join('')+'</div>' : '')+'</div>';
+}
+function winactPanel(){
+  var a = S.actRaw, act = S.act;
+  if (!a) return '';
+  var licensed = a.found && a.license_status===1;
+  var LABELS = {
+    activate:'Запустить онлайн-активацию Windows (нужен интернет)?',
+    install_oem_key:'Установить OEM-ключ, вшитый в BIOS, и активировать Windows?',
+    restart_service:'Перезапустить службу лицензирования (sppsvc)?',
+    sync_time:'Синхронизировать системное время? (неверная дата мешает активации)',
+    install_key:'Установить введённый ключ и активировать Windows?'
+  };
+  var out = '<div class="actpanel"><div class="kbnote" style="margin-bottom:8px">'+(licensed
+    ? 'Windows активирована — устранение не требуется.'
+    : 'Устранение проблем с активацией. Только штатные способы Windows: онлайн-активация, OEM-ключ из BIOS и ваш собственный ключ.')+'</div>';
+  if (act.confirm){
+    out += '<div class="actconfirm">'+esc(LABELS[act.confirm]||'Выполнить?')+
+      '<div class="headactions" style="margin-top:10px"><button class="btn btn-ghost" onclick="echips.actCancel()" '+(act.busy?'disabled':'')+'>Отмена</button>'+
+      '<button class="btn btn-primary" onclick="echips.actRun()" '+(act.busy?'disabled':'')+'>'+(act.busy?'Выполняется…':'Да, выполнить')+'</button></div></div>';
+  } else if (!licensed){
+    out += '<div class="runrow" style="flex-wrap:wrap">'+
+      '<button class="btn btn-primary" onclick="echips.actAsk(\'activate\')">Онлайн-активация</button>'+
+      (a.oem_key_present ? '<button class="btn btn-ghost" onclick="echips.actAsk(\'install_oem_key\')">Ключ из BIOS (…'+esc(a.oem_key_tail)+')</button>' : '')+
+      '<button class="btn btn-ghost" onclick="echips.actAsk(\'restart_service\')">Перезапустить службу лицензирования</button>'+
+      '<button class="btn btn-ghost" onclick="echips.actAsk(\'sync_time\')">Синхронизировать время</button>'+
+      '<button class="btn btn-ghost" onclick="echips.actOpen()">Параметры активации Windows</button>'+
+      '<button class="btn btn-ghost" onclick="echips.actKeyToggle()">'+(act.keyOpen?'Скрыть ввод ключа':'Ввести ключ вручную')+'</button></div>';
+    if (act.keyOpen){
+      out += '<div class="runrow" style="margin-top:10px"><input class="keyinput" placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX" maxlength="29" value="'+esc(act.key)+'" oninput="echips.actKey(this.value)">'+
+        '<button class="btn btn-primary" onclick="echips.actAsk(\'install_key\')">Установить ключ</button></div>';
+    }
+  }
+  if (act.msg) out += '<div class="kbnote" style="margin-top:8px;color:var(--ok)">'+esc(act.msg)+'</div>';
+  if (act.err) out += '<div class="kbnote" style="margin-top:8px;color:var(--err)">'+esc(act.err)+'</div>';
+  return out+'</div>';
 }
 function fieldCamera(){
   return '<div class="camwrap"><div class="preview" style="position:relative;overflow:hidden">'+

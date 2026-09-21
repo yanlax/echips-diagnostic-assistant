@@ -102,7 +102,10 @@ var S = {
   camStream:null,
   device:null, deviceError:null,
   sensorPoll:null, sensorReading:null, sensorHistory:[], gpuHistory:[],
-  stressOn:false, stressT:0, stressLoad:'CPU', stressDur:300, stressResult:null,
+  st:{ cfg:{ cpu:true, fpu:true, cache:false, memory:false, disk:false, gpu:false, dur:600, threads:'all', memPct:50 },
+       running:false, elapsed:0, last:null, res:null, err:null, events:[], gpuFps:null,
+       hist:{ load:[], temp:[], gpuT:[], clock:[], clockMax:0, scores:{} } },
+  stressMarker:null,
   snapshot:false, exported:null,
   hw:null, verdict:null, runActions:[], act:{ confirm:null, busy:false, msg:'', err:'', keyOpen:false, key:'' }, actRaw:null, detail:{}, kstat:{}, repId:null, markErr:null, br:{ info:null, loading:false }, camClip:null,
   rm:{ drives:null, timer:null, running:null, log:[], err:null, size:64 },
@@ -189,6 +192,7 @@ function loadDevice(){
     S.device = info;
     render();
     invoke('get_hardware_summary').then(function(hw){ S.hw = hw; render(); }).catch(function(){});
+    invoke('get_stress_marker').then(function(m){ if (m){ S.stressMarker = m; render(); } }).catch(function(){});
   }).catch(function(err){
     S.deviceError = typeof err === 'string' ? err : 'Не удалось определить устройство';
     render();
@@ -218,7 +222,7 @@ var A = {
     if (S.rm.timer){ clearInterval(S.rm.timer); S.rm.timer=null; }
     if (S.kbT){ clearInterval(S.kbT); S.kbT=null; }
     S.br = { info:null, loading:false }; S.camClip = null;
-    if (S.stressTempT){ clearInterval(S.stressTempT); S.stressTempT=null; }
+    if (S.st.running && screen!=='stress') invoke('stop_stress').catch(function(){});
     if (S.sf.running) invoke('stop_surface_scan').catch(function(){});
     if (S.dw.running) invoke('stop_disk_write_test').catch(function(){});
     if (S.dr.running) invoke('stop_disk_read_test').catch(function(){});
@@ -308,7 +312,7 @@ var A = {
   autoOff:function(){
     if (S.auto.timer) clearTimeout(S.auto.timer);
     if (S.auto.probe) clearTimeout(S.auto.probe);
-    if (S.stressTempT){ clearInterval(S.stressTempT); S.stressTempT=null; }
+    if (S.st.running) invoke('stop_stress').catch(function(){});
     S.auto = { on:false, ids:[], idx:-1, stopped:false, waiting:false, msg:'', cls:'' };
   },
   autoStop:function(){ A.autoOff(); A.go('dash'); },
@@ -478,17 +482,14 @@ var A = {
     }, secs*1000);
   },
   stressAuto:function(){
-    if (S.stressOn) return;
-    S.stressDur = profile().stressSecs || 60; S.stressTemps = [];
-    S.auto.msg = 'Нагрузка на все ядра: '+S.stressDur+' с…'; S.auto.cls=''; render();
-    function sample(){
-      invoke('get_thermal_reading').then(function(r){
-        if (r.available && r.cpu_temp_c!=null) S.stressTemps.push(r.cpu_temp_c);
-        if (r.gpu) S.stressTemps.push(r.gpu.temp_c);
-      }).catch(function(){});
-    }
-    sample(); S.stressTempT = setInterval(sample, 3000);
-    A.stress();
+    if (S.st.running) return;
+    var P = profile(), list = P.stressStressors || ['cpu','fpu'];
+    var c = S.st.cfg;
+    c.cpu = list.indexOf('cpu')>=0; c.fpu = list.indexOf('fpu')>=0; c.cache = list.indexOf('cache')>=0;
+    c.memory = list.indexOf('memory')>=0; c.disk = list.indexOf('disk')>=0; c.gpu = list.indexOf('gpu')>=0;
+    c.dur = P.stressSecs || 60; c.threads = 'all'; c.memPct = 50;
+    S.auto.msg = 'Стресс-тест: '+list.join(' + ')+', '+c.dur+' с…'; S.auto.cls=''; render();
+    A.stStart();
   },
 
   /* ---- тест чтения диска ---- */
@@ -749,26 +750,45 @@ var A = {
   snapshot:function(){ S.snapshot=true; render(); },
 
   /* ---- стресс-тест ---- */
-  load:function(l){ S.stressLoad=l; render(); },
-  dur:function(v){ S.stressDur=v; S.stressT=0; S.stressResult=null; render(); },
-  stress:function(){
-    if (S.stressOn) return; // остановка на лету не реализована — тест короткий и фиксированной длины
-    S.stressOn=true; S.stressT=0; S.stressResult=null; render();
-    invoke('run_cpu_stress', { durationSecs: S.stressDur }).then(function(res){
-      S.stressOn=false; S.stressResult=res; render();
-      if (S.auto.on && S.cat==='stress'){
-        if (S.stressTempT){ clearInterval(S.stressTempT); S.stressTempT=null; }
-        var temps = S.stressTemps||[], max = profile().maxTempC || 95, t = temps.length ? Math.max.apply(null, temps) : null;
-        recordDetail('stress', { lines:[res.threads+' потоков, '+S.stressDur+' с', temps.length ? 'Температура: макс '+Math.max.apply(null,temps).toFixed(0)+' °C, мин '+Math.min.apply(null,temps).toFixed(0)+' °C' : 'Температура недоступна'] });
-        var base = res.threads+' потоков, '+S.stressDur+' с без зависания';
-        A.autoApply(t!==null && t>=max ? { status:'fail', note:base+'; температура под нагрузкой '+t.toFixed(0)+' °C не ниже порога '+max+' °C' }
-          : { status:'pass', note:base+(t!==null ? '; максимум '+t.toFixed(0)+' °C' : '; температура недоступна') });
-      }
-    }).catch(function(err){
-      S.stressOn=false; S.runError = typeof err==='string'?err:'Ошибка стресс-теста'; render();
-      if (S.auto.on && S.cat==='stress'){ if (S.stressTempT){ clearInterval(S.stressTempT); S.stressTempT=null; } A.autoApply(null); }
+  stToggle:function(k){ if (S.st.running) return; S.st.cfg[k] = !S.st.cfg[k]; render(); },
+  stSet:function(k,v){ if (S.st.running) return; S.st.cfg[k] = v; render(); },
+  stPreset:function(name){
+    if (S.st.running) return;
+    var p = ST_PRESETS[name], c = S.st.cfg;
+    ['cpu','fpu','cache','memory','disk','gpu'].forEach(function(k){ c[k] = !!p[k]; });
+    c.dur = p.dur; render();
+  },
+  stClear:function(){ if (S.st.running) return; S.st.res=null; S.st.err=null; S.st.events=[]; S.st.last=null; S.st.elapsed=0; S.st.hist={ load:[], temp:[], gpuT:[], clock:[], clockMax:0, scores:{} }; render(); },
+  stStop:function(){ if (S.st.running) invoke('stop_stress').catch(function(){}); },
+  stStart:function(){
+    var st = S.st, c = st.cfg; if (st.running) return;
+    if (!(c.cpu||c.fpu||c.cache||c.memory||c.disk||c.gpu)){ st.err='Выберите хотя бы один вид нагрузки'; render(); return; }
+    var hwThreads = (S.hw && S.hw.cpu && S.hw.cpu.threads) || 2;
+    var cfg = { durationSecs:c.dur, cpu:c.cpu, fpu:c.fpu, cache:c.cache, memory:c.memory, disk:c.disk, gpu:c.gpu,
+      threads: c.threads==='half' ? Math.max(1, Math.floor(hwThreads/2)) : c.threads==='one' ? 1 : 0,
+      memoryPercent:c.memPct, diskLetter:'', diskMb:1024, maxTempC: profile().maxTempC || 95 };
+    st.running=true; st.err=null; st.res=null; st.events=[]; st.last=null; st.elapsed=0; st.gpuFps=null;
+    st.hist = { load:[], temp:[], gpuT:[], clock:[], clockMax:0, scores:{} };
+    render();
+    var unl = [];
+    function cleanup(){ unl.forEach(function(u){ u(); }); gpuStressStop(); }
+    tauriEvent.listen('stress-tick', function(ev){ stOnTick(ev.payload); }).then(function(u){ unl.push(u); });
+    tauriEvent.listen('stress-done', function(ev){ cleanup(); stOnDone(ev.payload); }).then(function(u){ unl.push(u); });
+    if (c.gpu) gpuStressStart();
+    invoke('start_stress', { cfg:cfg }).catch(function(err){
+      cleanup(); st.running=false; st.err = typeof err==='string' ? err : 'Не удалось запустить стресс-тест'; render();
+      if (S.auto.on && S.cat==='stress') A.autoApply(null);
     });
   },
+  /* Прерванный стресс-тест (перезагрузка/зависание): запись в отчёт или закрытие уведомления */
+  markerRecord:function(){
+    var m = S.stressMarker; if (!m) return;
+    var note = 'Стресс-тест прерван на '+m.lastElapsed+' с — перезагрузка, зависание или выключение питания посреди теста. Последние показания: загрузка '+Math.round(m.lastLoad)+'%, температура '+(m.lastTempC!=null ? m.lastTempC.toFixed(0)+' °C' : 'н/д')+(m.lastGpuTempC!=null ? ', GPU '+m.lastGpuTempC.toFixed(0)+' °C' : '');
+    S.results.stress = 'fail'; S.comments.stress = note;
+    recordDetail('stress', { auto:{ status:'fail', note:note }, final:'fail', lines:[note, 'Нагрузки: '+m.stressors.join(', ')+' · запущен '+m.startedAt+' · заданная длительность '+(m.durationSecs||'до остановки')] });
+    invoke('clear_stress_marker').catch(function(){}); S.stressMarker = null; renderNav(); render();
+  },
+  markerDismiss:function(){ invoke('clear_stress_marker').catch(function(){}); S.stressMarker = null; render(); },
 
   /* ---- установка драйверов ---- */
   drvStart:function(){
@@ -1217,7 +1237,7 @@ function renderNav(){
     { k:'start', label:'Режим', meta:'' },
     { k:'dash', label:'Категории', meta:c.checked+'/'+CATS.length },
     { k:'sensors', label:'Датчики', meta:S.sensorPoll?'live':'' },
-    { k:'stress', label:'Стресс-тест', meta:S.stressOn?'···':'' },
+    { k:'stress', label:'Стресс-тест', meta:S.st.running?'···':'' },
     { k:'report', label:'Отчёт', meta:'' }
   ];
   document.getElementById('steps').innerHTML = items.map(function(i){
@@ -1241,6 +1261,7 @@ function screenStart(){
     ? deviceLabel() + (S.device.bios_version ? ' · BIOS ' + esc(S.device.bios_version) : '') + (S.device.os_version ? ' · ' + esc(S.device.os_version) : '')
     : (S.deviceError ? 'Не удалось определить устройство: ' + esc(S.deviceError) : 'определяется…');
   return '<div class="pane">'+
+    markerBanner()+
     '<div class="eyebrow">Режим работы</div>'+
     '<h1 class="title">Что делаем с ноутбуком</h1>'+
     '<p class="lede" style="margin:7px 0 24px">Выберите режим — драйверы, полная проверка оборудования или гарантийная замена платы.</p>'+
@@ -1936,33 +1957,237 @@ function screenSensors(){
     '<button class="btn btn-ghost" onclick="echips.snapshot()">'+(S.snapshot?'Снимок добавлен в отчёт':'Приложить снимок к отчёту')+'</button></div></div>';
 }
 
+/* ---------- стресс-тест ---------- */
+var ST_PRESETS = {
+  quick:{ label:'Быстрый · 1 мин', cpu:true, fpu:true, cache:false, memory:false, disk:false, gpu:false, dur:60 },
+  std:{ label:'Стандарт · 10 мин', cpu:true, fpu:true, cache:true, memory:true, disk:false, gpu:false, dur:600 },
+  heat:{ label:'Прогрев до остановки', cpu:true, fpu:true, cache:true, memory:false, disk:false, gpu:false, dur:0 },
+  full:{ label:'Всё сразу · 30 мин', cpu:true, fpu:true, cache:true, memory:true, disk:true, gpu:true, dur:1800 }
+};
+var ST_KINDS = [
+  ['cpu','CPU','целочисленная нагрузка на все ядра'], ['fpu','FPU','плавающая точка (AVX/FMA — самая горячая)'],
+  ['cache','Кэш','рабочие наборы под L1/L2/L3'], ['memory','Память','запись/проверка паттернов в ОЗУ'],
+  ['disk','Диск','цикл записи/чтения с проверкой (%TEMP%)'], ['gpu','GPU','тяжёлый шейдер WebGL']
+];
+var ST_UNITS = { cpu:'Мопс/с', fpu:'ГФлопс', cache:'МБ/с', memory:'МБ/с', disk:'МБ/с', gpu:'кадр/с' };
+function fmtTime(sec){ var m=Math.floor(sec/60), r=sec%60; return String(m).padStart(2,'0')+':'+String(r).padStart(2,'0'); }
+
+/* ----- GPU-нагрузка: тяжёлый фрагментный шейдер в WebGL (без зависимостей) ----- */
+var gpuHost = null;
+function gpuStressStart(){
+  var st = S.st;
+  try {
+    if (!gpuHost){
+      gpuHost = document.createElement('canvas');
+      gpuHost.style.cssText = 'position:fixed;right:0;bottom:0;width:4px;height:4px;opacity:.02;pointer-events:none;z-index:1';
+      document.body.appendChild(gpuHost);
+    }
+    gpuHost.width = 1600; gpuHost.height = 900;
+    var gl = gpuHost.getContext('webgl');
+    if (!gl){ st.events.push('GPU: WebGL недоступен в этом окне'); return; }
+    function sh(type, src){ var o = gl.createShader(type); gl.shaderSource(o, src); gl.compileShader(o); return o; }
+    var vs = sh(gl.VERTEX_SHADER, 'attribute vec2 a;void main(){gl_Position=vec4(a,0.,1.);}');
+    var fs = sh(gl.FRAGMENT_SHADER, 'precision highp float;uniform vec2 r;uniform float t;void main(){vec2 p=(gl_FragCoord.xy/r-.5)*4.;float v=0.;for(int i=0;i<110;i++){p=abs(p)/dot(p,p)-vec2(.9+.1*sin(t),.7);v+=exp(-length(p));}gl_FragColor=vec4(vec3(v*.02),1.);}');
+    var pr = gl.createProgram(); gl.attachShader(pr, vs); gl.attachShader(pr, fs); gl.linkProgram(pr); gl.useProgram(pr);
+    var buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+    var loc = gl.getAttribLocation(pr, 'a'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    var ur = gl.getUniformLocation(pr, 'r'), ut = gl.getUniformLocation(pr, 't');
+    gl.viewport(0, 0, 1600, 900); gl.uniform2f(ur, 1600, 900);
+    var g = { frames:0, raf:0, timer:0, t0:performance.now(), on:true };
+    function frame(){
+      if (!g.on) return;
+      gl.uniform1f(ut, (performance.now()-g.t0)/1000);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      g.frames++;
+      g.raf = requestAnimationFrame(frame);
+    }
+    g.timer = setInterval(function(){ st.gpuFps = g.frames; g.frames = 0; }, 1000);
+    st.gpu = g; frame();
+  } catch(e){ st.events.push('GPU: не удалось запустить шейдер ('+(e && e.message ? e.message : e)+')'); }
+}
+function gpuStressStop(){
+  var g = S.st.gpu; if (!g) return;
+  g.on = false; cancelAnimationFrame(g.raf); clearInterval(g.timer);
+  try { var gl = gpuHost && gpuHost.getContext('webgl'); if (gl){ var ext = gl.getExtension('WEBGL_lose_context'); if (ext) ext.loseContext(); } } catch(e){}
+  if (gpuHost){ gpuHost.width = 1; gpuHost.height = 1; }
+  S.st.gpu = null; S.st.gpuFps = null;
+}
+
+/* ----- обработка секундных данных ядра ----- */
+function stOnTick(p){
+  var st = S.st, h = st.hist;
+  st.elapsed = p.elapsed; st.last = p;
+  h.load.push(p.load); h.clock.push(p.clockMhz); h.clockMax = Math.max(h.clockMax, p.clockMaxMhz||0);
+  h.temp.push(p.tempC==null ? null : p.tempC); h.gpuT.push(p.gpuTempC==null ? null : p.gpuTempC);
+  Object.keys(p.scores||{}).forEach(function(k){ (h.scores[k] = h.scores[k] || []).push(p.scores[k]); });
+  if (st.cfg.gpu && st.gpuFps!=null) (h.scores.gpu = h.scores.gpu || []).push(st.gpuFps);
+  (p.events||[]).forEach(function(e){ st.events.push(fmtTime(p.elapsed)+' · '+e); });
+  paintStress();
+}
+/* Вердикт по итогам: температура, падение скорости (троттлинг), ошибки данных, аварийная остановка. */
+function judgeStress(res){
+  var P = profile(), maxT = P.maxTempC || 95, minR = P.throttleMinPct!=null ? P.throttleMinPct : 60, maxShare = P.throttleMaxSharePct!=null ? P.throttleMaxSharePct : 20;
+  var bad = [], notes = [];
+  if (res.reason==='thermal') bad.push('сработала температурная защита');
+  if (res.memErrors>0) bad.push('ошибки памяти: '+res.memErrors);
+  if (res.diskErrors>0) bad.push('ошибки диска: '+res.diskErrors);
+  var hot = Math.max(res.maxTempC||0, res.maxGpuTempC||0);
+  if (hot>=maxT) bad.push('температура '+hot.toFixed(0)+' °C не ниже порога '+maxT+' °C');
+  res.stressors.forEach(function(x){
+    if (x.baseline>0){
+      var share = x.throttledSecs / Math.max(1, res.elapsedSecs) * 100;
+      if (x.minRatio*100 < minR || share > maxShare) bad.push('падение скорости «'+x.name+'» до '+Math.round(x.minRatio*100)+'% от базовой ('+x.throttledSecs+' с ниже 80%)');
+    }
+  });
+  var g = S.st.hist.scores.gpu;
+  if (g && g.length>=12){
+    var base = g.slice(2,12).sort(function(a,b){ return a-b; })[5], worst = Math.min.apply(null, g.slice(12));
+    if (base>0 && worst/base*100 < minR) bad.push('падение скорости GPU до '+Math.round(worst/base*100)+'% от базовой');
+  }
+  if (res.reason==='stopped' && res.elapsedSecs<60) return null;   // слишком короткий прогон для оценки
+  var base2 = res.threads+' потоков, '+fmtTime(res.elapsedSecs)+', загрузка '+res.avgLoad.toFixed(0)+'%';
+  if (res.avgLoad<80 && res.stressors.length) notes.push('средняя загрузка CPU '+res.avgLoad.toFixed(0)+'% — нагрузка могла не дойти до предела');
+  if (bad.length) return { status:'fail', note:base2+'; '+bad.join('; ') };
+  return { status:'pass', note:base2+(hot?'; максимум '+hot.toFixed(0)+' °C':'; температура недоступна')+(res.clockAvgMhz?'; частота '+res.clockAvgMhz.toFixed(0)+' МГц':'')+(notes.length?'; '+notes.join('; '):'') };
+}
+function stOnDone(res){
+  var st = S.st; st.running = false; st.res = res;
+  var REASON = { completed:'завершён', stopped:'остановлен вручную', thermal:'остановлен температурной защитой', error:'остановлен из-за ошибок' };
+  var lines = ['Тест '+(REASON[res.reason]||res.reason)+', длительность '+fmtTime(res.elapsedSecs)+', потоков CPU '+res.threads,
+    'Загрузка CPU средняя '+res.avgLoad.toFixed(0)+'%'+(res.clockAvgMhz ? ', частота ср/мин/макс '+res.clockAvgMhz.toFixed(0)+'/'+res.clockMinMhz.toFixed(0)+'/'+res.clockMaxMhz.toFixed(0)+' МГц' : ''),
+    'Температура CPU макс: '+(res.maxTempC!=null ? res.maxTempC.toFixed(0)+' °C' : 'н/д')+' · GPU макс: '+(res.maxGpuTempC!=null ? res.maxGpuTempC.toFixed(0)+' °C' : 'н/д')];
+  res.stressors.forEach(function(x){ lines.push('  '+x.name+': ср '+x.avg.toFixed(1)+' '+x.unit+', мин '+x.min.toFixed(1)+', макс '+x.max.toFixed(1)+(x.baseline>0 ? ', базовая '+x.baseline.toFixed(1)+', худшее '+Math.round(x.minRatio*100)+'%, ниже 80%: '+x.throttledSecs+' с' : '')); });
+  var gsc = st.hist.scores.gpu; if (gsc && gsc.length) lines.push('  gpu: ср '+(gsc.reduce(function(a,b){ return a+b; },0)/gsc.length).toFixed(1)+' кадр/с, мин '+Math.min.apply(null,gsc));
+  if (res.memErrors||res.diskErrors) lines.push('Ошибки данных: память '+res.memErrors+', диск '+res.diskErrors);
+  st.events.forEach(function(e){ lines.push('! '+e); });
+  recordDetail('stress', { lines:lines.slice(0,60), series: downsample(st.hist.load, 200) });
+  var v = judgeStress(res);
+  if (v) recordDetail('stress', { auto:v });
+  render(); paintStress();
+  if (S.auto.on && S.cat==='stress') A.autoApply(v);
+}
+
+/* ----- графики на canvas ----- */
+function drawChart(id, series, opts){
+  var cv = document.getElementById(id); if (!cv || !cv.getContext) return;
+  var w = cv.clientWidth || 400, h = cv.clientHeight || 110;
+  if (cv.width!==w) cv.width = w; if (cv.height!==h) cv.height = h;
+  var g = cv.getContext('2d'); g.clearRect(0,0,w,h);
+  var all = []; series.forEach(function(s){ s.data.forEach(function(v){ if (v!=null) all.push(v); }); });
+  var min = opts.min!=null ? opts.min : (all.length ? Math.min.apply(null, all) : 0);
+  var max = opts.max!=null ? opts.max : (all.length ? Math.max.apply(null, all) : 1);
+  if (opts.line!=null) max = Math.max(max, opts.line);
+  if (max<=min) max = min+1;
+  var pad = (max-min)*0.08; min = opts.min!=null ? opts.min : min-pad; max += pad;
+  g.strokeStyle='rgba(255,255,255,.07)'; g.lineWidth=1;
+  for (var k=1;k<4;k++){ var y=h*k/4; g.beginPath(); g.moveTo(0,y); g.lineTo(w,y); g.stroke(); }
+  var n = Math.max.apply(null, series.map(function(s){ return s.data.length; }).concat([2]));
+  var span = opts.total && opts.total>n ? opts.total : n;
+  series.forEach(function(s){
+    g.strokeStyle = s.color; g.lineWidth = 1.6; g.beginPath(); var open = false;
+    s.data.forEach(function(v,i){
+      if (v==null){ open=false; return; }
+      var x = i/(span-1)*w, y = h-(v-min)/(max-min)*h;
+      if (!open){ g.moveTo(x,y); open=true; } else g.lineTo(x,y);
+    });
+    g.stroke();
+  });
+  if (opts.line!=null){ var yl = h-(opts.line-min)/(max-min)*h; g.strokeStyle='rgba(226,87,76,.7)'; g.setLineDash([5,4]); g.beginPath(); g.moveTo(0,yl); g.lineTo(w,yl); g.stroke(); g.setLineDash([]); }
+  g.fillStyle='rgba(255,255,255,.5)'; g.font='10px JetBrains Mono, monospace';
+  g.fillText(max.toFixed(0)+(opts.unit||''), 6, 12); g.fillText(min.toFixed(0), 6, h-4);
+}
+function paintStress(){
+  var st = S.st, p = st.last, h = st.hist;
+  var t = document.getElementById('st-time'); if (t) t.textContent = fmtTime(st.elapsed)+(st.cfg.dur ? ' / '+fmtTime(st.cfg.dur) : ' · до остановки');
+  var f = document.getElementById('st-fill'); if (f) f.style.width = (st.cfg.dur ? Math.min(100, st.elapsed/st.cfg.dur*100) : (st.running?100:0))+'%';
+  function set(id, v){ var e = document.getElementById(id); if (e) e.textContent = v; }
+  if (p){
+    set('st-load', p.load.toFixed(0)+' %');
+    set('st-temp', (p.tempC!=null ? p.tempC.toFixed(0)+' °C' : '—')+(p.gpuTempC!=null ? ' · GPU '+p.gpuTempC.toFixed(0)+' °C' : ''));
+    set('st-clock', p.clockMhz ? p.clockMhz.toFixed(0)+' МГц' : '—');
+    set('st-clockmax', p.clockMaxMhz ? 'макс. '+p.clockMaxMhz.toFixed(0)+' МГц' : '');
+  }
+  var sc = document.getElementById('st-scores');
+  if (sc){
+    sc.innerHTML = Object.keys(h.scores).map(function(k){
+      var arr = h.scores[k], cur = arr[arr.length-1], base = arr.length>=10 ? arr.slice(0,10).slice().sort(function(a,b){ return a-b; })[5] : 0;
+      var ratio = base>0 ? cur/base : null;
+      return '<div class="stscore"><span class="k">'+k+'</span><b>'+cur.toFixed(1)+'</b><span class="u">'+(ST_UNITS[k]||'')+'</span>'+(ratio!=null ? '<span class="r '+(ratio<0.8?'bad':'')+'">'+Math.round(ratio*100)+'% от базовой</span>' : '')+'</div>';
+    }).join('');
+  }
+  var ev = document.getElementById('st-events');
+  if (ev) ev.innerHTML = st.events.length ? st.events.slice(-30).map(function(e){ return '<div>'+esc(e)+'</div>'; }).join('') : '<div class="idle">событий пока нет</div>';
+  var total = st.cfg.dur || 0;
+  drawChart('st-c-load', [{ data:h.load, color:'#FF8A00' }], { min:0, max:100, unit:'%', total:total });
+  drawChart('st-c-temp', [{ data:h.temp, color:'#FF8A00' }, { data:h.gpuT, color:'#6E8FA8' }], { unit:'°', line:profile().maxTempC||95, total:total });
+  drawChart('st-c-clock', [{ data:h.clock, color:'#4CAF7D' }], { min:0, max:h.clockMax||null, unit:' МГц', total:total });
+}
+function verdictBar(c){
+  return (S.markErr && S.markErr.id===c.id ? '<div class="markerr" id="mark-err">'+esc(S.markErr.text)+'</div>' : '')+
+    '<div class="verdict">'+
+      '<input placeholder="Комментарий техника — попадёт в отчёт" value="'+esc(S.comments[c.id]||'')+'" oninput="echips.comment(this.value)">'+
+      '<button class="btn btn-ghost" onclick="echips.mark(\'na\')">Не применимо</button>'+
+      '<button class="btn btn-danger" onclick="echips.mark(\'fail\')">Не пройден</button>'+
+      '<button class="btn btn-primary" onclick="echips.mark(\'pass\')">Пройден</button>'+
+    '</div>';
+}
+function markerBanner(){
+  var m = S.stressMarker; if (!m) return '';
+  return '<div class="markerr" style="margin:10px 0"><b>Прошлый стресс-тест был прерван</b> (перезагрузка, зависание или выключение питания) на '+m.lastElapsed+' с из '+(m.durationSecs||'«до остановки»')+
+    '. Нагрузки: '+esc(m.stressors.join(', '))+'; последние показания: загрузка '+Math.round(m.lastLoad)+'%, температура '+(m.lastTempC!=null ? m.lastTempC.toFixed(0)+' °C' : 'н/д')+'.'+
+    '<div class="headactions" style="margin-top:8px;justify-content:flex-start"><button class="btn btn-danger" onclick="echips.markerRecord()">Записать в отчёт как «не пройден»</button>'+
+    '<button class="btn btn-ghost" onclick="echips.markerDismiss()">Закрыть</button></div></div>';
+}
 function screenStress(){
-  var sd = S.stressResult;
-  var durs = [[60,'1 мин'],[300,'5 мин'],[900,'15 мин'],[1800,'30 мин']];
-  return '<div class="pane">'+
-    autoBanner()+'<div class="eyebrow">Нагрузка</div><h1 class="title">Стресс-тест CPU</h1>'+
-    '<p class="lede" style="margin:6px 0 0">Реальная busy-loop нагрузка на все логические ядра. GPU-нагрузка и мониторинг throttling не реализованы — нет доступа к частотам/температурам на большинстве плат (см. вкладку «Датчики»).</p>'+
-    '<div class="controls">'+
-      '<div class="control"><div class="k">Длительность</div><div class="opts">'+
-        durs.map(function(d){
-          return '<button class="opt mono'+(S.stressDur===d[0]?' on':'')+'" onclick="echips.dur('+d[0]+')" '+(S.stressOn?'disabled':'')+'>'+d[1]+'</button>';
-        }).join('') +'</div></div>'+
-    '</div>'+
-    '<div class="chart" style="margin-top:18px"><div class="top">'+
-      '<div class="stressrun"><div class="hex'+(S.stressOn?' spin':'')+'"><svg viewBox="0 0 100 100">'+
-        '<polygon class="trk" points="50,6 89,28 89,72 50,94 11,72 11,28"></polygon>'+
-        '<polygon class="arc" points="50,6 89,28 89,72 50,94 11,72 11,28"></polygon></svg></div>'+
-      '<div><div class="stage">'+(S.stressOn?'Прогон CPU':sd?'Прогон завершён':'Готов к запуску')+'</div>'+
-      '<div class="clock">'+(sd?sd.elapsed_secs:0)+' с / '+S.stressDur+' с</div></div></div>'+
-      '</div></div>'+
-    '<div class="stats4">'+
-      '<div class="stat4"><div class="k">потоков нагружено</div><div class="v">'+(sd?sd.threads:'—')+'</div></div>'+
-      '<div class="stat4"><div class="k">завершено</div><div class="v '+(sd?'ok':'none')+'">'+(sd?(sd.completed?'да':'нет'):'—')+'</div></div>'+
-      '<div class="stat4"><div class="k">throttling</div><div class="v none">нет данных</div></div>'+
-      '<div class="stat4"><div class="k">макс. температура</div><div class="v none">см. «Датчики»</div></div>'+
-    '</div>'+
-    '<div class="footrow"><span class="mono">'+(S.stressOn?'нагрузка на все логические ядра запущена':'нажмите «Запустить», окно приложения останется отзывчивым')+'</span>'+
-    '<button class="btn btn-primary" onclick="echips.stress()" '+(S.stressOn?'disabled':'')+'>'+(S.stressOn?'Идёт прогон…':sd?'Запустить снова':'Запустить')+'</button></div></div>';
+  var st = S.st, c = st.cfg, res = st.res, run = st.running;
+  var cat0 = CATS.filter(function(x){ return x.id==='stress'; })[0];
+  var kinds = '<div class="stkinds">'+ ST_KINDS.map(function(k){
+    return '<label class="stcheck'+(c[k[0]]?' on':'')+'" title="'+esc(k[2])+'"><input type="checkbox" '+(c[k[0]]?'checked':'')+' '+(run?'disabled':'')+' onchange="echips.stToggle(\''+k[0]+'\')"><span><b>'+k[1]+'</b><i>'+k[2]+'</i></span></label>';
+  }).join('') +'</div>';
+  var presets = '<div class="opts">'+ Object.keys(ST_PRESETS).map(function(k){
+    return '<button class="opt mono" onclick="echips.stPreset(\''+k+'\')" '+(run?'disabled':'')+'>'+ST_PRESETS[k].label+'</button>';
+  }).join('') +'</div>';
+  var durs = [[60,'1 мин'],[300,'5 мин'],[600,'10 мин'],[1800,'30 мин'],[3600,'60 мин'],[0,'До остановки']];
+  var opts = '<div class="stopts"><div class="control"><div class="k">Длительность</div><div class="opts">'+ durs.map(function(d){
+      return '<button class="opt mono'+(c.dur===d[0]?' on':'')+'" onclick="echips.stSet(\'dur\','+d[0]+')" '+(run?'disabled':'')+'>'+d[1]+'</button>';
+    }).join('') +'</div></div>'+
+    '<div class="control"><div class="k">Потоков CPU</div><div class="opts">'+ [['all','Все'],['half','Половина'],['one','1']].map(function(d){
+      return '<button class="opt mono'+(c.threads===d[0]?' on':'')+'" onclick="echips.stSet(\'threads\',\''+d[0]+'\')" '+(run?'disabled':'')+'>'+d[1]+'</button>';
+    }).join('') +'</div></div>'+
+    (c.memory ? '<div class="control"><div class="k">Память, % свободной</div><div class="opts">'+ [25,50,75].map(function(d){
+      return '<button class="opt mono'+(c.memPct===d?' on':'')+'" onclick="echips.stSet(\'memPct\','+d+')" '+(run?'disabled':'')+'>'+d+'%</button>';
+    }).join('') +'</div></div>' : '')+'</div>';
+  var controls = '<div class="runrow" style="margin-top:12px"><button class="btn btn-primary" onclick="echips.stStart()" '+(run?'disabled':'')+'>'+(run?'Идёт нагрузка…':'Старт')+'</button>'+
+    '<button class="btn btn-danger" onclick="echips.stStop()" '+(run?'':'disabled')+'>Стоп</button>'+
+    '<button class="btn btn-ghost" onclick="echips.stClear()" '+(run?'disabled':'')+'>Очистить</button>'+
+    '<span class="n" id="st-time" style="margin-left:6px;font-size:14px;color:var(--text)">'+fmtTime(st.elapsed)+(c.dur ? ' / '+fmtTime(c.dur) : ' · до остановки')+'</span></div>'+
+    '<div class="bar" style="margin-top:10px"><div class="fill" id="st-fill" style="width:'+(c.dur ? Math.min(100, st.elapsed/c.dur*100) : (run?100:0))+'%"></div></div>';
+  var p = st.last;
+  var cards = '<div class="stats4" style="margin-top:12px">'+
+    '<div class="stat4"><div class="k">загрузка CPU</div><div class="v" id="st-load">'+(p ? p.load.toFixed(0)+' %' : '—')+'</div></div>'+
+    '<div class="stat4"><div class="k">температура</div><div class="v" id="st-temp" style="font-size:14px">'+(p ? (p.tempC!=null ? p.tempC.toFixed(0)+' °C' : '—')+(p.gpuTempC!=null ? ' · GPU '+p.gpuTempC.toFixed(0)+' °C' : '') : '—')+'</div></div>'+
+    '<div class="stat4"><div class="k">частота CPU</div><div class="v" id="st-clock" style="font-size:14px">'+(p && p.clockMhz ? p.clockMhz.toFixed(0)+' МГц' : '—')+'</div><div class="k" id="st-clockmax" style="margin-top:2px">'+(p && p.clockMaxMhz ? 'макс. '+p.clockMaxMhz.toFixed(0)+' МГц' : '')+'</div></div>'+
+    '<div class="stat4"><div class="k">скорость нагрузок</div><div id="st-scores" class="stscores"></div></div></div>';
+  var charts = '<div class="stcharts"><div><div class="k">Загрузка CPU, %</div><canvas id="st-c-load" class="stcanvas"></canvas></div>'+
+    '<div><div class="k">Температура, °C <span style="color:#FF8A00">CPU</span> · <span style="color:#6E8FA8">GPU</span> · красная линия — порог защиты</div><canvas id="st-c-temp" class="stcanvas"></canvas></div>'+
+    '<div><div class="k">Частота CPU, МГц</div><canvas id="st-c-clock" class="stcanvas"></canvas></div></div>';
+  var evbox = '<div class="k" style="margin-top:12px">События</div><div class="log stev" id="st-events"><div class="idle">событий пока нет</div></div>';
+  var summary = '';
+  if (res){
+    var v = judgeStress(res), REASON = { completed:'завершён', stopped:'остановлен вручную', thermal:'остановлен температурной защитой', error:'остановлен из-за ошибок' };
+    summary = '<div class="kbnote" style="margin-top:10px">Тест '+(REASON[res.reason]||res.reason)+' · '+fmtTime(res.elapsedSecs)+
+      (v ? ' · <b style="color:'+(v.status==='pass'?'var(--ok)':'var(--err)')+'">автооценка: '+(v.status==='pass'?'пройден':'не пройден')+'</b> — '+esc(v.note) : ' · оценка невозможна (слишком короткий прогон)')+'</div>';
+  }
+  return '<div class="pane">'+autoBanner()+
+    '<div class="crumbs"><button class="btn-link" onclick="echips.go(\'dash\')">← все категории</button><span class="idx">стресс-тест · '+(run?'идёт':'готов')+'</span></div>'+
+    '<div class="testhead"><div><h2>Стресс-тест</h2><div class="hint">Выберите виды нагрузки, как в AIDA64: CPU, FPU, кэш, память, диск, GPU. Скорость каждой нагрузки сравнивается с базовой — просадка означает троттлинг. Остановить можно в любой момент.</div></div><div class="base">STR · реальная нагрузка</div></div>'+
+    '<div class="field">'+markerBanner()+
+      '<div class="control"><div class="k">Пресеты</div>'+presets+'</div>'+
+      '<div class="control" style="margin-top:10px"><div class="k">Виды нагрузки</div>'+kinds+'</div>'+opts+
+      controls+(st.err ? '<div class="idle" style="color:var(--err);margin-top:8px"><span>'+esc(st.err)+'</span></div>' : '')+
+      cards+charts+evbox+summary+
+    '</div>'+ verdictBar(cat0) +'</div>';
 }
 
 function resultIcon(ok){
@@ -2273,6 +2498,7 @@ function render(){
     if(inp){ inp.focus(); try{ inp.setSelectionRange(sel,sel); }catch(e){} }
   }
   if (S.screen==='test' && cat().kind==='surface') paintSurface();
+  if (S.screen==='stress') paintStress();
   var pad = document.getElementById('pad');
   if(pad){
     pad.addEventListener('pointerdown', padPoint);

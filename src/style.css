@@ -501,3 +501,22 @@ h1.title{font-family:var(--grotesk);font-size:27px;font-weight:600;color:var(--t
 .keyinput{flex:1;min-width:0;padding:11px 14px;border-radius:10px;background:var(--glass);border:1px solid rgba(255,255,255,.09);color:var(--text);font-family:var(--mono);font-size:13px;letter-spacing:.06em;outline:none}
 .keyinput:focus{border-color:var(--accent-line)}
 .recbox{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
+
+/* ---------- стресс-тест (как AIDA64) ---------- */
+.stkinds{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.stcheck{display:flex;align-items:flex-start;gap:9px;padding:10px 12px;border-radius:10px;background:var(--glass);border:1px solid var(--line);cursor:pointer;transition:border-color .18s,background-color .18s}
+.stcheck.on{background:rgba(255,138,0,.10);border-color:var(--accent-line)}
+.stcheck input{margin-top:3px;accent-color:var(--accent)}
+.stcheck b{display:block;font-family:var(--grotesk);font-size:13.5px;color:var(--text-hi)}
+.stcheck i{display:block;font-style:normal;font-size:11px;color:var(--mute);margin-top:2px;line-height:1.35}
+.stopts{display:flex;flex-wrap:wrap;gap:14px;margin-top:10px}
+.stcharts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:12px}
+.stcharts .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);margin-bottom:6px}
+.stcanvas{display:block;width:100%;height:110px;border-radius:9px;background:var(--glass);border:1px solid var(--line)}
+.stscores{display:flex;flex-direction:column;gap:3px;margin-top:4px}
+.stscore{display:flex;align-items:baseline;gap:6px;font-family:var(--mono);font-size:11px;color:var(--mute)}
+.stscore b{color:var(--text);font-size:12.5px}
+.stscore .r{margin-left:auto;font-size:10px;color:var(--ok)}
+.stscore .r.bad{color:var(--err)}
+.stev{max-height:130px;min-height:60px;flex:none}
+.stev div{color:var(--text-2)}

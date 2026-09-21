@@ -13,6 +13,9 @@
 //   smartCautionIsFail  «Тревога» SMART (переназначенные секторы и т. п.) считать неисправностью
 //   surfaceScanGb     сколько первых ГБ диска сканировать поверхность в автопрогоне
 //   surfaceSlowPct    допустимая доля медленных (150–500 мс) блоков при сканировании, %
+//   stressStressors   виды нагрузки стресс-теста, если добавить "stress" в tests: cpu, fpu, cache, memory, disk, gpu
+//   throttleMinPct    худшая скорость нагрузки, % от базовой, ниже которой стресс-тест не пройден
+//   throttleMaxSharePct  допустимая доля времени (%) со скоростью ниже 80% от базовой
 //   stressSecs        длительность стресс-теста CPU, если добавить "stress" в tests
 //                     (по умолчанию в автопрогон не входит), с
 //   memTestMb         объём проверяемой памяти в автопрогоне, МБ (урезается до 75% свободной ОЗУ)
@@ -44,7 +47,10 @@ window.ECHIPS_PROFILES = {
     smartCautionIsFail: true,
     surfaceScanGb: 20,
     surfaceSlowPct: 1,
+    stressStressors: ["cpu", "fpu"],
     stressSecs: 60,
+    throttleMinPct: 60,
+    throttleMaxSharePct: 20,
     memTestMb: 4096,
     memPasses: 4,
     diskWriteMb: 512,

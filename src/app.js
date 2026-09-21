@@ -757,16 +757,23 @@ var A = {
   hwmRefresh:function(){
     invoke('hwmon_status').then(function(st){
       S.hwm.status = st;
+      var noAuto = false; try { noAuto = localStorage.getItem('echips_no_auto_pawnio')==='1'; } catch(e){}
+      if (st.embedded && st.driverEmbedded && !st.driverInstalled && !S.hwm.autoTried && !S.hwm.busy && !noAuto){
+        // приложение для инженеров: драйвер ставится сам, без вопросов; вручную можно удалить
+        S.hwm.autoTried = true; S.hwm.confirm = 'install'; A.hwmRun(); return;
+      }
       if (st.embedded && st.driverInstalled && !st.running) invoke('hwmon_start').catch(function(){});
       if (S.screen==='sensors') render();
     }).catch(function(){});
   },
   hwmStart:function(){ invoke('hwmon_start').then(function(){ A.hwmRefresh(); }).catch(function(err){ S.hwm.err = typeof err==='string'?err:'Не удалось запустить датчики'; render(); }); },
   hwmAsk:function(step){ S.hwm.confirm = step; S.hwm.msg=''; S.hwm.err=''; render(); },
+  hwmInstall:function(){ try { localStorage.removeItem('echips_no_auto_pawnio'); } catch(e){} S.hwm.autoTried = true; S.hwm.confirm = 'install'; S.hwm.msg=''; S.hwm.err=''; A.hwmRun(); },
   hwmCancel:function(){ S.hwm.confirm = null; render(); },
   hwmRun:function(){
     var step = S.hwm.confirm; if (!step || S.hwm.busy) return;
     S.hwm.busy = true; S.hwm.err=''; render();
+    if (step==='uninstall'){ try { localStorage.setItem('echips_no_auto_pawnio','1'); } catch(e){} }
     invoke(step==='uninstall' ? 'hwmon_uninstall_driver' : 'hwmon_install_driver').then(function(r){
       S.hwm.busy = false; S.hwm.confirm = null; S.hwm.msg = r; S.hwm.snap = null;
       A.hwmRefresh();
@@ -1953,21 +1960,23 @@ var HW_TYPES = { Temperature:'Температура', Fan:'Вентилятор
 function hwmonPanel(){
   var h = S.hwm, st = h.status, sn = h.snap;
   if (!st) return '<div class="actpanel"><div class="kbnote">LibreHardwareMonitor: проверка…</div></div>';
-  var out = '<div class="actpanel"><div class="kbnote" style="margin-bottom:8px"><b style="color:var(--text)">LibreHardwareMonitor</b> — температуры процессора, обороты вентиляторов, напряжения и мощность. Нужен драйвер PawnIO (вшит в программу, ставится тихо, снимается кнопкой).</div>';
+  var out = '<div class="actpanel"><div class="kbnote" style="margin-bottom:8px"><b style="color:var(--text)">LibreHardwareMonitor</b> — температуры процессора, обороты вентиляторов, напряжения и мощность. Нужен драйвер PawnIO: он вшит в программу и ставится сам при первом запуске (без вопросов); удалить можно кнопкой ниже.</div>';
   if (!st.embedded){
     return out+'<div class="kbnote" style="color:var(--err)">Датчики не вшиты в эту сборку (локальная сборка). Используйте exe из релиза.</div></div>';
   }
   var line = 'Драйвер PawnIO: '+(st.driverInstalled ? '<b style="color:var(--ok)">установлен</b>' : '<b style="color:var(--err)">не установлен</b>')+' · датчики: '+(st.running ? (st.hasData ? '<b style="color:var(--ok)">работают, показаний: '+st.sensors+'</b>' : 'запущены, ждём данные…') : 'не запущены');
   out += '<div class="kbnote" style="margin-bottom:8px">'+line+(st.message ? ' · '+esc(st.message) : '')+'</div>';
-  if (h.confirm){
-    out += '<div class="actconfirm">'+(h.confirm==='uninstall' ? 'Удалить драйвер PawnIO из системы? Температуры процессора станут недоступны.' : 'Установить драйвер PawnIO (ядерный драйвер для чтения датчиков)? Может потребоваться перезагрузка.')+
+  if (h.busy){
+    out += '<div class="kbnote" style="color:var(--accent-hi)">'+(h.confirm==='uninstall' ? 'Удаление драйвера PawnIO…' : 'Установка драйвера PawnIO… (несколько секунд)')+'</div>';
+  } else if (h.confirm==='uninstall'){
+    out += '<div class="actconfirm">'+'Удалить драйвер PawnIO из системы? Температуры процессора станут недоступны, автоустановка при запуске отключится.'+
       '<div class="headactions" style="margin-top:10px"><button class="btn btn-ghost" onclick="echips.hwmCancel()" '+(h.busy?'disabled':'')+'>Отмена</button>'+
       '<button class="btn btn-primary" onclick="echips.hwmRun()" '+(h.busy?'disabled':'')+'>'+(h.busy?'Выполняется…':'Да, выполнить')+'</button></div></div>';
   } else {
     out += '<div class="runrow" style="flex-wrap:wrap">'+
       (st.driverInstalled
         ? '<button class="btn btn-ghost" onclick="echips.hwmAsk(\'uninstall\')">Удалить драйвер PawnIO</button>'
-        : (st.driverEmbedded ? '<button class="btn btn-primary" onclick="echips.hwmAsk(\'install\')">Установить драйвер PawnIO</button>' : ''))+
+        : (st.driverEmbedded ? '<button class="btn btn-primary" onclick="echips.hwmInstall()">Установить драйвер PawnIO</button>' : ''))+
       (st.driverInstalled && !st.running ? '<button class="btn btn-ghost" onclick="echips.hwmStart()">Запустить датчики</button>' : '')+'</div>';
   }
   if (h.msg) out += '<div class="kbnote" style="margin-top:8px;color:var(--ok)">'+esc(h.msg)+'</div>';

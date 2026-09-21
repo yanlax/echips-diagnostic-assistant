@@ -290,6 +290,13 @@ var A = {
   comment:function(v){ S.comments[S.cat]=v; if (S.markErr && S.markErr.id===S.cat){ S.markErr=null; var m=document.getElementById('mark-err'); if(m) m.style.display='none'; } },
   mark:function(v){
     var id = S.cat, d = S.detail[id] || {}, auto = d.auto;
+    var busy = (id==='diskread' && S.dr.running) || (id==='surface' && S.sf.running) || (id==='diskwrite' && S.dw.running) ||
+      (id==='mem' && S.mem.running) || (id==='stress' && S.st.running) || (id==='fans' && S.fan.running) ||
+      (cat().kind==='runner' && S.running);
+    if (busy){
+      S.markErr = { id:id, text:'Тест ещё выполняется — дождитесь результата или остановите его кнопкой «Остановить», затем отметьте вердикт. Иначе он прервётся и запишется без данных.' };
+      render(); return;
+    }
     // автовердикт можно изменить, но только с объяснением в комментарии — иначе
     // отчёт получается противоречивым («пройден» рядом с «SMART — тревога»)
     if (auto && auto.status && auto.status!==v){
@@ -1285,7 +1292,16 @@ function fetchCategory(kind){
       var v;
       if (crashes.length) v = { status:'fail', note:'Синих экранов за '+days+' дн.: '+crashes.length+' (последний '+crashes[0].code+' '+crashes[0].name+')'+(h.diagnosis.length && h.diagnosis[0].level==='warn' ? '. '+h.diagnosis[0].title : '') };
       else if (power.length > maxPower) v = { status:'fail', note:'Внезапных отключений/перезагрузок за '+days+' дн.: '+power.length+' (допустимо не более '+maxPower+') — питание, перегрев, плата' };
-      else v = { status:'pass', note:'Синих экранов за '+days+' дн. нет'+(power.length?'; внезапных отключений: '+power.length+' (в пределах допуска)':'') };
+      else {
+        var oldCrash = h.entries.filter(function(e){ return e.code!=='0x0'; }).length - crashes.length;
+        var oldPower = h.entries.filter(function(e){ return e.code==='0x0'; }).length - power.length;
+        var older = [];
+        if (oldCrash>0) older.push('синих экранов '+oldCrash);
+        if (oldPower>0) older.push('внезапных отключений '+oldPower);
+        if (h.hw_counts.disk>0) older.push('ошибок диска '+h.hw_counts.disk);
+        if (h.hw_counts.whea>0) older.push('критичных WHEA '+h.hw_counts.whea);
+        v = { status:'pass', note:'Синих экранов за '+days+' дн. нет'+(power.length?'; внезапных отключений: '+power.length+' (в пределах допуска)':'')+(older.length ? '. Ранее (до 90 дн.): '+older.join(', ')+' — см. подробности' : '') };
+      }
       return { lines:lines, verdict:v, actions:actions };
     });
   }

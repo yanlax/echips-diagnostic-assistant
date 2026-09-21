@@ -520,3 +520,7 @@ h1.title{font-family:var(--grotesk);font-size:27px;font-weight:600;color:var(--t
 .stscore .r.bad{color:var(--err)}
 .stev{max-height:130px;min-height:60px;flex:none}
 .stev div{color:var(--text-2)}
+
+/* ---------- вентиляторы ---------- */
+.fantable .smh,.fantable .smr{grid-template-columns:1.2fr 120px 140px 1.3fr}
+.fantable .range{width:70%;vertical-align:middle;margin:0 6px 0 0}

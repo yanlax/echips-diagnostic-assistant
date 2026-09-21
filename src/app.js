@@ -37,6 +37,7 @@ var CATS = [
   { id:'surface', group:'disk', sub:'Поверхность', tag:'SURF', name:'Диск: поверхность', method:'Чтение диска блоками с замером времени каждого блока и графиком скорости в реальном времени (как Victoria)', impl:'реальная нагрузка', kind:'surface' },
   { id:'diskwrite', group:'disk', sub:'Запись', tag:'WR', name:'Диск: запись', method:'Запись и чтение проверочного файла на томе: скорость по участкам, медленные блоки, ошибки данных', impl:'реальная нагрузка', kind:'diskwrite' },
   { id:'mem', tag:'RAM', name:'Память', method:'Многопоточная запись и проверка паттернов в ОЗУ, счётчик ошибок', impl:'реальная нагрузка', kind:'memtest' },
+  { id:'fans', tag:'FAN', name:'Вентиляторы', method:'Обороты вентиляторов и отклик на управление скоростью (как в SpeedFan) — через датчики LibreHardwareMonitor', impl:'реальные данные', kind:'fans' },
   { id:'sens', tag:'SNS', name:'Датчики', method:'Температуры через WMI ACPI — доступность зависит от платы', impl:'зависит от платы', kind:'sensors' },
   { id:'stress', tag:'STR', name:'Стресс-тест', method:'Реальная нагрузка CPU на всех ядрах на заданное время', impl:'CPU реально', kind:'stress' }
 ];
@@ -106,6 +107,7 @@ var S = {
        running:false, elapsed:0, last:null, res:null, err:null, events:[], gpuFps:null,
        hist:{ load:[], temp:[], gpuT:[], clock:[], clockMax:0, scores:{} } },
   stressMarker:null,
+  fan:{ poll:null, log:[], res:null, running:false, abort:false, manual:{}, seen:{}, touched:false, refresh:null },
   hwm:{ status:null, snap:null, busy:false, msg:'', err:'', confirm:null },
   snapshot:false, exported:null,
   hw:null, verdict:null, runActions:[], act:{ confirm:null, busy:false, msg:'', err:'', keyOpen:false, key:'' }, actRaw:null, detail:{}, kstat:{}, repId:null, markErr:null, br:{ info:null, loading:false }, camClip:null,
@@ -223,6 +225,10 @@ var A = {
     stopSensorPoll(); stopCamera(); stopAudio();
     if (S.rm.timer){ clearInterval(S.rm.timer); S.rm.timer=null; }
     if (S.kbT){ clearInterval(S.kbT); S.kbT=null; }
+    if (S.fan.poll){ clearInterval(S.fan.poll); S.fan.poll=null; }
+    if (S.fan.refresh){ clearInterval(S.fan.refresh); S.fan.refresh=null; }
+    S.fan.abort = true; S.fan.manual = {};
+    if (S.fan.touched){ invoke('hwmon_fan_default_all').catch(function(){}); S.fan.touched = false; }
     S.br = { info:null, loading:false }; S.camClip = null;
     if (S.st.running && screen!=='stress') invoke('stop_stress').catch(function(){});
     if (S.sf.running) invoke('stop_surface_scan').catch(function(){});
@@ -251,6 +257,7 @@ var A = {
       else if (c.kind==='memtest') A.memAuto();
       else if (c.kind==='sensors') A.sensorsAuto();
       else if (c.kind==='stress') A.stressAuto();
+      else if (c.kind==='fans') A.fanTest(false);
     }
   },
   reset:function(){ _icache = {}; S.detail = {}; A.autoOff(); S.rm.log=[]; S.results={}; S.comments={}; S.keys={}; S.snapshot=false; render(); },
@@ -752,6 +759,99 @@ var A = {
     S.sensorPoll = setInterval(poll, 2000);
   },
   snapshot:function(){ S.snapshot=true; render(); },
+
+  /* ---- вентиляторы (как в SpeedFan) ---- */
+  fanStart:function(){
+    if (S.fan.poll) return;
+    invoke('hwmon_start').catch(function(){});
+    function tick(){
+      invoke('hwmon_snapshot').then(function(sn){ S.hwm.snap = sn; noteFans(sn); paintFans(); }).catch(function(){});
+    }
+    tick(); S.fan.poll = setInterval(tick, 1000);
+  },
+  fanManual:function(cid, v){
+    var f = S.fan; f.manual[cid] = parseInt(v,10); f.touched = true;
+    var l = document.getElementById('fan-pct-'+cssId(cid)); if (l) l.textContent = v+'%';
+    clearTimeout(f.setT); f.setT = setTimeout(function(){ invoke('hwmon_fan_set', { id:cid, percent:parseInt(v,10) }).catch(function(){}); }, 150);
+    // процесс сам вернёт авторежим через 40 с — повторяем команду, пока экран открыт
+    if (!f.refresh) f.refresh = setInterval(function(){
+      Object.keys(f.manual).forEach(function(id){ invoke('hwmon_fan_set', { id:id, percent:f.manual[id] }).catch(function(){}); });
+    }, 10000);
+  },
+  fanAuto:function(){
+    var f = S.fan; f.manual = {}; f.touched = false;
+    invoke('hwmon_fan_default_all').catch(function(){}); render();
+  },
+  fanStop:function(){ S.fan.abort = true; },
+  fanTest:function(active){
+    var f = S.fan; if (f.running) return;
+    f.running = true; f.abort = false; f.log = []; f.res = null; f.manual = {};
+    if (S.screen==='test') render();
+    function log(t){ f.log.push(t); paintFans(); }
+    function sleep(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+    function finish(v){
+      f.running = false; f.res = v;
+      recordDetail('fans', { lines: f.log.slice(0,80), auto: v });
+      invoke('hwmon_fan_default_all').catch(function(){});
+      if (S.screen==='test') render();
+      if (S.auto.on && S.cat==='fans') A.autoApply(v);
+    }
+    async function snapOk(){
+      var sn = null;
+      for (var i=0; i<8 && !(sn && sn.ok); i++){
+        sn = await invoke('hwmon_snapshot').catch(function(){ return null; });
+        if (!(sn && sn.ok)) await sleep(1000);
+      }
+      if (sn && sn.ok) S.hwm.snap = sn;
+      return sn && sn.ok ? sn : null;
+    }
+    async function sample(fanId, secs){
+      var out = [];
+      for (var i=0; i<secs && !f.abort; i++){
+        await sleep(1000);
+        var sn = await invoke('hwmon_snapshot').catch(function(){ return null; });
+        if (sn && sn.ok){ S.hwm.snap = sn; var x = sn.sensors.filter(function(s){ return s.id===fanId; })[0]; if (x){ out.push(x.value); noteFans(sn); paintFans(); } }
+      }
+      return out;
+    }
+    (async function(){
+      try {
+        await invoke('hwmon_start').catch(function(){});
+        var sn = await snapOk();
+        if (!sn){ log('Датчики не отвечают — нужен драйвер PawnIO (вкладка «Датчики»).'); return finish({ status:'na', note:'Датчики недоступны (драйвер PawnIO не установлен или не запущен)' }); }
+        var fans = fanList(sn);
+        if (!fans.length){ log('Вентиляторы датчиками не обнаружены.'); return finish({ status:'na', note:'Вентиляторы не обнаружены датчиками (у части ноутбуков контроллер EC не поддерживается)' }); }
+        log('Найдено вентиляторов: '+fans.length);
+        fans.forEach(function(x){ log('  • '+x.name+' ('+x.hw+'): '+x.rpm.toFixed(0)+' об/мин'+(x.control ? ', управляется ('+x.control.pct.toFixed(0)+'%)' : ', без ручного управления')); });
+        var cpuT = cpuTempFromSnap(sn), problems = [], notes = [];
+        for (var i=0; i<fans.length && !f.abort; i++){
+          var fan = fans[i];
+          if (active && fan.control){
+            log('Проверка «'+fan.name+'»: 100% …');
+            await invoke('hwmon_fan_set', { id:fan.control.id, percent:100 }).catch(function(){});
+            var hi = await sample(fan.id, 8); var rpmHi = hi.length ? Math.max.apply(null, hi) : 0;
+            log('  100% → '+rpmHi.toFixed(0)+' об/мин');
+            log('Проверка «'+fan.name+'»: 35% …');
+            await invoke('hwmon_fan_set', { id:fan.control.id, percent:35 }).catch(function(){});
+            var lo = await sample(fan.id, 8); var rpmLo = lo.length ? lo[lo.length-1] : 0;
+            log('  35% → '+rpmLo.toFixed(0)+' об/мин');
+            await invoke('hwmon_fan_default', { id:fan.control.id }).catch(function(){});
+            if (rpmHi < 500) problems.push('«'+fan.name+'» на 100% только '+rpmHi.toFixed(0)+' об/мин (не раскручивается)');
+            else if (rpmHi < rpmLo*1.15) problems.push('«'+fan.name+'» не реагирует на управление (100%: '+rpmHi.toFixed(0)+', 35%: '+rpmLo.toFixed(0)+' об/мин)');
+            else notes.push(fan.name+': '+rpmLo.toFixed(0)+' → '+rpmHi.toFixed(0)+' об/мин');
+          } else {
+            var rr = await sample(fan.id, 3); var cur = rr.length ? rr[rr.length-1] : fan.rpm;
+            log('«'+fan.name+'»: '+cur.toFixed(0)+' об/мин (пассивная проверка)');
+            if (cur<=0){ if (cpuT!=null && cpuT>=65) problems.push('«'+fan.name+'» стоит при температуре CPU '+cpuT.toFixed(0)+' °C'); else notes.push(fan.name+': остановлен (в простое это бывает нормально)'); }
+            else notes.push(fan.name+': '+cur.toFixed(0)+' об/мин');
+          }
+        }
+        if (f.abort) { log('Проверка остановлена.'); return finish(null); }
+        finish(problems.length ? { status:'fail', note:problems.join('; ') }
+          : { status:'pass', note:'Вентиляторов: '+fans.length+' — '+notes.join('; ')+(active ? '' : ' (пассивная проверка; для проверки отклика запустите активный тест)') });
+      } catch(e){ log('Ошибка: '+(e && e.message ? e.message : e)); finish(null); }
+    })();
+  },
 
   /* ---- датчики LibreHardwareMonitor и драйвер PawnIO ---- */
   hwmRefresh:function(){
@@ -1933,6 +2033,7 @@ function screenTest(){
   else if(c.kind==='audio') field = fieldAudio();
   else if(c.kind==='diskread') field = fieldDiskRead();
   else if(c.kind==='diskwrite') field = fieldDiskWrite();
+  else if(c.kind==='fans') field = fieldFans();
   else if(c.kind==='smart') field = fieldSmart();
   else if(c.kind==='surface') field = fieldSurface();
   else if(c.kind==='memtest') field = fieldMem();
@@ -1996,6 +2097,66 @@ function hwmonPanel(){
     out += '<div class="kbnote" style="margin-top:8px">Показания ещё не пришли — подождите пару секунд.</div>';
   }
   return out+'</div>';
+}
+
+/* ----- вентиляторы ----- */
+function cssId(id){ return String(id).replace(/[^A-Za-z0-9]/g,'_'); }
+function cpuTempFromSnap(sn){
+  var t = sn.sensors.filter(function(s){ return /^Cpu/.test(s.hwType) && s.type==='Temperature'; });
+  if (!t.length) return null;
+  var p = t.filter(function(s){ return /Package|Tctl|Tdie/i.test(s.name); })[0];
+  return p ? p.value : Math.max.apply(null, t.map(function(s){ return s.value; }));
+}
+/* Вентиляторы (датчики Fan) и их управление: пара Fan/Control с одним индексом в одном устройстве. */
+function fanList(sn){
+  function key(id){ return id.replace(/\/(fan|control)\/(\d+)$/, '/#/$2'); }
+  var controls = {};
+  sn.sensors.forEach(function(s){ if (s.type==='Control' && s.controllable) controls[key(s.id)] = s; });
+  return sn.sensors.filter(function(s){ return s.type==='Fan'; }).map(function(s){
+    var c = controls[key(s.id)];
+    return { id:s.id, name:s.name, hw:s.hw, rpm:s.value, control: c ? { id:c.id, pct:c.value } : null };
+  });
+}
+function noteFans(sn){
+  if (!sn || !sn.ok) return;
+  fanList(sn).forEach(function(x){
+    var e = S.fan.seen[x.id] || (S.fan.seen[x.id] = { min:x.rpm, max:x.rpm });
+    e.min = Math.min(e.min, x.rpm); e.max = Math.max(e.max, x.rpm);
+  });
+}
+function fanRowsHtml(){
+  var sn = S.hwm.snap;
+  if (!sn || !sn.ok) return '<div class="idle"><span class="t">··</span><span>Датчики не отвечают. Драйвер PawnIO ставится сам при первом запуске; статус — на вкладке «Датчики».</span></div>';
+  var fans = fanList(sn);
+  if (!fans.length) return '<div class="idle"><span class="t">--</span><span>Вентиляторы датчиками не обнаружены (у части ноутбуков контроллер EC не поддерживается LibreHardwareMonitor).</span></div>';
+  return '<div class="smtable fantable"><div class="smh"><span>Вентилятор</span><span>Обороты</span><span>Min / Max за сеанс</span><span>Управление</span></div>'+
+    fans.map(function(x){
+      var seen = S.fan.seen[x.id] || { min:x.rpm, max:x.rpm }, man = S.fan.manual[x.control ? x.control.id : ''];
+      var ctl = x.control
+        ? '<input type="range" class="range" min="20" max="100" step="5" value="'+(man!=null ? man : Math.round(x.control.pct))+'" oninput="echips.fanManual(\''+x.control.id.replace(/'/g,'')+'\',this.value)" '+(S.fan.running?'disabled':'')+'> <b id="fan-pct-'+cssId(x.control.id)+'">'+(man!=null ? man : Math.round(x.control.pct))+'%</b>'
+        : '<span class="mono">нет ручного управления</span>';
+      return '<div class="smr"><span>'+esc(x.name)+' <span class="mono">· '+esc(x.hw)+'</span></span><span class="mono"><b style="color:var(--text)">'+x.rpm.toFixed(0)+'</b> об/мин</span><span class="mono">'+seen.min.toFixed(0)+' / '+seen.max.toFixed(0)+'</span><span>'+ctl+'</span></div>';
+    }).join('')+'</div>';
+}
+function paintFans(){
+  var rows = document.getElementById('fan-rows');
+  // во время перетаскивания ползунка не перерисовываем таблицу
+  if (rows && !document.querySelector('#fan-rows input:active')){
+    var focus = document.activeElement; if (!(focus && focus.closest && focus.closest('#fan-rows'))) rows.innerHTML = fanRowsHtml();
+  }
+  var lg = document.getElementById('fan-log');
+  if (lg) lg.innerHTML = S.fan.log.map(function(t,i){ return '<div><span class="t">'+String(i+1).padStart(2,'0')+'</span><span style="white-space:pre-wrap">'+esc(t)+'</span></div>'; }).join('');
+}
+function fieldFans(){
+  A.fanStart();
+  var f = S.fan;
+  return '<div class="runwrap"><div class="kbnote">Обороты берутся из датчиков LibreHardwareMonitor (драйвер PawnIO). «Проверка отклика» по очереди ставит управляемым вентиляторам 100% и 35% и сравнивает обороты; после проверки авторежим возвращается сам. Ползунки — ручная скорость как в SpeedFan (20–100%), при выходе с экрана авторежим возвращается.</div>'+
+    '<div id="fan-rows">'+fanRowsHtml()+'</div>'+
+    '<div class="runrow"><button class="btn btn-primary" onclick="echips.fanTest(true)" '+(f.running?'disabled':'')+'>'+(f.running?'Идёт проверка…':'Проверка отклика (активная)')+'</button>'+
+    '<button class="btn btn-ghost" onclick="echips.fanTest(false)" '+(f.running?'disabled':'')+'>Пассивная проверка</button>'+
+    (f.running ? '<button class="btn btn-ghost" onclick="echips.fanStop()">Остановить</button>' : '<button class="btn btn-ghost" onclick="echips.fanAuto()">Вернуть авторежим</button>')+'</div>'+
+    '<div class="log" id="fan-log" style="min-height:90px">'+f.log.map(function(t,i){ return '<div><span class="t">'+String(i+1).padStart(2,'0')+'</span><span style="white-space:pre-wrap">'+esc(t)+'</span></div>'; }).join('')+'</div>'+
+    (f.res ? '<div class="kbnote" style="margin-top:6px">Автооценка: '+({pass:'пройден',fail:'не пройден',na:'не применимо'}[f.res.status])+' — '+esc(f.res.note)+'</div>' : '')+'</div>';
 }
 
 function screenSensors(){

@@ -39,7 +39,7 @@ window.ECHIPS_PROFILES = {
   default: {
     name: "Стандартный",
     tests: ["sys", "winact", "disk", "smart", "crash", "usb", "bt", "wifi", "lan", "kb", "lcd", "bright", "cam", "pad", "fp", "bat", "snd",
-            "diskread", "surface", "diskwrite", "mem", "sens"],
+            "diskread", "surface", "diskwrite", "mem", "sens", "fans"],
     stopAtFail: false,
     batteryMinHealth: 80,
     wifiMinSignal: null,

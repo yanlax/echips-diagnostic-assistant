@@ -7,7 +7,7 @@
 // хранится здесь и используется опросом датчиков (sensors.rs) и стресс-тестом.
 
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader, Cursor};
+use std::io::{BufRead, BufReader, Cursor, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -31,6 +31,14 @@ pub struct HwSensor {
     pub hw_type: String,
     #[serde(default)]
     pub name: String,
+    /// Идентификатор LibreHardwareMonitor (/lpc/.../fan/0, /control/0)
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub hw_id: String,
+    /// У датчика Control можно задать скорость вручную
+    #[serde(default)]
+    pub controllable: bool,
     #[serde(default, rename = "type")]
     pub sensor_type: String,
     #[serde(default)]
@@ -56,11 +64,15 @@ pub struct HwSnapshot {
 
 struct Running {
     child: Child,
-    _stdin: ChildStdin,
+    stdin: ChildStdin,
 }
 
 impl Drop for Running {
     fn drop(&mut self) {
+        // сначала вернуть вентиляторы в авторежим, потом завершить процесс
+        let _ = writeln!(self.stdin, "DEFAULTALL");
+        let _ = self.stdin.flush();
+        std::thread::sleep(Duration::from_millis(400));
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -185,7 +197,7 @@ pub fn hwmon_start() -> Result<(), String> {
         }
     });
     if let Ok(mut g) = PROC.lock() {
-        *g = Some(Running { child, _stdin: stdin });
+        *g = Some(Running { child, stdin });
     }
     Ok(())
 }
@@ -198,6 +210,41 @@ pub fn hwmon_stop() {
     if let Ok(mut l) = LATEST.lock() {
         *l = None;
     }
+}
+
+/// Отправляет команду вспомогательному процессу (управление вентиляторами).
+fn send(line: &str) -> Result<(), String> {
+    let mut g = PROC.lock().map_err(|_| "Внутренняя ошибка блокировки".to_string())?;
+    let r = g.as_mut().ok_or("Датчики не запущены — включите датчики (драйвер PawnIO)")?;
+    writeln!(r.stdin, "{line}").and_then(|_| r.stdin.flush()).map_err(|e| format!("Не удалось отправить команду датчикам: {e}"))
+}
+
+fn valid_id(id: &str) -> bool {
+    !id.is_empty() && id.len() < 200 && id.chars().all(|c| c.is_ascii_alphanumeric() || "/-_.#()".contains(c))
+}
+
+/// Ручная скорость вентилятора, % (20–100). Через 40 с без обновления
+/// процесс сам вернёт авторежим — приложение должно повторять команду.
+#[tauri::command(async)]
+pub fn hwmon_fan_set(id: String, percent: f64) -> Result<(), String> {
+    if !valid_id(&id) {
+        return Err("Некорректный идентификатор вентилятора".to_string());
+    }
+    send(&format!("SET|{id}|{:.0}", percent.clamp(20.0, 100.0)))
+}
+
+#[tauri::command(async)]
+pub fn hwmon_fan_default(id: String) -> Result<(), String> {
+    if !valid_id(&id) {
+        return Err("Некорректный идентификатор вентилятора".to_string());
+    }
+    send(&format!("DEFAULT|{id}"))
+}
+
+/// Вернуть все вентиляторы в автоматический режим (ошибка «датчики не запущены» игнорируется).
+#[tauri::command(async)]
+pub fn hwmon_fan_default_all() {
+    let _ = send("DEFAULTALL");
 }
 
 /// Последний снимок показаний, если он не старше `max_age_ms`.

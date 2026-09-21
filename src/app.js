@@ -106,6 +106,7 @@ var S = {
        running:false, elapsed:0, last:null, res:null, err:null, events:[], gpuFps:null,
        hist:{ load:[], temp:[], gpuT:[], clock:[], clockMax:0, scores:{} } },
   stressMarker:null,
+  hwm:{ status:null, snap:null, busy:false, msg:'', err:'', confirm:null },
   snapshot:false, exported:null,
   hw:null, verdict:null, runActions:[], act:{ confirm:null, busy:false, msg:'', err:'', keyOpen:false, key:'' }, actRaw:null, detail:{}, kstat:{}, repId:null, markErr:null, br:{ info:null, loading:false }, camClip:null,
   rm:{ drives:null, timer:null, running:null, log:[], err:null, size:64 },
@@ -192,6 +193,7 @@ function loadDevice(){
     S.device = info;
     render();
     invoke('get_hardware_summary').then(function(hw){ S.hw = hw; render(); }).catch(function(){});
+    A.hwmRefresh();
     invoke('get_stress_marker').then(function(m){ if (m){ S.stressMarker = m; render(); } }).catch(function(){});
   }).catch(function(err){
     S.deviceError = typeof err === 'string' ? err : 'Не удалось определить устройство';
@@ -731,7 +733,9 @@ var A = {
   /* ---- датчики ---- */
   sensorsStart:function(){
     stopSensorPoll();
+    A.hwmRefresh();
     function poll(){
+      invoke('hwmon_snapshot').then(function(sn){ S.hwm.snap = sn; }).catch(function(){});
       invoke('get_thermal_reading').then(function(r){
         S.sensorReading = r;
         if (r.available && r.cpu_temp_c!=null){
@@ -748,6 +752,28 @@ var A = {
     S.sensorPoll = setInterval(poll, 2000);
   },
   snapshot:function(){ S.snapshot=true; render(); },
+
+  /* ---- датчики LibreHardwareMonitor и драйвер PawnIO ---- */
+  hwmRefresh:function(){
+    invoke('hwmon_status').then(function(st){
+      S.hwm.status = st;
+      if (st.embedded && st.driverInstalled && !st.running) invoke('hwmon_start').catch(function(){});
+      if (S.screen==='sensors') render();
+    }).catch(function(){});
+  },
+  hwmStart:function(){ invoke('hwmon_start').then(function(){ A.hwmRefresh(); }).catch(function(err){ S.hwm.err = typeof err==='string'?err:'Не удалось запустить датчики'; render(); }); },
+  hwmAsk:function(step){ S.hwm.confirm = step; S.hwm.msg=''; S.hwm.err=''; render(); },
+  hwmCancel:function(){ S.hwm.confirm = null; render(); },
+  hwmRun:function(){
+    var step = S.hwm.confirm; if (!step || S.hwm.busy) return;
+    S.hwm.busy = true; S.hwm.err=''; render();
+    invoke(step==='uninstall' ? 'hwmon_uninstall_driver' : 'hwmon_install_driver').then(function(r){
+      S.hwm.busy = false; S.hwm.confirm = null; S.hwm.msg = r; S.hwm.snap = null;
+      A.hwmRefresh();
+    }).catch(function(err){
+      S.hwm.busy = false; S.hwm.confirm = null; S.hwm.err = typeof err==='string' ? err : 'Не удалось выполнить действие'; render();
+    });
+  },
 
   /* ---- стресс-тест ---- */
   stToggle:function(k){ if (S.st.running) return; S.st.cfg[k] = !S.st.cfg[k]; render(); },
@@ -775,6 +801,7 @@ var A = {
     tauriEvent.listen('stress-tick', function(ev){ stOnTick(ev.payload); }).then(function(u){ unl.push(u); });
     tauriEvent.listen('stress-done', function(ev){ cleanup(); stOnDone(ev.payload); }).then(function(u){ unl.push(u); });
     if (c.gpu) gpuStressStart();
+    invoke('hwmon_start').catch(function(){});
     invoke('start_stress', { cfg:cfg }).catch(function(err){
       cleanup(); st.running=false; st.err = typeof err==='string' ? err : 'Не удалось запустить стресс-тест'; render();
       if (S.auto.on && S.cat==='stress') A.autoApply(null);
@@ -1921,6 +1948,47 @@ function screenTest(){
     '</div></div>';
 }
 
+var HW_UNITS = { Temperature:'°C', Fan:'об/мин', Voltage:'В', Power:'Вт', Clock:'МГц', Load:'%', Control:'%', Level:'%', Data:'ГБ', SmallData:'МБ', Current:'А', Energy:'мВт·ч', Frequency:'Гц', Flow:'л/ч', Factor:'', Throughput:'Б/с', TimeSpan:'с', Noise:'дБА' };
+var HW_TYPES = { Temperature:'Температура', Fan:'Вентилятор', Voltage:'Напряжение', Power:'Мощность', Clock:'Частота', Load:'Загрузка', Control:'Управление', Level:'Уровень', Data:'Данные', SmallData:'Данные', Current:'Ток', Energy:'Энергия', Frequency:'Частота', Flow:'Поток', Factor:'Коэффициент', Throughput:'Скорость', TimeSpan:'Время', Noise:'Шум' };
+function hwmonPanel(){
+  var h = S.hwm, st = h.status, sn = h.snap;
+  if (!st) return '<div class="actpanel"><div class="kbnote">LibreHardwareMonitor: проверка…</div></div>';
+  var out = '<div class="actpanel"><div class="kbnote" style="margin-bottom:8px"><b style="color:var(--text)">LibreHardwareMonitor</b> — температуры процессора, обороты вентиляторов, напряжения и мощность. Нужен драйвер PawnIO (вшит в программу, ставится тихо, снимается кнопкой).</div>';
+  if (!st.embedded){
+    return out+'<div class="kbnote" style="color:var(--err)">Датчики не вшиты в эту сборку (локальная сборка). Используйте exe из релиза.</div></div>';
+  }
+  var line = 'Драйвер PawnIO: '+(st.driverInstalled ? '<b style="color:var(--ok)">установлен</b>' : '<b style="color:var(--err)">не установлен</b>')+' · датчики: '+(st.running ? (st.hasData ? '<b style="color:var(--ok)">работают, показаний: '+st.sensors+'</b>' : 'запущены, ждём данные…') : 'не запущены');
+  out += '<div class="kbnote" style="margin-bottom:8px">'+line+(st.message ? ' · '+esc(st.message) : '')+'</div>';
+  if (h.confirm){
+    out += '<div class="actconfirm">'+(h.confirm==='uninstall' ? 'Удалить драйвер PawnIO из системы? Температуры процессора станут недоступны.' : 'Установить драйвер PawnIO (ядерный драйвер для чтения датчиков)? Может потребоваться перезагрузка.')+
+      '<div class="headactions" style="margin-top:10px"><button class="btn btn-ghost" onclick="echips.hwmCancel()" '+(h.busy?'disabled':'')+'>Отмена</button>'+
+      '<button class="btn btn-primary" onclick="echips.hwmRun()" '+(h.busy?'disabled':'')+'>'+(h.busy?'Выполняется…':'Да, выполнить')+'</button></div></div>';
+  } else {
+    out += '<div class="runrow" style="flex-wrap:wrap">'+
+      (st.driverInstalled
+        ? '<button class="btn btn-ghost" onclick="echips.hwmAsk(\'uninstall\')">Удалить драйвер PawnIO</button>'
+        : (st.driverEmbedded ? '<button class="btn btn-primary" onclick="echips.hwmAsk(\'install\')">Установить драйвер PawnIO</button>' : ''))+
+      (st.driverInstalled && !st.running ? '<button class="btn btn-ghost" onclick="echips.hwmStart()">Запустить датчики</button>' : '')+'</div>';
+  }
+  if (h.msg) out += '<div class="kbnote" style="margin-top:8px;color:var(--ok)">'+esc(h.msg)+'</div>';
+  if (h.err) out += '<div class="kbnote" style="margin-top:8px;color:var(--err)">'+esc(h.err)+'</div>';
+  if (sn && sn.ok && sn.sensors.length){
+    var groups = {}, order = [];
+    sn.sensors.forEach(function(x){ if (!groups[x.hw]){ groups[x.hw] = []; order.push(x.hw); } groups[x.hw].push(x); });
+    out += '<div class="smtable" style="margin-top:12px">'+ order.map(function(name){
+      var rows = groups[name].filter(function(x){ return x.type!=='Clock' && x.type!=='Load' && x.type!=='Data' && x.type!=='SmallData' || /Total|Package|Core #1$|CPU Core|Memory|GPU Core/.test(x.name); });
+      return '<div class="smh nv"><span>'+esc(name)+' · '+esc(groups[name][0].hwType)+'</span><span></span></div>'+
+        rows.map(function(x){
+          var u = HW_UNITS[x.type]!==undefined ? HW_UNITS[x.type] : '', v = x.type==='Fan' || x.type==='Clock' ? x.value.toFixed(0) : x.value.toFixed(x.type==='Voltage' ? 3 : 1);
+          return '<div class="smr nv"><span>'+esc((HW_TYPES[x.type]||x.type)+' · '+x.name)+'</span><span class="mono">'+v+' '+u+(x.max!=null && x.type==='Temperature' ? ' (макс '+x.max.toFixed(0)+')' : '')+'</span></div>';
+        }).join('');
+    }).join('') +'</div>';
+  } else if (st.driverInstalled && st.running){
+    out += '<div class="kbnote" style="margin-top:8px">Показания ещё не пришли — подождите пару секунд.</div>';
+  }
+  return out+'</div>';
+}
+
 function screenSensors(){
   var r = S.sensorReading;
   var cpuVal = r && r.available ? r.cpu_temp_c.toFixed(1) : '—';
@@ -1952,8 +2020,8 @@ function screenSensors(){
       return '<div class="readout"><div class="k"><i style="background:'+r2.c+'"></i>'+r2.k+'</div>'+
         '<div class="v"><b>'+r2.v+'</b><span>'+r2.u+'</span></div><div class="m">'+r2.m+'</div></div>';
     }).join('') +'</div>'+
-    '<div class="chart">'+chart+'</div>'+
-    '<div class="footrow"><span class="txt">Без LibreHardwareMonitor/HWInfo доступен один ACPI-датчик через WMI (не на всех платах) и GPU NVIDIA через nvidia-smi. Снимок можно приложить к отчёту.</span>'+
+    '<div class="chart">'+chart+'</div>'+hwmonPanel()+
+    '<div class="footrow"><span class="txt">Без драйвера PawnIO доступен один ACPI-датчик через WMI (не на всех платах) и GPU NVIDIA через nvidia-smi. Снимок можно приложить к отчёту.</span>'+
     '<button class="btn btn-ghost" onclick="echips.snapshot()">'+(S.snapshot?'Снимок добавлен в отчёт':'Приложить снимок к отчёту')+'</button></div></div>';
 }
 
@@ -2015,6 +2083,12 @@ function gpuStressStop(){
 }
 
 /* ----- обработка секундных данных ядра ----- */
+function stExtra(p){
+  var a = [];
+  if (p.fanRpm!=null) a.push('вентилятор '+p.fanRpm.toFixed(0)+' об/мин');
+  if (p.powerW!=null) a.push('CPU '+p.powerW.toFixed(0)+' Вт');
+  return a.join(' · ');
+}
 function stOnTick(p){
   var st = S.st, h = st.hist;
   st.elapsed = p.elapsed; st.last = p;
@@ -2107,6 +2181,7 @@ function paintStress(){
     set('st-temp', (p.tempC!=null ? p.tempC.toFixed(0)+' °C' : '—')+(p.gpuTempC!=null ? ' · GPU '+p.gpuTempC.toFixed(0)+' °C' : ''));
     set('st-clock', p.clockMhz ? p.clockMhz.toFixed(0)+' МГц' : '—');
     set('st-clockmax', p.clockMaxMhz ? 'макс. '+p.clockMaxMhz.toFixed(0)+' МГц' : '');
+    set('st-extra', stExtra(p));
   }
   var sc = document.getElementById('st-scores');
   if (sc){
@@ -2166,7 +2241,7 @@ function screenStress(){
   var p = st.last;
   var cards = '<div class="stats4" style="margin-top:12px">'+
     '<div class="stat4"><div class="k">загрузка CPU</div><div class="v" id="st-load">'+(p ? p.load.toFixed(0)+' %' : '—')+'</div></div>'+
-    '<div class="stat4"><div class="k">температура</div><div class="v" id="st-temp" style="font-size:14px">'+(p ? (p.tempC!=null ? p.tempC.toFixed(0)+' °C' : '—')+(p.gpuTempC!=null ? ' · GPU '+p.gpuTempC.toFixed(0)+' °C' : '') : '—')+'</div></div>'+
+    '<div class="stat4"><div class="k">температура</div><div class="v" id="st-temp" style="font-size:14px">'+(p ? (p.tempC!=null ? p.tempC.toFixed(0)+' °C' : '—')+(p.gpuTempC!=null ? ' · GPU '+p.gpuTempC.toFixed(0)+' °C' : '') : '—')+'</div><div class="k" id="st-extra" style="margin-top:2px">'+(p ? stExtra(p) : '')+'</div></div>'+
     '<div class="stat4"><div class="k">частота CPU</div><div class="v" id="st-clock" style="font-size:14px">'+(p && p.clockMhz ? p.clockMhz.toFixed(0)+' МГц' : '—')+'</div><div class="k" id="st-clockmax" style="margin-top:2px">'+(p && p.clockMaxMhz ? 'макс. '+p.clockMaxMhz.toFixed(0)+' МГц' : '')+'</div></div>'+
     '<div class="stat4"><div class="k">скорость нагрузок</div><div id="st-scores" class="stscores"></div></div></div>';
   var charts = '<div class="stcharts"><div><div class="k">Загрузка CPU, %</div><canvas id="st-c-load" class="stcanvas"></canvas></div>'+

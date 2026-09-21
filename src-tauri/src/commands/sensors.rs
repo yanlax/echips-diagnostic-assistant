@@ -19,6 +19,11 @@ pub struct SensorReading {
     /// Видеокарта NVIDIA через nvidia-smi (поставляется с драйвером, сторонние
     /// библиотеки не нужны). Для AMD/Intel-видео данных нет.
     pub gpu: Option<GpuSensor>,
+    /// Максимум оборотов вентиляторов и мощность CPU — только через LibreHardwareMonitor
+    pub fan_rpm: Option<f64>,
+    pub cpu_power_w: Option<f64>,
+    /// "acpi" | "lhm"
+    pub source: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -53,6 +58,27 @@ fn read_nvidia() -> Option<GpuSensor> {
 
 #[tauri::command(async)]
 pub fn get_thermal_reading() -> Result<SensorReading, String> {
+    let mut r = acpi_reading()?;
+    // если запущены датчики LibreHardwareMonitor (драйвер PawnIO) — их данные точнее ACPI
+    if let Some(h) = crate::commands::hwmon::summary() {
+        if let Some(t) = h.cpu_temp {
+            r.available = true;
+            r.cpu_temp_c = Some(t);
+            r.note = "LibreHardwareMonitor (драйвер PawnIO)".into();
+            r.source = "lhm".into();
+        }
+        if r.gpu.is_none() {
+            if let Some(g) = h.gpu_temp {
+                r.gpu = Some(GpuSensor { name: "GPU (LibreHardwareMonitor)".into(), temp_c: g, ..Default::default() });
+            }
+        }
+        r.fan_rpm = h.fan_rpm;
+        r.cpu_power_w = h.cpu_power_w;
+    }
+    Ok(r)
+}
+
+fn acpi_reading() -> Result<SensorReading, String> {
     #[cfg(target_os = "windows")]
     {
         // Значение в MSAcpi_ThermalZoneTemperature — в десятых долях кельвина.
@@ -70,14 +96,18 @@ pub fn get_thermal_reading() -> Result<SensorReading, String> {
                 cpu_temp_c: Some(celsius),
                 note: "ACPI thermal zone (WMI) — может не отражать реальную температуру CPU/GPU на всех платах".into(),
                 gpu,
+                source: "acpi".into(),
+                ..Default::default()
             }),
             _ => Ok(SensorReading {
                 available: false,
                 cpu_temp_c: None,
                 note: "Плата не публикует ACPI-датчики через WMI. Для точных данных нужен \
-                       LibreHardwareMonitor/HWInfo (не интегрирован в это приложение)."
+                       Установите драйвер PawnIO на вкладке «Датчики» — тогда заработает LibreHardwareMonitor."
                     .into(),
                 gpu,
+                source: "acpi".into(),
+                ..Default::default()
             }),
         }
     }

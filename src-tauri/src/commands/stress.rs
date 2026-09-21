@@ -50,6 +50,8 @@ pub struct StressTick {
     pub clock_max_mhz: f64,
     pub temp_c: Option<f64>,
     pub gpu_temp_c: Option<f64>,
+    pub fan_rpm: Option<f64>,
+    pub power_w: Option<f64>,
     /// Скорость каждой нагрузки за последнюю секунду (см. unit в итоге)
     pub scores: BTreeMap<String, f64>,
     pub mem_errors: u64,
@@ -543,14 +545,14 @@ fn run_session(window: Window, cfg: StressConfig) {
     }
 
     // температуры читаем отдельным потоком (запросы медленные и не должны тормозить секундный тик)
-    let temps: Arc<Mutex<(Option<f64>, Option<f64>)>> = Arc::new(Mutex::new((None, None)));
+    let temps: Arc<Mutex<(Option<f64>, Option<f64>, Option<f64>, Option<f64>)>> = Arc::new(Mutex::new((None, None, None, None)));
     {
         let (temps, stop) = (Arc::clone(&temps), Arc::clone(&stop));
         handles.push(std::thread::spawn(move || {
             while !stop.load(Ordering::Relaxed) {
                 if let Ok(r) = crate::commands::sensors::get_thermal_reading() {
                     if let Ok(mut t) = temps.lock() {
-                        *t = (r.cpu_temp_c, r.gpu.map(|g| g.temp_c));
+                        *t = (r.cpu_temp_c, r.gpu.map(|g| g.temp_c), r.fan_rpm, r.cpu_power_w);
                     }
                 }
                 for _ in 0..25 {
@@ -617,6 +619,8 @@ fn run_session(window: Window, cfg: StressConfig) {
         if let Ok(t) = temps.lock() {
             tick.temp_c = t.0;
             tick.gpu_temp_c = t.1;
+            tick.fan_rpm = t.2;
+            tick.power_w = t.3;
         }
         if let Some(t) = tick.temp_c {
             max_temp = Some(max_temp.map_or(t, |m: f64| m.max(t)));

@@ -1,4 +1,24 @@
+/// Подготавливает файлы для include_bytes!: собранные в CI вспомогательный процесс
+/// датчиков и установщик PawnIO лежат в helper/; при локальной сборке их нет —
+/// тогда подставляются пустые файлы, а приложение сообщает «датчики не вшиты».
+fn embed_helper_files() {
+    let out = std::env::var("OUT_DIR").expect("OUT_DIR");
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+    for name in ["sensors.zip", "PawnIO_setup.exe"] {
+        let src = std::path::Path::new(&manifest).join("helper").join(name);
+        let dst = std::path::Path::new(&out).join(name);
+        println!("cargo:rerun-if-changed=helper/{name}");
+        if src.exists() {
+            std::fs::copy(&src, &dst).expect("не удалось скопировать вложение");
+        } else {
+            std::fs::write(&dst, b"").expect("не удалось создать заглушку вложения");
+            println!("cargo:warning=helper/{name} не найден — датчики LibreHardwareMonitor не будут вшиты");
+        }
+    }
+}
+
 fn main() {
+    embed_helper_files();
     // Встраиваем в .exe манифест через встроенный механизм Tauri (НЕ через
     // отдельный winres::WindowsResource::compile() — тот создаёт свой
     // независимый Windows-ресурс VERSION, который конфликтует с ресурсом,

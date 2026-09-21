@@ -10,6 +10,12 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::system::get_system_info,
             commands::summary::get_hardware_summary,
+            commands::hwmon::hwmon_status,
+            commands::hwmon::hwmon_start,
+            commands::hwmon::hwmon_stop,
+            commands::hwmon::hwmon_snapshot,
+            commands::hwmon::hwmon_install_driver,
+            commands::hwmon::hwmon_uninstall_driver,
             commands::activation::get_activation_status,
             commands::activation::run_activation_step,
             commands::activation::open_activation_settings,
@@ -65,6 +71,7 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|_app, event| {
             if let tauri::RunEvent::Exit = event {
+                commands::hwmon::hwmon_stop();
                 powershell::shutdown();
             }
         });

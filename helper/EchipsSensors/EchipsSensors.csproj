@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Вспомогательный процесс датчиков на LibreHardwareMonitorLib (MPL-2.0).
+       .NET Framework 4.7.2 есть в Windows 10/11 из коробки, отдельная установка
+       среды выполнения не нужна. Собирается в CI и вшивается в основной exe. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <AssemblyName>echips-sensors</AssemblyName>
+    <PlatformTarget>x64</PlatformTarget>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
+    <Reference Include="System.Web.Extensions" />
+  </ItemGroup>
+
+</Project>

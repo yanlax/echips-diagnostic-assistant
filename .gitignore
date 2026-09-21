@@ -2,3 +2,7 @@
 /src-tauri/gen/
 node_modules/
 .DS_Store
+/helper/out/
+/helper/EchipsSensors/bin/
+/helper/EchipsSensors/obj/
+/src-tauri/helper/

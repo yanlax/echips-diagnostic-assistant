@@ -44,8 +44,8 @@ src-tauri/
                                      Wi-Fi сетей, наличие сканера отпечатка
       sensors.rs                    температура CPU через ACPI thermal zone
                                      (WMI) с честным fallback "недоступно"
-      stress.rs                     реальный CPU-стресс-тест (busy-loop на
-                                     каждое логическое ядро) с live-прогрессом
+      stress.rs                     start_stress/stop_stress: нагрузки CPU/FPU/кэш/память/диск,
+                                     живые метрики, маркер обрыва
       drivers.rs                    установка драйверов — порт логики из
                                      echips-driver-assistant (каскад поиска,
                                      скачивание с Яндекс.Диска, pnputil,

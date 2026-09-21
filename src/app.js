@@ -161,7 +161,6 @@ function deviceSn(){ return S.device ? S.device.serial_number : ''; }
   var minBtn = document.getElementById('win-minimize');
   var closeBtn = document.getElementById('win-close');
   var maxBtn = document.getElementById('win-maximize');
-  var fsBtn = document.getElementById('win-fullscreen');
   if (minBtn) minBtn.addEventListener('click', function(){ win.minimize(); });
   if (closeBtn) closeBtn.addEventListener('click', function(){ win.close(); });
   function toggleMax(){
@@ -171,7 +170,6 @@ function deviceSn(){ return S.device ? S.device.serial_number : ''; }
     win.isFullscreen().then(function(f){ return win.setFullscreen(!f); }).catch(function(){});
   }
   if (maxBtn) maxBtn.addEventListener('click', toggleMax);
-  if (fsBtn) fsBtn.addEventListener('click', toggleFs);
   var tb = document.querySelector('.titlebar');
   if (tb) tb.addEventListener('dblclick', function(e){ if (!e.target.closest('.winbtn')) toggleMax(); });
   document.addEventListener('keydown', function(e){

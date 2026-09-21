@@ -637,7 +637,9 @@ fn run_session(window: Window, cfg: StressConfig) {
             if tick_no > 2 {
                 l.hist.push(score);
             }
-            if l.hist.len() >= 10 {
+            // скорость памяти и диска зависит от фазы записи/чтения и кэша SSD, а не от троттлинга —
+            // просадку ищем только у процессорных нагрузок
+            if matches!(l.name, "cpu" | "fpu" | "cache") && l.hist.len() >= 10 {
                 let base = median(&l.hist[..10]);
                 if base > 0.0 {
                     let ratio = score / base;

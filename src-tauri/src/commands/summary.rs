@@ -104,11 +104,21 @@ pub fn get_hardware_summary() -> Result<HardwareSummary, String> {
                     health = if ($m) { $m[1] } else { '' }
                 }
             })
+            # AdapterRAM в WMI 32-битный: у карт с 4+ ГБ показывает 4095 МБ — берём qwMemorySize из реестра
+            $vram = @{}
+            try {
+                Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}' -ErrorAction Stop | ForEach-Object {
+                    $rp = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+                    $q = $rp.'HardwareInformation.qwMemorySize'
+                    if ($q -is [byte[]]) { $q = [BitConverter]::ToUInt64($q, 0) }
+                    if ($q -and $rp.DriverDesc) { $vram[[string]$rp.DriverDesc] = [double]$q }
+                }
+            } catch {}
             $gpus = @(Get-CimInstance Win32_VideoController | ForEach-Object {
                 [PSCustomObject]@{
                     name = [string]$_.Name
                     driver_version = [string]$_.DriverVersion
-                    vram_mb = [math]::Round([double]$_.AdapterRAM / 1MB, 0)
+                    vram_mb = if ($vram.ContainsKey([string]$_.Name)) { [math]::Round($vram[[string]$_.Name] / 1MB, 0) } else { [math]::Round([double]$_.AdapterRAM / 1MB, 0) }
                 }
             })
             $bb = Get-CimInstance Win32_BaseBoard | Select-Object -First 1

@@ -176,6 +176,16 @@ fn build_disk(r: RawDisk) -> SmartDisk {
             // LBA по 512 байт — оценка: у части производителей единица другая
             d.written_gb = sp::find_raw(&attrs, 241).map(|v| v as f64 * 512.0 / 1e9);
             d.read_gb = sp::find_raw(&attrs, 242).map(|v| v as f64 * 512.0 / 1e9);
+            // у ряда SSD единица атрибута 241/242 не LBA×512 (получается «0 ГБ» при тысячах часов
+            // работы) — такое значение не показываем, чтобы не вводить в заблуждение
+            if d.power_on_hours.unwrap_or(0) > 200 {
+                if d.written_gb.map(|g| g < 1.0).unwrap_or(false) {
+                    d.written_gb = None;
+                }
+                if d.read_gb.map(|g| g < 1.0).unwrap_or(false) {
+                    d.read_gb = None;
+                }
+            }
             if r.predict_failure == Some(true) {
                 d.notes.push("Диск сам предсказывает скорый отказ (PredictFailure)".into());
             }

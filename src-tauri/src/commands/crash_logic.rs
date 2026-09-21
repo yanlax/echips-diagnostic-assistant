@@ -44,7 +44,10 @@ pub struct Diagnosis {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct HwCounts {
+    /// Критичные и неисправленные аппаратные ошибки WHEA
     pub whea: u32,
+    /// Исправленные ошибки WHEA (чаще всего PCIe AER) — сами по себе не критичны
+    pub whea_corrected: u32,
     pub disk: u32,
     pub tdr: u32,
 }
@@ -300,6 +303,14 @@ pub fn diagnose(entries: &[CrashEntry], hw: &HwCounts) -> Vec<Diagnosis> {
     if cat("video") >= 2 || hw.tdr >= 2 {
         push("warn", "Сбои видеодрайвера / GPU", "Переустановите видеодрайвер, проверьте температуру и питание видеочипа.", &["stress"]);
     }
+    if hw.whea_corrected >= 10 && hw.whea == 0 {
+        push(
+            "info",
+            &format!("Повторяющиеся исправленные ошибки шины: {}", hw.whea_corrected),
+            "Обычно это PCIe: неплотный контакт видеокарты/NVMe в слоте, райзер, питание слота или слишком высокий режим PCIe (4.0 вместо 3.0). Ошибки исправляются автоматически и сами по себе не критичны, но при частом повторении переустановите карту/SSD и попробуйте снизить режим PCIe в BIOS.",
+            &[],
+        );
+    }
     // один и тот же код много раз
     let mut counts: std::collections::BTreeMap<u32, usize> = Default::default();
     for e in &crashes {
@@ -443,8 +454,16 @@ mod tests {
     }
 
     #[test]
+    fn corrected_whea_is_only_informational() {
+        let d = diagnose(&[], &HwCounts { whea_corrected: 41, ..Default::default() });
+        assert!(d.iter().any(|x| x.title.starts_with("Повторяющиеся исправленные")));
+        assert!(!d.iter().any(|x| x.title.starts_with("Аппаратные ошибки")));
+        assert!(d.iter().all(|x| x.level == "info"));
+    }
+
+    #[test]
     fn hw_events_raise_flags() {
-        let d = diagnose(&[], &HwCounts { whea: 2, disk: 1, tdr: 0 });
+        let d = diagnose(&[], &HwCounts { whea: 2, disk: 1, ..Default::default() });
         assert!(d.iter().any(|x| x.title.starts_with("Аппаратные ошибки")));
         assert!(d.iter().any(|x| x.title.starts_with("Признаки проблем накопителя")));
     }

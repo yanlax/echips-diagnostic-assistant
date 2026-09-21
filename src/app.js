@@ -300,6 +300,14 @@ var A = {
       }
       recordDetail(id, { override:{ from:auto.status, to:v, reason:cm } });
     } else if (d.override){ recordDetail(id, { override:null }); }
+    if (cat().kind==='keyboard' && v==='pass'){
+      var total = NUMPAD.length + MEDIA.length; KEYROWS.forEach(function(r){ total += r.length; });
+      var pressed = Object.keys(S.keys).length;
+      if (pressed < total*0.6 && !(S.comments[id]||'').trim()){
+        S.markErr = { id:id, text:'Нажато только '+pressed+' из '+total+' клавиш. Нажмите остальные или допишите в комментарии, почему тест засчитан (например, нет цифрового блока).' };
+        render(); return;
+      }
+    }
     S.markErr = null;
     if (cat().kind==='keyboard') recordDetail(id, { lines: kbSummaryLines() });
     recordDetail(id, { final:v });
@@ -1234,7 +1242,19 @@ function fetchCategory(kind){
   }
   if (kind==='crash'){
     var days = profile().crashDays || 30;
-    return invoke('get_crash_history', { days: Math.max(days, 90) }).then(function(h){
+    return Promise.all([invoke('get_crash_history', { days: Math.max(days, 90) }), invokeCached('get_disk_health', {}, 30000).catch(function(){ return []; })]).then(function(pair){
+      var h = pair[0], disks = pair[1] || [];
+      var laptop = !S.hw || S.hw.is_laptop;
+      // \Device\HarddiskN\DRn -> имя диска с этим номером
+      function diskName(text){
+        return String(text).replace(/\\Device\\Harddisk(\d+)\\DR\d+/g, function(m, n){
+          var d = disks.filter(function(x){ return String(x.number)===n; })[0];
+          return 'Harddisk'+n+(d ? ' ('+d.name+')' : '');
+        });
+      }
+      function wording(t){
+        return laptop ? t : t.replace('Питание (батарея, зарядка/БП), перегрев или плата. Прогоните без батареи и с другим блоком питания, посмотрите температуры под нагрузкой.','Питание (блок питания, розетка/ИБП), перегрев или плата. Проверьте с другим блоком питания и другой розеткой, посмотрите температуры под нагрузкой.').replace('питание, зарядка/БП, перегрев, плата','питание (БП, розетка), перегрев, плата');
+      }
       var SRC = { bugcheck:'событие WER', minidump:'minidump', 'kernel-power':'Kernel-Power' };
       var lines = [];
       var realCrashes = h.entries.filter(function(e){ return e.code!=='0x0'; }).length;
@@ -1242,18 +1262,18 @@ function fetchCategory(kind){
       if (!h.entries.length) lines.push('Сбоев и внезапных перезагрузок в журнале не найдено.');
       h.entries.forEach(function(e){
         lines.push(e.time+' · '+e.code+' '+e.name+' · '+e.sources.map(function(x){ return SRC[x]||x; }).join(' + ')+(e.records>1?' (записей: '+e.records+')':''));
-        lines.push('    '+e.hint+(e.params && e.params.length ? ' · параметры: '+e.params.join(', ') : ''));
+        lines.push('    '+wording(e.hint)+(e.params && e.params.length ? ' · параметры: '+e.params.join(', ') : ''));
       });
-      if (h.hw_counts.whea || h.hw_counts.disk || h.hw_counts.tdr){
-        lines.push('Аппаратные события за период: WHEA '+h.hw_counts.whea+' · ошибки диска '+h.hw_counts.disk+' · сбросы видеодрайвера (TDR) '+h.hw_counts.tdr);
-        h.hw_events.slice(0,8).forEach(function(e){ lines.push('    '+e.time+' · '+e.provider+' #'+e.id+' — '+e.text); });
+      if (h.hw_counts.whea || h.hw_counts.whea_corrected || h.hw_counts.disk || h.hw_counts.tdr){
+        lines.push('Аппаратные события за период: WHEA критичные '+h.hw_counts.whea+' · WHEA исправленные '+h.hw_counts.whea_corrected+' · ошибки диска '+h.hw_counts.disk+' · сбросы видеодрайвера (TDR) '+h.hw_counts.tdr);
+        h.hw_events.slice(0,8).forEach(function(e){ lines.push('    '+e.time+' · '+e.provider+' #'+e.id+' — '+diskName(e.text)); });
       }
       var actions = [];
       if (h.diagnosis.length){
         lines.push('— Диагноз по шаблону сбоев —');
         h.diagnosis.forEach(function(d){
           lines.push((d.level==='warn'?'⚠ ':'ℹ ')+d.title);
-          lines.push('    '+d.text);
+          lines.push('    '+wording(d.text));
           d.actions.forEach(function(x){ if (actions.indexOf(x)<0) actions.push(x); });
         });
       }

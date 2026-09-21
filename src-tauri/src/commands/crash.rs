@@ -18,7 +18,7 @@ const MERGE_WINDOW_SECS: i64 = 120;
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct HwEvent {
     pub time: String,
-    /// "whea" | "disk" | "tdr"
+    /// "whea" (критичные) | "whea_c" (исправленные) | "disk" | "tdr"
     pub kind: String,
     pub provider: String,
     pub id: u32,
@@ -141,7 +141,7 @@ pub fn get_crash_history(days: u32) -> Result<CrashHistory, String> {
             try {{
                 $items = @(Get-WinEvent -FilterHashtable @{{LogName='System'; StartTime=$since; Level=1,2,3}} -MaxEvents 2500 -ErrorAction Stop | ForEach-Object {{
                     $p = [string]$_.ProviderName; $id = [int]$_.Id; $k = $null
-                    if ($p -like '*WHEA*') {{ $k = 'whea' }}
+                    if ($p -like '*WHEA*') {{ if ([int]$_.Level -le 2) {{ $k = 'whea' }} else {{ $k = 'whea_c' }} }}
                     elseif ($p -eq 'disk' -and (7,11,15,51,52,153) -contains $id) {{ $k = 'disk' }}
                     elseif (($p -eq 'stornvme' -or $p -eq 'storahci' -or $p -like 'iaStor*') -and (129,153,130) -contains $id) {{ $k = 'disk' }}
                     elseif ($p -eq 'Ntfs' -and (55,98,137,140) -contains $id) {{ $k = 'disk' }}
@@ -157,7 +157,7 @@ pub fn get_crash_history(days: u32) -> Result<CrashHistory, String> {
         );
         let hw_events: Vec<HwEvent> = run_ps_json(&hw_script).unwrap_or_default();
         let count = |k: &str| hw_events.iter().filter(|e| e.kind == k).count() as u32;
-        let hw_counts = HwCounts { whea: count("whea"), disk: count("disk"), tdr: count("tdr") };
+        let hw_counts = HwCounts { whea: count("whea"), whea_corrected: count("whea_c"), disk: count("disk"), tdr: count("tdr") };
         let diagnosis = cl::diagnose(&entries, &hw_counts);
         let mut hw_events = hw_events;
         hw_events.truncate(30);

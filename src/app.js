@@ -20,19 +20,19 @@ var CATS = [
   { id:'smart', group:'disk', sub:'SMART', tag:'SMART', name:'Диск: SMART', method:'Атрибуты SMART (SATA) и лог здоровья NVMe: износ, температура, ошибки — как в CrystalDiskInfo', impl:'реальные данные', kind:'smart' },
   { id:'crash', tag:'BSOD', name:'Журнал сбоев', method:'Синие экраны и внезапные перезагрузки: события Windows + minidump', impl:'реальные данные', kind:'runner', fetch:'crash' },
   { id:'usb', tag:'USB', name:'USB-порты', method:'Список устройств на USB-шине (WMI PnP) + статус', impl:'реальные данные', kind:'runner', fetch:'usb' },
-  { id:'rem', tag:'FLASH', name:'Накопитель USB', method:'Запись и чтение флешки на порту с проверкой данных и замером скорости', impl:'реальная нагрузка', kind:'removable' },
+  { id:'rem', tag:'FLASH', name:'Накопитель USB', method:'Запись и чтение флешки на порту с проверкой данных и замером скорости', impl:'реальная нагрузка', kind:'removable', interactive:true },
   { id:'bt', tag:'BT', name:'Bluetooth', method:'Статус адаптера и список сопряжённых устройств', impl:'реальные данные', kind:'runner', fetch:'bt' },
   { id:'wifi', tag:'WIFI', name:'Wi-Fi', method:'Адаптер + список видимых сетей (netsh wlan)', impl:'реальные данные', kind:'runner', fetch:'wifi' },
   { id:'lan', tag:'LAN', name:'LAN (Ethernet)', method:'Адаптер, состояние линка и скорость', impl:'реальные данные', kind:'runner', fetch:'lan' },
-  { id:'kb', tag:'KEY', name:'Клавиатура', method:'Карта клавиш, детект n-key rollover; залипы — глазами', impl:'интерактивно', kind:'keyboard' },
-  { id:'lcd', tag:'LCD', name:'Матрица', method:'Заливка сплошными цветами — битые пиксели и засветы', impl:'интерактивно', kind:'display' },
+  { id:'kb', tag:'KEY', name:'Клавиатура', method:'Карта клавиш, детект n-key rollover; залипы — глазами', impl:'интерактивно', kind:'keyboard', interactive:true },
+  { id:'lcd', tag:'LCD', name:'Матрица', method:'Заливка сплошными цветами — битые пиксели и засветы', impl:'интерактивно', kind:'display', interactive:true },
   { id:'ext', tag:'EXT', name:'Внешний монитор', method:'Подключённые мониторы и тип выхода (HDMI / DisplayPort / VGA)', impl:'реальные данные', kind:'runner', fetch:'ext' },
-  { id:'bright', tag:'BRT', name:'Яркость', method:'Регулировка подсветки матрицы через WMI, проверка на глаз', impl:'реальное управление', kind:'brightness' },
-  { id:'cam', tag:'CAM', name:'Камера', method:'Живое превью через getUserMedia — оценка на глаз', impl:'реальное превью', kind:'camera' },
-  { id:'pad', tag:'PAD', name:'Тачпад', method:'Точки касания, мультитач, базовые жесты', impl:'интерактивно', kind:'touchpad' },
+  { id:'bright', tag:'BRT', name:'Яркость', method:'Регулировка подсветки матрицы через WMI, проверка на глаз', impl:'реальное управление', kind:'brightness', interactive:true },
+  { id:'cam', tag:'CAM', name:'Камера', method:'Живое превью через getUserMedia — оценка на глаз', impl:'реальное превью', kind:'camera', interactive:true },
+  { id:'pad', tag:'PAD', name:'Тачпад', method:'Точки касания, мультитач, базовые жесты', impl:'интерактивно', kind:'touchpad', interactive:true },
   { id:'fp', tag:'FP', name:'Отпечаток', method:'Сенсор виден системе (WinBio) — регистрация вручную', impl:'частично', kind:'runner', fetch:'fp' },
   { id:'bat', tag:'BAT', name:'Аккумулятор', method:'Design vs Full charge capacity, циклы, износ (powercfg)', impl:'реальные данные', kind:'runner', fetch:'bat' },
-  { id:'snd', tag:'SND', name:'Звук', method:'Тестовый сигнал (Web Audio) и echo-тест через микрофон', impl:'реально', kind:'audio' },
+  { id:'snd', tag:'SND', name:'Звук', method:'Тестовый сигнал (Web Audio) и echo-тест через микрофон', impl:'реально', kind:'audio', interactive:true },
   { id:'diskread', group:'disk', sub:'Чтение', tag:'RD', name:'Диск: чтение', method:'Замер скорости чтения по всему диску, медленные блоки и ошибки чтения', impl:'реальная нагрузка', kind:'diskread' },
   { id:'surface', group:'disk', sub:'Поверхность', tag:'SURF', name:'Диск: поверхность', method:'Чтение диска блоками с замером времени каждого блока и графиком скорости в реальном времени (как Victoria)', impl:'реальная нагрузка', kind:'surface' },
   { id:'diskwrite', group:'disk', sub:'Запись', tag:'WR', name:'Диск: запись', method:'Запись и чтение проверочного файла на томе: скорость по участкам, медленные блоки, ошибки данных', impl:'реальная нагрузка', kind:'diskwrite' },
@@ -47,6 +47,7 @@ var GROUPS = {
   disk:{ name:'Диск', tag:'DISK', method:'Здоровье, SMART, чтение, сканирование поверхности и запись — подвкладки', impl:'реальные данные и нагрузка' }
 };
 function groupTests(g){ return CATS.filter(function(c){ return c.group===g; }); }
+function isInteractive(id){ var c = CATS.filter(function(x){ return x.id===id; })[0]; return !!(c && c.interactive); }
 function groupStatus(g){
   var ts = groupTests(g), done = 0, fail = false, pass = 0;
   ts.forEach(function(c){ var st = S.results[c.id]; if (st && st!=='idle'){ done++; if (st==='fail') fail = true; if (st==='pass' || st==='na') pass++; } });
@@ -329,6 +330,10 @@ var A = {
   autoStart:function(){
     var ids = (profile().tests||[]).filter(function(id){ return CATS.some(function(c){ return c.id===id; }); });
     if (!ids.length) return;
+    // Сначала тесты, требующие участия инженера (клавиатура, экран, тачпад,
+    // яркость, камера, звук, флешка), затем полностью автоматические —
+    // порядок внутри каждой группы как в профиле, состав не меняется.
+    ids = ids.filter(function(id){ return isInteractive(id); }).concat(ids.filter(function(id){ return !isInteractive(id); }));
     S.results={}; S.comments={}; S.keys={}; S.snapshot=false;
     S.auto = { on:true, ids:ids, idx:-1, stopped:false, waiting:false, msg:'', cls:'', timer:null };
     A.autoNext();

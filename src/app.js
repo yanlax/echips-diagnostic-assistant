@@ -2391,10 +2391,18 @@ function judgeStress(res){
   if (res.diskErrors>0) bad.push('ошибки диска: '+res.diskErrors);
   var hot = Math.max(res.maxTempC||0, res.maxGpuTempC||0);
   if (hot>=maxT) bad.push('температура '+hot.toFixed(0)+' °C не ниже порога '+maxT+' °C');
+  // Просадка «Мопс/с» и т.п. у cpu/fpu/cache сама по себе ненадёжна: на слабых
+  // CPU без турбо (N95/N150, Ryzen U-серии) она стабильно ловилась на любом
+  // ноутбуке из-за конкуренции с одновременной memory/disk/gpu-нагрузкой за
+  // шину/кэш, а не из-за перегрева — частота при этом вообще не менялась
+  // (реальные отчёты техников). Считаем троттлингом просадку скорости только
+  // если она подтверждена реальным падением частоты CPU в этом же прогоне;
+  // без данных о частоте (сенсор недоступен) — не считаем, а не гадаем.
+  var freqDropped = res.clockAvgMhz > 0 && res.clockMinMhz > 0 && (res.clockMinMhz / res.clockAvgMhz) < 0.93;
   res.stressors.forEach(function(x){
-    if (x.baseline>0){
+    if (x.baseline>0 && freqDropped){
       var share = x.throttledSecs / Math.max(1, res.elapsedSecs) * 100;
-      if (x.minRatio*100 < minR || share > maxShare) bad.push('падение скорости «'+x.name+'» до '+Math.round(x.minRatio*100)+'% от базовой ('+x.throttledSecs+' с ниже 80%)');
+      if (x.minRatio*100 < minR || share > maxShare) bad.push('падение скорости «'+x.name+'» до '+Math.round(x.minRatio*100)+'% от базовой ('+x.throttledSecs+' с ниже 80%), частота падала до '+res.clockMinMhz.toFixed(0)+' МГц (ср '+res.clockAvgMhz.toFixed(0)+')');
     }
   });
   var g = S.st.hist.scores.gpu;

@@ -498,7 +498,7 @@ var A = {
     }).catch(function(err){ S.dw.err = typeof err==='string'?err:'Не удалось получить список томов'; render(); A.autoApply(null); });
   },
   memAuto:function(){
-    S.mem.size = profile().memTestMb || 4096; S.mem.passes = profile().memPasses || 4; S.mem.res=null; S.mem.err=null;
+    S.mem.size = profile().memTestMb || 16384; S.mem.passes = profile().memPasses || 4; S.mem.res=null; S.mem.err=null;
     A.memStart();
   },
   sensorsAuto:function(){
@@ -623,11 +623,12 @@ var A = {
     function fin(){ if(unlisten) unlisten(); m.running=false; }
     invoke('run_memory_test', { sizeMb:m.size, passes:m.passes }).then(function(r){
       fin(); m.res=r; render();
-      recordDetail('mem', { lines:['Проверено '+r.tested_mb+' МБ, проходов '+r.passes+', время '+r.elapsed_secs+' с'+(r.capped?' (объём урезан до 75% свободной ОЗУ)':'')+(r.stopped?' (остановлено)':''),'Ошибок: '+r.errors].concat(r.first_errors) });
+      var totalMb = S.hw && S.hw.ram_total_gb ? Math.round(S.hw.ram_total_gb*1024) : null;
+      recordDetail('mem', { lines:['Проверено '+r.tested_mb+' МБ'+(totalMb?' из '+totalMb+' МБ установленной ОЗУ':'')+', проходов '+r.passes+', время '+r.elapsed_secs+' с'+(r.capped?' (объём урезан до 75% свободной ОЗУ — остальное занято системой и другими процессами)':'')+(r.stopped?' (остановлено)':''),'Ошибок: '+r.errors].concat(r.first_errors) });
       if (S.auto.on && S.cat==='mem'){
         A.autoApply(r.stopped ? null
           : r.errors>0 ? { status:'fail', note:'Ошибок памяти: '+r.errors+' на '+r.tested_mb+' МБ — модуль или слот неисправны' }
-          : { status:'pass', note:'Ошибок нет: проверено '+r.tested_mb+' МБ за '+r.elapsed_secs+' с'+(r.capped?' (объём урезан до 60% свободной)':'') });
+          : { status:'pass', note:'Ошибок нет: проверено '+r.tested_mb+' МБ'+(totalMb?' из '+totalMb+' МБ':'')+' за '+r.elapsed_secs+' с'+(r.capped?' (объём урезан до 75% свободной)':'') });
       }
     }).catch(function(err){
       fin(); m.err = typeof err==='string'?err:'Ошибка теста памяти'; render();

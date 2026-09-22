@@ -1231,8 +1231,14 @@ function sysReport(hw){
   chk('Процессор', hw.cpu.name+' · '+hw.cpu.cores+' ядер / '+hw.cpu.threads+' потоков'+(hw.cpu.max_mhz?' · '+hw.cpu.max_mhz+' МГц':''),
     e.cpu ? hw.cpu.name.toLowerCase().indexOf(String(e.cpu).toLowerCase())>=0 : null, e.cpu);
   chk('ОЗУ', hw.ram_total_gb.toFixed(1)+' ГБ, модулей: '+hw.ram_modules.length, e.ramGb ? near(hw.ram_total_gb, e.ramGb) : null, e.ramGb ? e.ramGb+' ГБ' : '');
+  // На части плат WMI отдаёт одинаковое имя слота для разных модулей
+  // (например, дважды "DIMM 0") — нумеруем повторы, чтобы не выглядело
+  // как дубль одного и того же модуля.
+  var slotSeen = {};
   hw.ram_modules.forEach(function(m){
-    lines.push('    '+m.slot+': '+m.capacity_gb+' ГБ'+(m.speed_mhz?' · '+m.speed_mhz+' МГц':'')+(m.manufacturer?' · '+m.manufacturer:'')+(m.part_number?' · '+m.part_number:''));
+    var n = (slotSeen[m.slot] = (slotSeen[m.slot]||0) + 1);
+    var dupSuffix = n>1 ? ' (#'+n+')' : '';
+    lines.push('    '+m.slot+dupSuffix+': '+m.capacity_gb+' ГБ'+(m.speed_mhz?' · '+m.speed_mhz+' МГц':'')+(m.manufacturer?' · '+m.manufacturer:'')+(m.part_number?' · '+m.part_number:''));
   });
   var biggest = hw.disks.reduce(function(a,d){ return d.size_gb>(a?a.size_gb:0) ? d : a; }, null);
   chk('Диск', hw.disks.length ? hw.disks.map(function(d){ return d.model+' '+d.size_gb+' ГБ'+(d.media?' '+d.media:'')+(d.health&&d.health!=='Healthy'?' ['+d.health+']':''); }).join('; ') : 'не найден',
@@ -1849,13 +1855,23 @@ function smartLines(list){
   list.forEach(function(d){
     out.push(d.name+' · '+d.size_gb+' ГБ · '+(d.bus||'')+(d.is_system?' · системный':'')+' · '+SMART_LABEL[d.status]+(d.health_pct!=null?' · ресурс '+d.health_pct.toFixed(0)+'%':''));
     out.push('    температура '+(d.temp_c!=null?d.temp_c.toFixed(0)+' °C':'—')+' · наработка '+(d.power_on_hours!=null?d.power_on_hours+' ч':'—')+' · включений '+(d.power_cycles!=null?d.power_cycles:'—')+' · записано '+(d.written_gb!=null?d.written_gb.toFixed(0)+' ГБ':'—'));
-    d.attrs.forEach(function(a){ out.push('    '+String(a.id).padStart(3,' ')+' '+a.name+' · тек '+a.current+' худш '+a.worst+' порог '+a.threshold+' raw '+a.raw+(a.status!=='ok'?' ['+a.status+']':'')); });
+    d.attrs.forEach(function(a){ out.push('    '+String(a.id).padStart(3,' ')+' '+a.name+' · тек '+a.current+' худш '+a.worst+' порог '+a.threshold+' raw '+rawText(a)+(a.status!=='ok'?' ['+a.status+']':'')); });
     if (d.nvme){ var h=d.nvme; out.push('    NVMe: резерв '+h.available_spare+'% (порог '+h.spare_threshold+'%), износ '+h.percentage_used+'%, ошибки целостности '+h.media_errors+', небезопасных выключений '+h.unsafe_shutdowns); }
     d.notes.forEach(function(n){ out.push('    ! '+n); });
   });
   return out;
 }
 function fmtRaw(a){ var v=a.raw; return v.toString(16).toUpperCase().padStart(12,'0')+' · '+(v<=9007199254740991?String(v):'—'); }
+/* Атрибуты 194/190 (Temperature/Airflow Temperature) хранят в raw не одно
+   число, а текущую температуру в младшем байте плюс мин/макс историю в
+   старших — десятичное значение этого 6-байтного поля выглядит как
+   бессмысленный "мусор" (например, 193276477485), хотя парсер уже верно
+   берёт из него текущую температуру (d.temp_c = raw & 0xFF). Показываем
+   это явно, а не сырое число. */
+function rawText(a){
+  if ((a.id===194 || a.id===190) && a.raw>0){ return (a.raw & 0xFF)+' °C (мин/макс в старших байтах raw, hex '+a.raw.toString(16).toUpperCase()+')'; }
+  return String(a.raw);
+}
 function fieldSmart(){
   A.smLoad();
   var m = S.sm, disks = m.disks;

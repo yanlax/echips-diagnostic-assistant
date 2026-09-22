@@ -1185,6 +1185,7 @@ var A = {
     var command = kind==='json' ? 'save_report_json' : kind==='pdf' ? 'save_report_pdf' : 'save_report_txt';
     invoke(command, { report: report }).then(function(path){
       S.exported = { kind: kind, path: path }; render();
+      invoke('open_containing_folder', { path: path }).catch(function(){});
     }).catch(function(err){
       S.runError = typeof err==='string'?err:'Не удалось сохранить отчёт'; render();
     });

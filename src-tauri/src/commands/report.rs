@@ -348,3 +348,23 @@ pub fn save_report_pdf(app: tauri::AppHandle, report: DiagnosticReport) -> Resul
     fs::write(&path, bytes).map_err(|e| format!("Не удалось записать отчёт: {e}"))?;
     Ok(path.to_string_lossy().to_string())
 }
+
+/// Открывает Проводник с уже подсвеченным файлом отчёта (после экспорта
+/// TXT/JSON/PDF) — тех. на 3 рабочей ссылке было бы неудобно каждый раз
+/// вручную идти в `%LOCALAPPDATA%\Echips\HardwareCheck\reports`.
+#[tauri::command(async)]
+pub fn open_containing_folder(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(format!("/select,{path}"))
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = path;
+        Err("Доступно только в Windows-сборке".to_string())
+    }
+}

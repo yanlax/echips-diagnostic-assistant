@@ -143,6 +143,35 @@ fn draw_rule(layer: &PdfLayerReference, color: Rgb, x0: f32, x1: f32, y0: f32, y
     layer.add_polygon(poly);
 }
 
+/// Заливка всей страницы фоновым цветом — вызывается первой операцией на
+/// каждой странице (до любого текста/лого), иначе перекроет уже нарисованное.
+fn fill_page_bg(layer: &PdfLayerReference, color: Rgb) {
+    draw_rule(layer, color, 0.0, PDF_PAGE_W, 0.0, PDF_PAGE_H);
+}
+
+/// Цвета отчёта — та же тёмная тема, что в интерфейсе приложения (см.
+/// :root в src/style.css): тёмный фон, светлый текст, фирменный оранжевый.
+struct PdfPalette {
+    bg: Rgb,
+    text: Rgb,
+    dim: Rgb,
+    faint: Rgb,
+    accent: Rgb,
+    ok: Rgb,
+    err: Rgb,
+}
+fn palette() -> PdfPalette {
+    PdfPalette {
+        bg: Rgb::new(0.0549, 0.0627, 0.0745, None),   // --page:#0E1013
+        text: Rgb::new(0.949, 0.953, 0.961, None),    // --text:#F2F3F5
+        dim: Rgb::new(0.541, 0.561, 0.596, None),     // --dim:#8A8F98
+        faint: Rgb::new(0.416, 0.431, 0.463, None),   // --faint:#6A6E76
+        accent: Rgb::new(ACCENT_R, ACCENT_G, ACCENT_B, None), // --accent:#FF8A00
+        ok: Rgb::new(0.298, 0.686, 0.490, None),      // --ok:#4CAF7D
+        err: Rgb::new(0.886, 0.341, 0.298, None),     // --err:#E2574C
+    }
+}
+
 fn pt_to_mm(pt: f32) -> f32 {
     pt * 25.4 / 72.0
 }
@@ -197,6 +226,9 @@ struct PdfWriter {
     /// Печатается внизу каждой страницы, кроме первой (там уже есть шапка
     /// с логотипом) — пусто, если не задан.
     footer: String,
+    footer_color: Rgb,
+    /// Фон страницы — заливается на каждой новой странице до любого текста.
+    bg: Rgb,
 }
 
 impl PdfWriter {
@@ -210,6 +242,7 @@ impl PdfWriter {
             let (layer, y) = Self::new_page(doc);
             self.layer = layer;
             self.y = y;
+            fill_page_bg(&self.layer, self.bg.clone());
             self.draw_footer();
         }
     }
@@ -218,7 +251,7 @@ impl PdfWriter {
         if self.footer.trim().is_empty() {
             return;
         }
-        self.layer.set_fill_color(Color::Rgb(Rgb::new(0.55, 0.55, 0.55, None)));
+        self.layer.set_fill_color(Color::Rgb(self.footer_color.clone()));
         self.layer.use_text(
             self.footer.clone(),
             8.0,
@@ -265,11 +298,10 @@ fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("Не удалось встроить шрифт: {e}"))?;
     let layer = doc.get_page(page1).get_layer(layer1);
 
-    let black = Rgb::new(0.12, 0.12, 0.12, None);
-    let gray = Rgb::new(0.42, 0.42, 0.42, None);
-    let red = Rgb::new(0.72, 0.14, 0.14, None);
-    let green = Rgb::new(0.11, 0.45, 0.2, None);
-    let accent = Rgb::new(ACCENT_R, ACCENT_G, ACCENT_B, None);
+    // Тёмная тема — та же, что в интерфейсе приложения (см. palette()).
+    let p = palette();
+    let (black, gray, red, green, accent) = (p.text.clone(), p.dim.clone(), p.err.clone(), p.ok.clone(), p.accent.clone());
+    fill_page_bg(&layer, p.bg.clone());
 
     let mut w = PdfWriter {
         layer,
@@ -277,6 +309,8 @@ fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
         font_regular,
         font_bold,
         footer: format!("Echips Hardware Check · {}", report.device_serial),
+        footer_color: p.faint.clone(),
+        bg: p.bg.clone(),
     };
 
     // ---- шапка: логотип + заголовок + фирменная оранжевая линия ----

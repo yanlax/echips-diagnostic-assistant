@@ -1,8 +1,9 @@
-// Сохранение итогового отчёта диагностики — .txt (для акта) и .json (для
-// базы), как задумано в дизайне ("Экспорт JSON" / "Экспорт PDF" — PDF пока
-// не реализован, честно оставлен как TODO в README, чтобы не выдавать
-// недоделанный генератор PDF за готовую функцию).
+// Сохранение итогового отчёта диагностики — .txt (для акта), .json (для
+// базы) и .pdf (для отправки клиенту/заказчику).
 
+use printpdf::{
+    Color, IndirectFontRef, Mm, PdfDocument, PdfDocumentReference, PdfLayerReference, Rgb,
+};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use tauri::Manager;
@@ -93,6 +94,205 @@ fn render_txt(report: &DiagnosticReport) -> String {
     out
 }
 
+/* ---------- PDF ----------
+   Шрифт PT Sans (OFL, кириллица) вшит из src-tauri/assets/fonts. Ширина
+   символов не измеряется через метрики шрифта (printpdf 0.7 их наружу не
+   отдаёт) — перенос строк по эвристике "средний символ ~0.52 кегля", этого
+   достаточно для служебного отчёта и не считается точной вёрсткой. */
+
+const PDF_PAGE_W: f32 = 210.0; // A4, мм
+const PDF_PAGE_H: f32 = 297.0;
+const PDF_MARGIN_L: f32 = 18.0;
+const PDF_MARGIN_R: f32 = 18.0;
+const PDF_MARGIN_TOP: f32 = 20.0;
+const PDF_MARGIN_BOTTOM: f32 = 18.0;
+const PDF_CONTENT_W: f32 = PDF_PAGE_W - PDF_MARGIN_L - PDF_MARGIN_R;
+
+const FONT_REGULAR: &[u8] = include_bytes!("../../assets/fonts/PTSans-Regular.ttf");
+const FONT_BOLD: &[u8] = include_bytes!("../../assets/fonts/PTSans-Bold.ttf");
+
+fn pt_to_mm(pt: f32) -> f32 {
+    pt * 25.4 / 72.0
+}
+
+/// Сколько символов помещается в ширину `PDF_CONTENT_W - indent_mm` при кегле `size_pt`.
+fn max_chars(size_pt: f32, indent_mm: f32) -> usize {
+    let avg_char_w_mm = pt_to_mm(size_pt) * 0.52;
+    let usable = (PDF_CONTENT_W - indent_mm).max(20.0);
+    ((usable / avg_char_w_mm).floor() as usize).max(10)
+}
+
+/// Простой перенос по словам; слово длиннее строки режется жёстко.
+fn wrap_line(text: &str, max: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    for raw_line in text.split('\n') {
+        if raw_line.is_empty() {
+            out.push(String::new());
+            continue;
+        }
+        let mut cur = String::new();
+        for word in raw_line.split(' ') {
+            let mut rest: String = word.to_string();
+            loop {
+                let extra = if cur.is_empty() { 0 } else { 1 };
+                if cur.chars().count() + extra + rest.chars().count() <= max {
+                    if !cur.is_empty() {
+                        cur.push(' ');
+                    }
+                    cur.push_str(&rest);
+                    break;
+                }
+                if cur.is_empty() && rest.chars().count() > max {
+                    // Слово само по себе длиннее строки — режем жёстко.
+                    let chars: Vec<char> = rest.chars().collect();
+                    out.push(chars[..max].iter().collect());
+                    rest = chars[max..].iter().collect();
+                    continue;
+                }
+                out.push(std::mem::take(&mut cur));
+            }
+        }
+        out.push(cur);
+    }
+    out
+}
+
+struct PdfWriter {
+    layer: PdfLayerReference,
+    y: f32,
+    font_regular: IndirectFontRef,
+    font_bold: IndirectFontRef,
+}
+
+impl PdfWriter {
+    fn new_page(doc: &PdfDocumentReference) -> (PdfLayerReference, f32) {
+        let (page, layer) = doc.add_page(Mm(PDF_PAGE_W), Mm(PDF_PAGE_H), "Layer");
+        (doc.get_page(page).get_layer(layer), PDF_PAGE_H - PDF_MARGIN_TOP)
+    }
+
+    fn ensure_space(&mut self, doc: &PdfDocumentReference, needed_mm: f32) {
+        if self.y - needed_mm < PDF_MARGIN_BOTTOM {
+            let (layer, y) = Self::new_page(doc);
+            self.layer = layer;
+            self.y = y;
+        }
+    }
+
+    /// Пишет текст с переносом по словам, возвращает индент для след. блока не меняет.
+    fn text(
+        &mut self,
+        doc: &PdfDocumentReference,
+        text: &str,
+        size_pt: f32,
+        bold: bool,
+        color: Rgb,
+        indent_mm: f32,
+    ) {
+        let font = if bold { &self.font_bold } else { &self.font_regular };
+        let line_h = pt_to_mm(size_pt) * 1.35;
+        for line in wrap_line(text, max_chars(size_pt, indent_mm)) {
+            self.ensure_space(doc, line_h);
+            self.layer.set_fill_color(Color::Rgb(color.clone()));
+            self.layer
+                .use_text(line, size_pt, Mm(PDF_MARGIN_L + indent_mm), Mm(self.y), font);
+            self.y -= line_h;
+        }
+    }
+
+    fn gap(&mut self, mm: f32) {
+        self.y -= mm;
+    }
+}
+
+fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
+    let (doc, page1, layer1) =
+        PdfDocument::new("Echips Hardware Check — отчёт", Mm(PDF_PAGE_W), Mm(PDF_PAGE_H), "Layer");
+    let font_regular = doc
+        .add_external_font(FONT_REGULAR)
+        .map_err(|e| format!("Не удалось встроить шрифт: {e}"))?;
+    let font_bold = doc
+        .add_external_font(FONT_BOLD)
+        .map_err(|e| format!("Не удалось встроить шрифт: {e}"))?;
+    let layer = doc.get_page(page1).get_layer(layer1);
+
+    let black = Rgb::new(0.12, 0.12, 0.12, None);
+    let gray = Rgb::new(0.42, 0.42, 0.42, None);
+    let red = Rgb::new(0.72, 0.14, 0.14, None);
+    let green = Rgb::new(0.11, 0.45, 0.2, None);
+
+    let mut w = PdfWriter {
+        layer,
+        y: PDF_PAGE_H - PDF_MARGIN_TOP,
+        font_regular,
+        font_bold,
+    };
+
+    w.text(&doc, "ECHIPS HARDWARE CHECK", 18.0, true, black.clone(), 0.0);
+    w.text(&doc, "Отчёт диагностики", 12.0, false, gray.clone(), 0.0);
+    w.gap(4.0);
+    w.text(&doc, &format!("Устройство: {}", report.device_model), 10.5, false, black.clone(), 0.0);
+    w.text(&doc, &format!("Серийный номер: {}", report.device_serial), 10.5, false, black.clone(), 0.0);
+    if !report.engineer.trim().is_empty() {
+        w.text(&doc, &format!("Инженер: {}", report.engineer), 10.5, false, black.clone(), 0.0);
+    }
+    w.text(&doc, &format!("Начало: {}", report.started_at), 10.5, false, black.clone(), 0.0);
+    w.text(&doc, &format!("Окончание: {}", report.finished_at), 10.5, false, black.clone(), 0.0);
+    w.gap(6.0);
+
+    w.text(&doc, "Результаты проверок", 13.0, true, black.clone(), 0.0);
+    w.gap(2.0);
+    for r in &report.results {
+        let label = if r.status == "idle" && r.in_profile == Some(false) {
+            "ВНЕ ПРОФИЛЯ"
+        } else {
+            status_label(&r.status)
+        };
+        let color = match r.status.as_str() {
+            "pass" => green.clone(),
+            "fail" => red.clone(),
+            _ => black.clone(),
+        };
+        let mut head = format!("[{}] {}", label, r.title);
+        if let Some(c) = &r.comment {
+            if !c.trim().is_empty() {
+                head.push_str(&format!(" — {c}"));
+            }
+        }
+        w.gap(1.5);
+        w.text(&doc, &head, 10.5, true, color, 0.0);
+        if let (Some(st), Some(note)) = (&r.auto_status, &r.auto_note) {
+            if let Some(reason) = &r.override_reason {
+                w.text(
+                    &doc,
+                    &format!("Автооценка: {st} — {note}; изменено техником: {reason}"),
+                    9.0,
+                    false,
+                    gray.clone(),
+                    5.0,
+                );
+            }
+        }
+        for line in &r.details {
+            w.text(&doc, line.trim_start(), 9.0, false, gray.clone(), 5.0);
+        }
+    }
+
+    let failed: Vec<&TestResult> = report.results.iter().filter(|r| r.status == "fail").collect();
+    w.gap(6.0);
+    w.text(&doc, "Итог", 13.0, true, black.clone(), 0.0);
+    w.gap(2.0);
+    if failed.is_empty() {
+        w.text(&doc, "Неисправностей не выявлено.", 10.5, false, green, 0.0);
+    } else {
+        w.text(&doc, &format!("Выявлено неисправностей: {}.", failed.len()), 10.5, true, red.clone(), 0.0);
+        for f in failed {
+            w.text(&doc, &format!("• {}", f.title), 10.0, false, red.clone(), 5.0);
+        }
+    }
+
+    doc.save_to_bytes().map_err(|e| format!("Не удалось сформировать PDF: {e}"))
+}
+
 fn safe_filename_part(s: &str) -> String {
     let cleaned: String = s.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
     if cleaned.is_empty() {
@@ -132,5 +332,19 @@ pub fn save_report_json(app: tauri::AppHandle, report: DiagnosticReport) -> Resu
     let path = dir.join(&filename);
     let json = serde_json::to_string_pretty(&report).map_err(|e| format!("Не удалось сериализовать отчёт: {e}"))?;
     fs::write(&path, json).map_err(|e| format!("Не удалось записать отчёт: {e}"))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command(async)]
+pub fn save_report_pdf(app: tauri::AppHandle, report: DiagnosticReport) -> Result<String, String> {
+    let dir = reports_dir(&app)?;
+    let filename = format!(
+        "{}_{}.pdf",
+        chrono::Local::now().format("%Y%m%d_%H%M%S"),
+        safe_filename_part(&report.device_serial)
+    );
+    let path = dir.join(&filename);
+    let bytes = render_pdf(&report)?;
+    fs::write(&path, bytes).map_err(|e| format!("Не удалось записать отчёт: {e}"))?;
     Ok(path.to_string_lossy().to_string())
 }

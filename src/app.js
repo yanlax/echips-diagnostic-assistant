@@ -1114,7 +1114,7 @@ var A = {
           details: (d.lines||[]).slice(0,200), in_profile: inProfile(c.id), finished_at: d.ts || null };
       })
     };
-    var command = kind==='json' ? 'save_report_json' : 'save_report_txt';
+    var command = kind==='json' ? 'save_report_json' : kind==='pdf' ? 'save_report_pdf' : 'save_report_txt';
     invoke(command, { report: report }).then(function(path){
       S.exported = { kind: kind, path: path }; render();
     }).catch(function(err){
@@ -2707,6 +2707,7 @@ function screenReport(){
     '<div class="head"><div><div class="eyebrow">Итог прогона</div><h1 class="title">Отчёт</h1></div>'+
     '<div class="headactions">'+
       '<button class="btn btn-ghost" onclick="echips.exp(\'json\')">Экспорт JSON</button>'+
+      '<button class="btn btn-ghost" onclick="echips.exp(\'pdf\')">Экспорт PDF</button>'+
       '<button class="btn btn-primary" onclick="echips.exp(\'txt\')">Экспорт TXT</button>'+
     '</div></div>'+
     '<div class="repstats">'+
@@ -2727,7 +2728,7 @@ function screenReport(){
       }).join('') +'</div></div>'+
     '<div class="footrow"><span class="mono">'+esc(deviceLabel())+' · SN '+esc(deviceSn())+'</span>'+
     '<span class="exp'+(S.exported?' done':'')+'" style="font-family:var(--mono);font-size:10.5px">'+
-    (S.exported ? esc(S.exported.path) + ' сохранён' : 'экспорт: TXT для акта, JSON для базы')+
+    (S.exported ? esc(S.exported.path) + ' сохранён' : 'экспорт: TXT для акта, JSON для базы, PDF для клиента')+
     '</span></div></div>';
 }
 

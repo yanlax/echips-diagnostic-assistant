@@ -69,6 +69,7 @@ pub fn run() {
             commands::motherboard::read_audit_log,
             commands::report::save_report_txt,
             commands::report::save_report_json,
+            commands::report::save_report_pdf,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

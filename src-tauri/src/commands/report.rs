@@ -188,13 +188,13 @@ impl PdfWriter {
         color: Rgb,
         indent_mm: f32,
     ) {
-        let font = if bold { &self.font_bold } else { &self.font_regular };
+        let font = if bold { self.font_bold.clone() } else { self.font_regular.clone() };
         let line_h = pt_to_mm(size_pt) * 1.35;
         for line in wrap_line(text, max_chars(size_pt, indent_mm)) {
             self.ensure_space(doc, line_h);
             self.layer.set_fill_color(Color::Rgb(color.clone()));
             self.layer
-                .use_text(line, size_pt, Mm(PDF_MARGIN_L + indent_mm), Mm(self.y), font);
+                .use_text(line, size_pt, Mm(PDF_MARGIN_L + indent_mm), Mm(self.y), &font);
             self.y -= line_h;
         }
     }

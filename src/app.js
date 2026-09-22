@@ -239,7 +239,7 @@ var A = {
     if (S.mem.running) invoke('stop_memory_test').catch(function(){});
     if (document.getElementById('fill-overlay')) A.fillClose();
     if (S.auto.on && screen!=='test' && screen!=='report' && screen!=='sensors' && screen!=='stress') A.autoOff();
-    S.screen=screen; if(id) S.cat=id; S.running=false; S.runLines=[]; S.runError=null; S.verdict=null; S.runActions=[]; S.act={ confirm:null, busy:false, msg:'', err:'', keyOpen:false, key:'' }; S.exported=null; S.tone=null;
+    S.screen=screen; if(id) S.cat=id; S.running=false; S.runLines=[]; S.runError=null; S.verdict=null; S.runActions=[]; S.act={ confirm:null, busy:false, msg:'', err:'', keyOpen:false, key:'', autoFixDone:false }; S.exported=null; S.tone=null;
     if(screen==='drivers'){ A.drvStart(); }
     if(screen==='mb'){ A.mbReset(); }
     if(screen==='sensors'){ A.sensorsStart(); }
@@ -698,12 +698,67 @@ var A = {
     fetchCategory(c.fetch).then(function(res){
       S.running=false; S.runLines=res.lines; S.verdict=res.verdict; S.runActions=res.actions||[]; render();
       recordDetail(c.id, { lines: res.lines.slice(0,200), auto: res.verdict || null });
+      if (c.fetch==='winact' && res.verdict && res.verdict.status==='fail' && !S.act.autoFixDone){
+        A.winactAutoFix(); return;
+      }
       if (S.auto.on && S.cat===c.id) A.autoApply(res.verdict);
     }).catch(function(err){
       S.running=false; S.runError = typeof err==='string' ? err : 'Ошибка получения данных';
       render();
       if (S.auto.on && S.cat===c.id) A.autoApply(null);
     });
+  },
+  /* Активация не пройдена — сама пробует штатные шаги устранения по очереди
+     (синхронизация времени → перезапуск службы → онлайн-активация → ключ
+     из BIOS, если есть), без подтверждения на каждый шаг: это те же самые
+     действия, что и ручные кнопки ниже, техник просто не должен нажимать их
+     по одной каждый раз. Ввод стороннего ключа — только вручную. */
+  winactAutoFix:function(){
+    if (S.cat!=='winact') return;
+    S.act.autoFixDone = true;
+    S.act.autoFixRunning = true;
+    S.running = true;
+    var lines = S.runLines.concat(['— Активация не пройдена, пробую штатные шаги устранения —']);
+    S.runLines = lines; render();
+    var LABELS = { sync_time:'Синхронизация времени', restart_service:'Перезапуск службы лицензирования', activate:'Онлайн-активация', install_oem_key:'Установка OEM-ключа из BIOS' };
+    var steps = ['sync_time', 'restart_service', 'activate'];
+    if (S.actRaw && S.actRaw.oem_key_present) steps.push('install_oem_key');
+    function addLine(t){ lines = lines.concat([t]); S.runLines = lines; render(); }
+    function runStep(i){
+      if (S.cat!=='winact'){ return; }
+      if (i >= steps.length) return finish();
+      var step = steps[i];
+      addLine(LABELS[step] + '…');
+      invoke('run_activation_step', { step: step, key: null }).then(function(r){
+        addLine('    ' + r);
+        afterStep(i);
+      }).catch(function(err){
+        addLine('    не выполнено: ' + (typeof err==='string' ? err : 'ошибка'));
+        afterStep(i);
+      });
+    }
+    function afterStep(i){
+      invoke('get_activation_status').then(function(a){
+        S.actRaw = a;
+        if (a.found && a.license_status===1) return finish();
+        runStep(i + 1);
+      }).catch(function(){ runStep(i + 1); });
+    }
+    function finish(){
+      if (S.cat!=='winact'){ return; }
+      S.act.autoFixRunning = false;
+      fetchCategory('winact').then(function(res){
+        S.running = false;
+        S.runLines = lines.concat(['— Итог после автоустранения —']).concat(res.lines);
+        S.verdict = res.verdict; S.runActions = res.actions||[]; render();
+        recordDetail('winact', { lines: S.runLines.slice(0,200), auto: res.verdict || null });
+        if (S.auto.on && S.cat==='winact') A.autoApply(res.verdict);
+      }).catch(function(){
+        S.running = false; render();
+        if (S.auto.on && S.cat==='winact') A.autoApply(null);
+      });
+    }
+    runStep(0);
   },
 
   /* ---- камера ---- */
@@ -1688,8 +1743,11 @@ function winactPanel(){
   };
   var out = '<div class="actpanel"><div class="kbnote" style="margin-bottom:8px">'+(licensed
     ? 'Windows активирована — устранение не требуется.'
+    : act.autoFixRunning ? 'Активация не пройдена — приложение само пробует штатные шаги устранения (см. лог выше)…'
     : 'Устранение проблем с активацией. Только штатные способы Windows: онлайн-активация, OEM-ключ из BIOS и ваш собственный ключ.')+'</div>';
-  if (act.confirm){
+  if (act.autoFixRunning){
+    // Автоустранение уже идёт (см. run()/winactAutoFix) — не даём запустить второй раз теми же кнопками.
+  } else if (act.confirm){
     out += '<div class="actconfirm">'+esc(LABELS[act.confirm]||'Выполнить?')+
       '<div class="headactions" style="margin-top:10px"><button class="btn btn-ghost" onclick="echips.actCancel()" '+(act.busy?'disabled':'')+'>Отмена</button>'+
       '<button class="btn btn-primary" onclick="echips.actRun()" '+(act.busy?'disabled':'')+'>'+(act.busy?'Выполняется…':'Да, выполнить')+'</button></div></div>';

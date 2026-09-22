@@ -111,7 +111,7 @@ var S = {
   stressMarker:null,
   fan:{ poll:null, log:[], res:null, running:false, abort:false, manual:{}, seen:{}, touched:false, refresh:null },
   hwm:{ status:null, snap:null, busy:false, msg:'', err:'', confirm:null },
-  snapshot:false, exported:null,
+  snapshot:false, exported:null, reportSummary:'',
   hw:null, verdict:null, runActions:[], act:{ confirm:null, busy:false, msg:'', err:'', keyOpen:false, key:'' }, actRaw:null, detail:{}, kstat:{}, repId:null, markErr:null, br:{ info:null, loading:false }, camClip:null,
   rm:{ drives:null, timer:null, running:null, log:[], err:null, size:64 },
   dr:{ disks:null, sel:0, mode:64, running:false, pct:0, mbps:0, res:null, err:null },
@@ -262,7 +262,7 @@ var A = {
       else if (c.kind==='fans') A.fanTest(false);
     }
   },
-  reset:function(){ _icache = {}; S.detail = {}; A.autoOff(); S.rm.log=[]; S.results={}; S.comments={}; S.keys={}; S.snapshot=false; render(); },
+  reset:function(){ _icache = {}; S.detail = {}; A.autoOff(); S.rm.log=[]; S.results={}; S.comments={}; S.keys={}; S.snapshot=false; S.reportSummary=''; render(); },
   press:function(id){ S.keys[id]=true; render(); },
   kbReset:function(){ S.keys={}; S.kstat={}; S.lastUnknown=null; render(); },
   nextFill:function(){ S.fill=(S.fill+1)%FILLS.length; render(); paintFill(); },
@@ -290,6 +290,7 @@ var A = {
   },
   setFill:function(i){ S.fill=i; render(); },
   comment:function(v){ S.comments[S.cat]=v; if (S.markErr && S.markErr.id===S.cat){ S.markErr=null; var m=document.getElementById('mark-err'); if(m) m.style.display='none'; } },
+  reportSummary:function(v){ S.reportSummary=v; },
   mark:function(v){
     var id = S.cat, d = S.detail[id] || {}, auto = d.auto;
     var busy = (id==='diskread' && S.dr.running) || (id==='surface' && S.sf.running) || (id==='diskwrite' && S.dw.running) ||
@@ -335,7 +336,7 @@ var A = {
     // яркость, камера, звук, флешка), затем полностью автоматические —
     // порядок внутри каждой группы как в профиле, состав не меняется.
     ids = ids.filter(function(id){ return isInteractive(id); }).concat(ids.filter(function(id){ return !isInteractive(id); }));
-    S.results={}; S.comments={}; S.keys={}; S.snapshot=false;
+    S.results={}; S.comments={}; S.keys={}; S.snapshot=false; S.reportSummary='';
     S.auto = { on:true, ids:ids, idx:-1, stopped:false, waiting:false, msg:'', cls:'', timer:null };
     A.autoNext();
   },
@@ -1172,6 +1173,7 @@ var A = {
       device_model: deviceLabel(),
       device_serial: deviceSn(),
       engineer: '',
+      summary_comment: S.reportSummary || '',
       started_at: S.startedAt || new Date().toISOString(),
       finished_at: new Date().toISOString(),
       results: testable.map(function(c){
@@ -2830,6 +2832,8 @@ function screenReport(){
       '<button class="btn btn-ghost" onclick="echips.exp(\'pdf\')">Экспорт PDF</button>'+
       '<button class="btn btn-primary" onclick="echips.exp(\'txt\')">Экспорт TXT</button>'+
     '</div></div>'+
+    '<div style="margin-bottom:16px"><label style="display:block;font-size:12px;color:var(--dim);margin-bottom:6px">Общий комментарий инженера (попадёт в TXT/JSON/PDF)</label>'+
+    '<textarea class="repsummary" rows="3" style="resize:vertical" placeholder="Итог по устройству, что сделано, на что обратить внимание клиенту/сервису…" oninput="echips.reportSummary(this.value)">'+esc(S.reportSummary||'')+'</textarea></div>'+
     '<div class="repstats">'+
       '<div class="repstat ok"><div class="k">пройдено</div><div class="v ok">'+c.pass+'</div></div>'+
       '<div class="repstat'+(c.fail?' err':'')+'"><div class="k">ошибки</div><div class="v '+(c.fail?'err':'dim')+'">'+c.fail+'</div></div>'+

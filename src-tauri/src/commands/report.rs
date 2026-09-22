@@ -40,6 +40,11 @@ pub struct DiagnosticReport {
     pub engineer: String,
     pub started_at: String,
     pub finished_at: String,
+    /// Общий комментарий инженера по итогам диагностики (не привязан к
+    /// конкретному тесту) — заполняется на экране «Отчёт», попадает во
+    /// все три формата экспорта.
+    #[serde(default)]
+    pub summary_comment: String,
     pub results: Vec<TestResult>,
 }
 
@@ -60,8 +65,11 @@ fn render_txt(report: &DiagnosticReport) -> String {
     out.push_str(&format!("Серийный номер: {}\n", report.device_serial));
     out.push_str(&format!("Инженер: {}\n", report.engineer));
     out.push_str(&format!("Начало: {}\n", report.started_at));
-    out.push_str(&format!("Окончание: {}\n\n", report.finished_at));
-    out.push_str("Результаты проверок:\n---------------------\n");
+    out.push_str(&format!("Окончание: {}\n", report.finished_at));
+    if !report.summary_comment.trim().is_empty() {
+        out.push_str(&format!("\nКомментарий инженера: {}\n", report.summary_comment.trim()));
+    }
+    out.push_str("\nРезультаты проверок:\n---------------------\n");
     for r in &report.results {
         let label = if r.status == "idle" && r.in_profile == Some(false) { "ВНЕ ПРОФИЛЯ" } else { status_label(&r.status) };
         out.push_str(&format!("[{}] {}", label, r.title));
@@ -237,6 +245,11 @@ fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
     }
     w.text(&doc, &format!("Начало: {}", report.started_at), 10.5, false, black.clone(), 0.0);
     w.text(&doc, &format!("Окончание: {}", report.finished_at), 10.5, false, black.clone(), 0.0);
+    if !report.summary_comment.trim().is_empty() {
+        w.gap(4.0);
+        w.text(&doc, "Комментарий инженера", 11.5, true, black.clone(), 0.0);
+        w.text(&doc, report.summary_comment.trim(), 10.5, false, black.clone(), 0.0);
+    }
     w.gap(6.0);
 
     w.text(&doc, "Результаты проверок", 13.0, true, black.clone(), 0.0);

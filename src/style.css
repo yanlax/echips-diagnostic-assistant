@@ -155,6 +155,10 @@ h1.title{font-family:var(--grotesk);font-size:27px;font-weight:600;color:var(--t
 .verdict input{flex:1;min-width:0;padding:12px 14px;border-radius:10px;background:var(--glass);border:1px solid rgba(255,255,255,.09);
   color:var(--text);font-family:'Inter',sans-serif;font-size:12.5px;outline:none}
 .verdict input:focus{border-color:var(--accent-line)}
+.repsummary{width:100%;padding:12px 14px;border-radius:10px;background:var(--glass);border:1px solid rgba(255,255,255,.09);
+  color:var(--text);font-family:'Inter',sans-serif;font-size:12.5px;outline:none}
+.repsummary:focus{border-color:var(--accent-line)}
+.repsummary::placeholder{color:var(--mute)}
 
 .kbwrap{display:flex;flex-direction:column;gap:12px}
 .kbmeta{display:flex;align-items:center;justify-content:space-between;font-family:var(--mono);font-size:10.5px;color:var(--mute)}

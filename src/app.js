@@ -16,6 +16,7 @@ var getCurrentWindow = window.__TAURI__.window.getCurrentWindow;
 var CATS = [
   { id:'sys', tag:'SYS', name:'Системная информация', method:'Процессор, ОЗУ, диски, видеокарта, плата, BIOS + сверка с профилем модели', impl:'реальные данные', kind:'runner', fetch:'sys' },
   { id:'winact', tag:'WIN', name:'Активация Windows', method:'Статус лицензии и канал, ключ OEM в BIOS; устранение: онлайн-активация, ключ OEM, служба, время', impl:'реальные данные', kind:'runner', fetch:'winact' },
+  { id:'drv', tag:'DRV', name:'Драйверы', method:'Устройства без драйвера в Диспетчере устройств — только проверка, установка на вкладке «Установка драйверов»', impl:'реальные данные', kind:'runner', fetch:'drv' },
   { id:'disk', group:'disk', sub:'Здоровье', tag:'HDD', name:'Диск: здоровье', method:'Состояние, износ, температура и ошибки (Get-PhysicalDisk, счётчики надёжности)', impl:'реальные данные', kind:'runner', fetch:'disk' },
   { id:'smart', group:'disk', sub:'SMART', tag:'SMART', name:'Диск: SMART', method:'Атрибуты SMART (SATA) и лог здоровья NVMe: износ, температура, ошибки — как в CrystalDiskInfo', impl:'реальные данные', kind:'smart' },
   { id:'crash', tag:'BSOD', name:'Журнал сбоев', method:'Синие экраны и внезапные перезагрузки: события Windows + minidump', impl:'реальные данные', kind:'runner', fetch:'crash' },
@@ -1250,6 +1251,19 @@ function fetchCategory(kind){
         ? { status:'pass', note:'Windows активирована ('+(a.channel||'канал не указан')+(corp?', корпоративная лицензия KMS/MAK — не OEM':'')+')' }
         : { status:'fail', note:'Windows не активирована: '+(a.found ? (LS[a.license_status]!==undefined ? LS[a.license_status] : 'статус '+a.license_status) : 'ключ не установлен')+(a.oem_key_present ? '. В BIOS есть OEM-ключ — можно установить и активировать' : '') };
       return { lines:lines, verdict:verdict };
+    });
+  }
+  if (kind==='drv'){
+    return invoke('list_problem_devices').then(function(list){
+      var names = list.map(function(d){ return d.friendly_name + (d['class'] ? ' ('+d['class']+')' : ''); });
+      return {
+        lines: list.length
+          ? names.concat(['Установить драйверы можно во вкладке «Установка драйверов» — здесь только проверка, без установки.'])
+          : ['Устройств без драйверов не найдено (Диспетчер устройств: ошибок нет).'],
+        verdict: list.length
+          ? { status:'fail', note:'Без драйверов: '+list.length+' устройств — '+names.slice(0,3).join(', ')+(list.length>3?' и ещё '+(list.length-3):'')+'. Установить можно во вкладке «Установка драйверов»' }
+          : { status:'pass', note:'Устройств без драйверов не найдено' }
+      };
     });
   }
   if (kind==='crash'){

@@ -1,8 +1,10 @@
 // Сохранение итогового отчёта диагностики — .txt (для акта), .json (для
 // базы) и .pdf (для отправки клиенту/заказчику).
 
+use printpdf::path::{PaintMode, WindingOrder};
 use printpdf::{
-    Color, IndirectFontRef, Mm, PdfDocument, PdfDocumentReference, PdfLayerReference, Rgb,
+    Color, IndirectFontRef, Image, ImageTransform, Mm, PdfDocument, PdfDocumentReference,
+    PdfLayerReference, Point, Polygon, Rgb,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -118,6 +120,28 @@ const PDF_CONTENT_W: f32 = PDF_PAGE_W - PDF_MARGIN_L - PDF_MARGIN_R;
 
 const FONT_REGULAR: &[u8] = include_bytes!("../../assets/fonts/PTSans-Regular.ttf");
 const FONT_BOLD: &[u8] = include_bytes!("../../assets/fonts/PTSans-Bold.ttf");
+const LOGO_PNG: &[u8] = include_bytes!("../../assets/logo.png");
+const LOGO_PX_W: f32 = 194.0;
+const LOGO_PX_H: f32 = 256.0;
+/// Фирменный оранжевый (#FF8A00, см. --accent в src/style.css).
+const ACCENT_R: f32 = 1.0;
+const ACCENT_G: f32 = 138.0 / 255.0;
+const ACCENT_B: f32 = 0.0;
+
+fn draw_rule(layer: &PdfLayerReference, color: Rgb, x0: f32, x1: f32, y0: f32, y1: f32) {
+    layer.set_fill_color(Color::Rgb(color));
+    let poly = Polygon {
+        rings: vec![vec![
+            (Point::new(Mm(x0), Mm(y0)), false),
+            (Point::new(Mm(x1), Mm(y0)), false),
+            (Point::new(Mm(x1), Mm(y1)), false),
+            (Point::new(Mm(x0), Mm(y1)), false),
+        ]],
+        mode: PaintMode::Fill,
+        winding_order: WindingOrder::NonZero,
+    };
+    layer.add_polygon(poly);
+}
 
 fn pt_to_mm(pt: f32) -> f32 {
     pt * 25.4 / 72.0
@@ -170,6 +194,9 @@ struct PdfWriter {
     y: f32,
     font_regular: IndirectFontRef,
     font_bold: IndirectFontRef,
+    /// Печатается внизу каждой страницы, кроме первой (там уже есть шапка
+    /// с логотипом) — пусто, если не задан.
+    footer: String,
 }
 
 impl PdfWriter {
@@ -183,7 +210,22 @@ impl PdfWriter {
             let (layer, y) = Self::new_page(doc);
             self.layer = layer;
             self.y = y;
+            self.draw_footer();
         }
+    }
+
+    fn draw_footer(&self) {
+        if self.footer.trim().is_empty() {
+            return;
+        }
+        self.layer.set_fill_color(Color::Rgb(Rgb::new(0.55, 0.55, 0.55, None)));
+        self.layer.use_text(
+            self.footer.clone(),
+            8.0,
+            Mm(PDF_MARGIN_L),
+            Mm(PDF_MARGIN_BOTTOM - 6.0),
+            &self.font_regular,
+        );
     }
 
     /// Пишет текст с переносом по словам, возвращает индент для след. блока не меняет.
@@ -227,17 +269,47 @@ fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
     let gray = Rgb::new(0.42, 0.42, 0.42, None);
     let red = Rgb::new(0.72, 0.14, 0.14, None);
     let green = Rgb::new(0.11, 0.45, 0.2, None);
+    let accent = Rgb::new(ACCENT_R, ACCENT_G, ACCENT_B, None);
 
     let mut w = PdfWriter {
         layer,
         y: PDF_PAGE_H - PDF_MARGIN_TOP,
         font_regular,
         font_bold,
+        footer: format!("Echips Hardware Check · {}", report.device_serial),
     };
 
-    w.text(&doc, "ECHIPS HARDWARE CHECK", 18.0, true, black.clone(), 0.0);
-    w.text(&doc, "Отчёт диагностики", 12.0, false, gray.clone(), 0.0);
-    w.gap(4.0);
+    // ---- шапка: логотип + заголовок + фирменная оранжевая линия ----
+    // (только на первой странице — дальше только тонкий футер внизу,
+    // см. ensure_space/draw_footer)
+    let header_top = w.y;
+    let logo_h = 16.0_f32;
+    let logo_w = logo_h * (LOGO_PX_W / LOGO_PX_H);
+    if let Ok(decoder) = printpdf::image_crate::codecs::png::PngDecoder::new(std::io::Cursor::new(LOGO_PNG)) {
+        if let Ok(logo) = Image::try_from(decoder) {
+            let natural_h_mm = LOGO_PX_H / 300.0 * 25.4;
+            let scale = logo_h / natural_h_mm;
+            logo.add_to_layer(
+                w.layer.clone(),
+                ImageTransform {
+                    translate_x: Some(Mm(PDF_MARGIN_L)),
+                    translate_y: Some(Mm(header_top - logo_h)),
+                    scale_x: Some(scale),
+                    scale_y: Some(scale),
+                    ..Default::default()
+                },
+            );
+        }
+    }
+    let title_x = PDF_MARGIN_L + logo_w + 5.0;
+    w.layer.set_fill_color(Color::Rgb(black.clone()));
+    w.layer.use_text("ECHIPS HARDWARE CHECK", 18.0, Mm(title_x), Mm(header_top - 7.0), &w.font_bold);
+    w.layer.set_fill_color(Color::Rgb(gray.clone()));
+    w.layer.use_text("Отчёт диагностики", 12.0, Mm(title_x), Mm(header_top - 14.0), &w.font_regular);
+    let rule_y = header_top - logo_h - 3.5;
+    draw_rule(&w.layer, accent.clone(), PDF_MARGIN_L, PDF_PAGE_W - PDF_MARGIN_R, rule_y, rule_y + 0.8);
+    w.y = rule_y - 5.0;
+
     w.text(&doc, &format!("Устройство: {}", report.device_model), 10.5, false, black.clone(), 0.0);
     w.text(&doc, &format!("Серийный номер: {}", report.device_serial), 10.5, false, black.clone(), 0.0);
     if !report.engineer.trim().is_empty() {
@@ -247,12 +319,12 @@ fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
     w.text(&doc, &format!("Окончание: {}", report.finished_at), 10.5, false, black.clone(), 0.0);
     if !report.summary_comment.trim().is_empty() {
         w.gap(4.0);
-        w.text(&doc, "Комментарий инженера", 11.5, true, black.clone(), 0.0);
+        w.text(&doc, "Комментарий инженера", 11.5, true, accent.clone(), 0.0);
         w.text(&doc, report.summary_comment.trim(), 10.5, false, black.clone(), 0.0);
     }
     w.gap(6.0);
 
-    w.text(&doc, "Результаты проверок", 13.0, true, black.clone(), 0.0);
+    w.text(&doc, "Результаты проверок", 13.0, true, accent.clone(), 0.0);
     w.gap(2.0);
     for r in &report.results {
         let label = if r.status == "idle" && r.in_profile == Some(false) {
@@ -292,7 +364,7 @@ fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
 
     let failed: Vec<&TestResult> = report.results.iter().filter(|r| r.status == "fail").collect();
     w.gap(6.0);
-    w.text(&doc, "Итог", 13.0, true, black.clone(), 0.0);
+    w.text(&doc, "Итог", 13.0, true, accent.clone(), 0.0);
     w.gap(2.0);
     if failed.is_empty() {
         w.text(&doc, "Неисправностей не выявлено.", 10.5, false, green, 0.0);

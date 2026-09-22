@@ -29,8 +29,9 @@ urlencoding = "2"
 # Хэш-цепочка для аудит-лога замены платы.
 sha2 = "0.10"
 num_cpus = "1"
-# PDF-экспорт отчёта (шрифт PT Sans в src-tauri/assets/fonts — кириллица).
-printpdf = "0.7"
+# PDF-экспорт отчёта (шрифт PT Sans в src-tauri/assets/fonts — кириллица,
+# embedded_images — логотип в шапке, src-tauri/assets/logo.png).
+printpdf = { version = "0.7", features = ["embedded_images"] }
 
 [profile.release]
 panic = "abort"

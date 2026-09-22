@@ -75,8 +75,13 @@ pub struct NetworkAdapter {
 pub fn list_wifi_adapters() -> Result<Vec<NetworkAdapter>, String> {
     #[cfg(target_os = "windows")]
     {
+        // -Physical — как и в list_lan_adapters: без него в списке попадаются
+        // виртуальные адаптеры (Microsoft Wi-Fi Direct Virtual Adapter),
+        // у которых статус почти всегда "Not Present" — реальный физический
+        // адаптер при этом мог быть подключён и рабочим, но тест всё равно
+        // считался проваленным из-за виртуального "соседа" (реальный отчёт).
         let raw = run_ps(
-            "Get-NetAdapter | Where-Object { $_.InterfaceDescription -match 'Wireless|Wi-?Fi|802.11' } | \
+            "Get-NetAdapter -Physical | Where-Object { $_.InterfaceDescription -match 'Wireless|Wi-?Fi|802.11' } | \
              ForEach-Object { \"$($_.Name)||$($_.Status)||$($_.MacAddress)\" }",
         )?;
         Ok(parse_adapters(&raw))

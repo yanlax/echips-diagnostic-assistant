@@ -436,13 +436,19 @@ var A = {
     else if (r==='first10'){ end = Math.min(100, 10/gb*100); }
     else if (r==='last10'){ start = Math.max(0, 100-10/gb*100); }
     else if (typeof r==='number'){ end = Math.min(100, r/gb*100); }
-    f.startPct=start; f.endPct=end; f.running=true; f.pos=0; f.total=0; f.mbps=0; f.classes=[0,0,0,0,0,0,0]; f.bad=[]; f.cols=[]; f.res=null; f.err=null; f.t0=Date.now();
+    f.startPct=start; f.endPct=end; f.running=true; f.pos=0; f.total=0; f.mbps=0; f.classes=[0,0,0,0,0,0,0]; f.bad=[]; f.cols=[]; f.res=null; f.err=null; f.t0=Date.now(); f.liveMin=null; f.liveMax=null;
     render();
     var unlisten=null;
     tauriEvent.listen('surface-progress', function(ev){
       var p=ev.payload; f.pos=p.pos_mb; f.total=p.total_mb; f.mbps=p.mbps; f.classes=p.classes; f.bad=f.bad.concat(p.new_bad_mb);
+      if (p.mbps>0){ f.liveMin = f.liveMin==null ? p.mbps : Math.min(f.liveMin,p.mbps); f.liveMax = f.liveMax==null ? p.mbps : Math.max(f.liveMax,p.mbps); }
+      // Колонка графика — по доле пройденного диапазона (pos_mb/total_mb уже
+      // относительны началу скана), а не по абсолютной позиции на диске —
+      // иначе при сканировании части диска (не «весь диск») график почти
+      // весь оставался пустым: начало/конец полосы не совпадали с
+      // началом/концом самого теста (замечание техника по реальному отчёту).
       var COLS=SF_COLS, frac=p.total_mb>0 ? p.pos_mb/p.total_mb : 0;
-      var abs=(f.startPct + (f.endPct-f.startPct)*frac)/100, col=Math.min(COLS-1, Math.max(0, Math.floor(abs*COLS)));
+      var col=Math.min(COLS-1, Math.max(0, Math.floor(frac*COLS)));
       if (p.mbps>0){ var lastc=f.lastCol==null ? col : f.lastCol; for (var c=Math.min(lastc,col); c<=col; c++) f.cols[c]=p.mbps; }
       f.lastCol=col; paintSurface();
     }).then(function(u){ unlisten=u; });
@@ -1910,7 +1916,7 @@ function paintSurface(){
   var txt = document.getElementById('sf-txt');
   if (txt){
     var pct = f.total>0 ? f.pos/f.total*100 : 0, el=(Date.now()-f.t0)/1000, eta = pct>0.5 && f.running ? el/pct*(100-pct) : null;
-    txt.textContent = pct.toFixed(1)+'% · '+f.mbps.toFixed(0)+' МБ/с · '+(f.pos/1024).toFixed(1)+' из '+(f.total/1024).toFixed(1)+' ГБ'+(eta!==null?' · осталось ~'+Math.floor(eta/60)+' мин '+Math.round(eta%60)+' с':'');
+    txt.textContent = pct.toFixed(1)+'% · '+f.mbps.toFixed(0)+' МБ/с'+(f.liveMin!=null?' (мин '+f.liveMin.toFixed(0)+', макс '+f.liveMax.toFixed(0)+')':'')+' · '+(f.pos/1024).toFixed(1)+' из '+(f.total/1024).toFixed(1)+' ГБ'+(eta!==null?' · осталось ~'+Math.floor(eta/60)+' мин '+Math.round(eta%60)+' с':'');
   }
   var fill = document.getElementById('sf-fill'); if (fill) fill.style.width = (f.total>0 ? f.pos/f.total*100 : 0)+'%';
   var cl = document.getElementById('sf-cls'); if (cl) cl.innerHTML = sfClassesHtml(f.classes);
@@ -1935,9 +1941,20 @@ function paintSurface(){
     if (!first){ g.stroke(); g.lineTo(lastx,h); g.closePath(); g.fill(); }
     g.fillStyle='rgba(255,255,255,.45)'; g.font='10px JetBrains Mono, monospace';
     g.fillText(max.toFixed(0)+' МБ/с', 6, 12); g.fillText('0', 6, h-4);
-    var dk = f.disks && f.disks[f.sel]; if (dk){ g.fillText('0', 6, h-16); g.fillText(dk.size_gb+' ГБ', w-52, h-4); }
+    var dk = f.disks && f.disks[f.sel];
+    if (dk) g.fillText((f.total>0 ? (f.total/1024).toFixed(1) : ((dk.size_gb*(f.endPct-f.startPct)/100).toFixed(1)))+' ГБ диапазона', w-90, h-4);
+    // Метки нечитаемых блоков: bad_offsets_mb — абсолютное смещение на диске
+    // (удобно для поиска сектора), а ось графика теперь — доля диапазона
+    // скана, поэтому пересчитываем в неё же, а не в абсолютную позицию.
     g.fillStyle='#E2574C';
-    f.bad.forEach(function(mb){ if (!dk) return; var abs=mb/1024/dk.size_gb; g.fillRect(abs*w, 0, 2, h); });
+    if (dk && dk.size_gb>0){
+      var rangeStartMb = dk.size_gb*1024*f.startPct/100, rangeEndMb = dk.size_gb*1024*f.endPct/100, rangeMb = rangeEndMb-rangeStartMb;
+      f.bad.forEach(function(mb){
+        if (rangeMb<=0) return;
+        var frac = (mb-rangeStartMb)/rangeMb; if (frac<0 || frac>1) return;
+        g.fillRect(frac*w, 0, 2, h);
+      });
+    }
   }
 }
 function fieldSurface(){

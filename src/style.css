@@ -19,6 +19,27 @@
   --mono:'JetBrains Mono',monospace; --grotesk:'Space Grotesk',sans-serif;
   color-scheme:dark;
 }
+/* Светлая тема — тот же фирменный акцент (#FF8A00), инвертированная
+   яркость фона/текста. Переключение — src/theme.js (атрибут data-theme
+   на <html>, localStorage), кнопка в шапке (см. index.html). */
+:root[data-theme="light"]{
+  --bg:#F3F4F6; --page:#FFFFFF;
+  --side-top:#FFFFFF; --side-bot:#EFF0F2;
+  --glass:rgba(0,0,0,.035); --glass-2:rgba(0,0,0,.025);
+  --line:rgba(0,0,0,.09); --line-soft:rgba(0,0,0,.07); --line-strong:rgba(0,0,0,.15);
+  --track:rgba(0,0,0,.08); --track-soft:rgba(0,0,0,.05);
+  --text:#1B1D21; --text-hi:#0E1013; --text-2:#33363C; --text-3:#4A4E56;
+  --dim:#6B6F76; --mute:#797E85; --faint:#8F949B; --faintest:#A6AAB1;
+  --accent:#FF8A00; --accent-hover:#F07E00; --accent-hi:#C96400; --accent-ink:#1A1204;
+  --accent-soft:rgba(255,138,0,.10); --accent-line:rgba(255,138,0,.38); --accent-glow:rgba(255,138,0,.22);
+  --ok:#2E8B57; --err:#D64541; --cool:#3E6E8E;
+  --glass-hover:rgba(0,0,0,.05); --glass-solid:rgba(0,0,0,.035); --line-input:rgba(0,0,0,.13);
+  --ctrl-border:rgba(0,0,0,.18); --ctrl-border-2:rgba(0,0,0,.20); --accent-deep:#B45E06; --err-glow:rgba(214,69,65,.5);
+  --rec-grad:linear-gradient(90deg,rgba(255,138,0,.14),rgba(255,138,0,.03) 55%,rgba(0,0,0,.02));
+  --cat-grad:linear-gradient(90deg,rgba(255,138,0,.10),rgba(0,0,0,.02) 60%);
+  --shimmer:rgba(0,0,0,.06); --shadow-row:0 6px 20px rgba(0,0,0,.08);
+  color-scheme:light;
+}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;background:var(--page);font-family:'Inter',sans-serif;color:var(--text);height:100%}
 body{height:100vh;display:flex;overflow:hidden;
@@ -42,9 +63,14 @@ input::placeholder{color:var(--mute)}
 .titlebar .winbtn{-webkit-app-region:no-drag}
 .titlebar .t{flex:1;padding-left:14px;font-family:var(--mono);font-size:10.5px;letter-spacing:.07em;color:var(--faint)}
 .winbtn{width:44px;height:32px;display:flex;align-items:center;justify-content:center;background:none;border:none;color:var(--mute);cursor:pointer}
-.winbtn:hover{background:rgba(255,255,255,.07);color:var(--text)}
+.winbtn:hover{background:var(--glass-hover);color:var(--text)}
 .winbtn.close:hover{background:#E81123;color:#fff}
 .winbtn svg{width:10px;height:10px;stroke:currentColor;stroke-width:1.2;stroke-linecap:round;fill:none}
+.winbtn.theme{width:36px}
+.winbtn.theme svg{width:14px;height:14px}
+.winbtn.theme .icon-moon{display:none}
+:root[data-theme="light"] .winbtn.theme .icon-sun{display:none}
+:root[data-theme="light"] .winbtn.theme .icon-moon{display:block}
 .main{flex:1;display:flex;min-height:0}
 
 /* ---------- сайдбар ---------- */

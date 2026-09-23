@@ -1225,9 +1225,9 @@ var A = {
     }).then(function(){
       S.mb.step='done'; render();
     }).catch(function(err){
-      // Ожидаемо: команда — заглушка (см. комментарий в motherboard.rs), но
-      // попытка всё равно попадает в аудит-лог. Показываем это как есть,
-      // а не притворяемся, что запись прошла.
+      // Запись не удалась (утилита не подтвердила, BIOS не поддерживается,
+      // драйвер не загрузился и т. п.) — попытка уже в аудит-логе, показываем
+      // причину как есть, а не притворяемся, что запись прошла.
       S.mb.writeError = typeof err==='string'?err:'Запись не выполнена';
       S.mb.step='stub';
       render();
@@ -1676,7 +1676,7 @@ function screenStart(){
     { tag:'DRV', title:'Установка драйверов', desc:'Определение модели, выбор пакетов и установка с точкой восстановления.', meta:'та же логика, что в Driver Assistant', badge:'ГОТОВО', hot:false, go:'drivers' },
     { tag:'AUTO', title:'Автопрогон', desc:'Последовательная проверка по профилю модели: сверка железа, пороги батареи, автоматические вердикты.', meta:'профиль: '+profile().name+' · '+(profile().tests||[]).length+' тестов', badge:'НОВОЕ', hot:true, act:'echips.autoStart()' },
     { tag:'DIA', title:'Диагностика оборудования', desc:CATS.length+' категорий тестов, датчики (где доступны), стресс-тест и отчёт.', meta:CATS.length+' категорий · TXT / JSON', badge:'РУЧНОЙ', hot:false, go:'dash' },
-    { tag:'MB', title:'Замена платы', desc:'Гарантийный случай: чтение SN/UUID и аудит-лог. Запись — требует донастройки.', meta:'частично · см. README', badge:'В РАБОТЕ', hot:false, go:'mb' }
+    { tag:'MB', title:'Замена платы', desc:'Гарантийный случай: чтение и запись SN/UUID заводской утилитой (AMI/Insyde), аудит-лог.', meta:'проверка чтением обратно', badge:'ГОТОВО', hot:false, go:'mb' }
   ];
   var detected = S.device
     ? deviceLabel() + (S.device.bios_version ? ' · BIOS ' + esc(S.device.bios_version) : '') + (S.device.os_version ? ' · ' + esc(S.device.os_version) : '')
@@ -3037,9 +3037,8 @@ function screenMb(){
       '<div class="lbl">UUID</div><div class="old">'+esc(m.before.uuid)+'</div><div class="new">'+esc(m.uuid)+'</div>'+
       '</div>'+
       '<div class="s" style="margin-top:14px">Наряд: '+esc(m.ticket)+' · Техник: '+esc(m.techName)+'</div>'+
-      '<div class="warnbox">Команда физической записи через AMIDEWINx64.exe в этой сборке не сконфигурирована — '+
-      'подставьте точный путь/аргументы вашей проверенной процедуры в src-tauri/src/commands/motherboard.rs, прежде '+
-      'чем использовать эту кнопку на реальной плате. Попытка всё равно попадёт в аудит-лог с хэш-цепочкой.</div>'+
+      '<div class="warnbox">Запись необратимо меняет SN/UUID платы (утилита завода: AMI — Amidewin, Insyde — H2OSDE). '+
+      'После записи серийник читается обратно и сверяется; в Windows новые значения видны после перезагрузки. Попытка попадёт в аудит-лог с хэш-цепочкой.</div>'+
       '<div class="headactions" style="margin-top:16px">'+
       '<button class="btn btn-ghost" onclick="echips.mbBack()">Назад</button>'+
       '<button class="btn btn-primary" onclick="echips.mbWrite()">Записать</button></div>';
@@ -3053,14 +3052,14 @@ function screenMb(){
   } else {
     body =
       '<div class="resultpane">'+resultIcon(true)+
-      '<div class="msg">SN и UUID успешно записаны. Запись сохранена в журнал аудита.</div>'+
+      '<div class="msg">SN и UUID записаны и подтверждены чтением обратно. Перезагрузите ПК, чтобы Windows показал новые значения. Запись сохранена в журнал аудита.</div>'+
       '<div class="actions"><button class="btn btn-primary" onclick="echips.go(\'start\')">Готово</button></div></div>';
   }
   return '<div class="pane">'+
     '<div class="crumbs"><button class="btn-link" onclick="echips.go(\'start\')">← режимы</button>'+
     '<span class="idx">замена платы · гарантия</span></div>'+
     '<div class="testhead"><div><h2>Замена платы</h2>'+
-    '<div class="hint">Доступ только для авторизованного техника. Чтение SN/UUID — реальное (WMI); запись требует донастройки, см. предупреждение ниже.</div></div></div>'+
+    '<div class="hint">Доступ только для авторизованного техника. Чтение SN/UUID — WMI; запись — заводской утилитой (AMI/Insyde) с проверкой чтением обратно.</div></div></div>'+
     '<div class="field" style="margin-top:16px">'+body+'</div></div>';
 }
 

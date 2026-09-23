@@ -375,13 +375,6 @@ impl PdfWriter {
         self.y -= lh;
     }
 
-    /// Пишет текст с переносом по словам (индент от общего левого поля).
-    fn text(&mut self, doc: &PdfDocumentReference, text: &str, size_pt: f32, bold: bool, color: Rgb, indent_mm: f32) {
-        for line in wrap_line(text, max_chars(size_pt, indent_mm)) {
-            self.draw_line(doc, &line, size_pt, bold, &color, indent_mm);
-        }
-    }
-
     fn gap(&mut self, mm: f32) {
         self.y -= mm;
     }

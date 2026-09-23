@@ -399,7 +399,12 @@ var A = {
     S.auto = { on:false, ids:[], idx:-1, stopped:false, waiting:false, msg:'', cls:'' };
   },
   autoStop:function(){ A.autoOff(); A.go('dash'); },
-  autoReport:function(){ A.autoOff(); A.go('report'); },
+  autoReport:function(){
+    var finished = S.auto.on && S.auto.idx >= S.auto.ids.length;
+    A.autoOff();
+    if (finished) A.reportSubmit('auto');
+    A.go('report');
+  },
   autoNext:function(){
     var a = S.auto; if (!a.on) return;
     if (a.timer) clearTimeout(a.timer);
@@ -1235,9 +1240,10 @@ var A = {
   },
 
   /* ---- отчёт ---- */
-  exportReport:function(kind){
+  /* Отчёт как объект — для экспорта (TXT/JSON/PDF) и для отправки админу. */
+  buildReport:function(){
     var testable = CATS;
-    var report = {
+    return {
       device_model: deviceLabel(),
       device_serial: deviceSn(),
       engineer: S.engineer ? S.engineer.name : '',
@@ -1252,6 +1258,21 @@ var A = {
           details: (d.lines||[]).slice(0,200), in_profile: inProfile(c.id), finished_at: d.ts || null };
       })
     };
+  },
+  /* Отправка отчёта админу (Rust → Cloudflare Worker → приватный репозиторий
+     отчётов, см. commands/upload.rs). kind: 'auto' (конец автопрогона) или
+     'manual' (ручной экспорт). При отсутствии сети отчёт ждёт в очереди.
+     Ручные экспорты не чаще раза в минуту — TXT+JSON+PDF подряд это один отчёт. */
+  reportSubmit:function(kind){
+    if (kind==='manual' && Date.now()-(S.sentManualAt||0) < 60000) return;
+    if (kind==='manual') S.sentManualAt = Date.now();
+    invoke('submit_report', { kind:kind, report:A.buildReport() }).then(function(r){
+      S.reportSend = /^sent/.test(r) ? 'sent' : 'queued'; render();
+    }).catch(function(){ S.reportSend = 'queued'; render(); });
+  },
+  exportReport:function(kind){
+    var report = A.buildReport();
+    A.reportSubmit('manual');
     var command = kind==='json' ? 'save_report_json' : kind==='pdf' ? 'save_report_pdf' : 'save_report_txt';
     invoke(command, { report: report }).then(function(path){
       S.exported = { kind: kind, path: path }; render();
@@ -3146,6 +3167,7 @@ function screenReport(){
     '<div class="footrow"><span class="mono">'+esc(deviceLabel())+' · SN '+esc(deviceSn())+'</span>'+
     '<span class="exp'+(S.exported?' done':'')+'" style="font-family:var(--mono);font-size:10.5px">'+
     (S.exported ? esc(S.exported.path) + ' сохранён' : 'экспорт: TXT для акта, JSON для базы, PDF для клиента')+
+    (S.reportSend==='sent' ? ' · отчёт отправлен администратору' : S.reportSend==='queued' ? ' · отчёт в очереди на отправку (уйдёт при появлении связи)' : '')+
     '</span></div></div>';
 }
 
@@ -3365,5 +3387,6 @@ document.addEventListener('DOMContentLoaded', function(){
   loadDevice();
   render();
   lockInit();
+  invoke('flush_report_queue').catch(function(){});
 });
 })();

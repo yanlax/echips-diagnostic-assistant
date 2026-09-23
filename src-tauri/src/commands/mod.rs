@@ -19,3 +19,4 @@ pub mod hwmon;
 pub mod keyhook;
 pub mod update;
 pub mod techs;
+pub mod upload;

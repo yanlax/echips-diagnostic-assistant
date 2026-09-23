@@ -41,3 +41,12 @@ opt-level = "s"
 
 # Статическая линковка CRT — без неё на чистом Windows не хватает VCRUNTIME.
 [target.'cfg(target_os = "windows")'.dependencies]
+# Низкоуровневый хук клавиатуры (блокировка Win во время теста клавиатуры,
+# см. commands/keyhook.rs) — единственное место в проекте с прямым WinAPI
+# вместо PowerShell, для этого конкретного случая иначе никак.
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }

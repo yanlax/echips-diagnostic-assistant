@@ -111,7 +111,7 @@ var S = {
   stressMarker:null,
   fan:{ poll:null, log:[], res:null, running:false, abort:false, manual:{}, seen:{}, touched:false, refresh:null },
   hwm:{ status:null, snap:null, busy:false, msg:'', err:'', confirm:null },
-  snapshot:false, exported:null, reportSummary:'',
+  snapshot:false, exported:null, reportSummary:'', kbWinBlock:false, kbWinBlockErr:'',
   hw:null, verdict:null, runActions:[], act:{ confirm:null, busy:false, msg:'', err:'', keyOpen:false, key:'' }, actRaw:null, detail:{}, kstat:{}, repId:null, markErr:null, br:{ info:null, loading:false }, camClip:null,
   rm:{ drives:null, timer:null, running:null, log:[], err:null, size:64 },
   dr:{ disks:null, sel:0, mode:64, running:false, pct:0, mbps:0, res:null, err:null },
@@ -237,6 +237,7 @@ var A = {
     if (S.dw.running) invoke('stop_disk_write_test').catch(function(){});
     if (S.dr.running) invoke('stop_disk_read_test').catch(function(){});
     if (S.mem.running) invoke('stop_memory_test').catch(function(){});
+    if (S.kbWinBlock){ invoke('stop_win_key_block').catch(function(){}); S.kbWinBlock = false; }
     if (document.getElementById('fill-overlay')) A.fillClose();
     if (S.auto.on && screen!=='test' && screen!=='report' && screen!=='sensors' && screen!=='stress') A.autoOff();
     S.screen=screen; if(id) S.cat=id; S.running=false; S.runLines=[]; S.runError=null; S.verdict=null; S.runActions=[]; S.act={ confirm:null, busy:false, msg:'', err:'', keyOpen:false, key:'', autoFixDone:false }; S.exported=null; S.tone=null;
@@ -291,6 +292,20 @@ var A = {
   setFill:function(i){ S.fill=i; render(); },
   comment:function(v){ S.comments[S.cat]=v; if (S.markErr && S.markErr.id===S.cat){ S.markErr=null; var m=document.getElementById('mark-err'); if(m) m.style.display='none'; } },
   reportSummary:function(v){ S.reportSummary=v; },
+  /* Блокировка клавиши Win на время теста клавиатуры — только вручную по
+     кнопке, не сама по себе при входе в тест (см. keyhook.rs). */
+  kbWinToggle:function(){
+    S.kbWinBlockErr = '';
+    if (S.kbWinBlock){
+      invoke('stop_win_key_block').catch(function(){});
+      S.kbWinBlock = false; render(); return;
+    }
+    invoke('start_win_key_block').then(function(){
+      S.kbWinBlock = true; render();
+    }).catch(function(err){
+      S.kbWinBlockErr = typeof err==='string' ? err : 'Не удалось включить блокировку Win'; render();
+    });
+  },
   mark:function(v){
     var id = S.cat, d = S.detail[id] || {}, auto = d.auto;
     var busy = (id==='diskread' && S.dr.running) || (id==='surface' && S.sf.running) || (id==='diskwrite' && S.dw.running) ||
@@ -1688,6 +1703,11 @@ function fieldKeyboard(){
   if (is.stuck.length) st.push('<span style="color:var(--err)">залипание: '+esc(is.stuck.map(kbLabel).join(', '))+'</span>');
   var rep = Object.keys(S.kstat).filter(function(id){ return S.kstat[id].rep>0; }).length;
   return '<div class="kbwrap">'+
+    '<div class="runrow" style="margin-bottom:10px">'+
+    '<button class="btn '+(S.kbWinBlock?'btn-danger':'btn-ghost')+'" onclick="echips.kbWinToggle()">'+(S.kbWinBlock?'Разблокировать Win':'Заблокировать Win на время теста')+'</button>'+
+    '<span class="n">'+(S.kbWinBlock?'Клавиша Win не открывает «Пуск», пока включено — не забудьте выключить после теста':'Win открывает меню «Пуск» и мешает проверке — включите блокировку на время теста')+'</span>'+
+    (S.kbWinBlockErr ? '<span class="n" style="color:var(--err)">'+esc(S.kbWinBlockErr)+'</span>' : '')+
+    '</div>'+
     '<div class="kbmeta"><span>RAW INPUT · нажмите каждую клавишу на ноутбуке</span>'+
     '<span>нажато '+pressed+' из '+total+' · rollover '+(pressed>3?'n-key ok':'—')+'</span></div>'+
     '<div class="kbboth">'+main+num+'</div>'+media+

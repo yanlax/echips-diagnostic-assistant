@@ -16,3 +16,4 @@ pub mod smart_parse;
 pub mod crash_logic;
 pub mod activation;
 pub mod hwmon;
+pub mod keyhook;

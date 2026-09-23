@@ -71,12 +71,15 @@ pub fn run() {
             commands::report::save_report_json,
             commands::report::save_report_pdf,
             commands::report::open_containing_folder,
+            commands::keyhook::start_win_key_block,
+            commands::keyhook::stop_win_key_block,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app, event| {
             if let tauri::RunEvent::Exit = event {
                 commands::hwmon::hwmon_stop();
+                commands::keyhook::stop_win_key_block();
                 powershell::shutdown();
             }
         });

@@ -12,5 +12,12 @@
     "pin_hash": "36179dbf3b6381f7a6f1495bb766474ff004c3fa8b91a8728107b5bfb34ac17b",
     "salt": "1d7e3627da2025452460af69fef436e6",
     "role": "admin"
+  },
+  {
+    "id": "sidoriv",
+    "name": "сидоров с с",
+    "pin_hash": "a6b8ec31acec15b54ec44d1f7337b2848c64e07884389bdfd0c27fbb897932c1",
+    "salt": "e1efe98994fd74a61aa3d343747c38f3",
+    "role": "tech"
   }
 ]

@@ -134,7 +134,7 @@ var S = {
      (или error, если нет сети и нет кэша). */
   lock:{ phase:'boot', techs:null, err:'', techId:'', pin:'', shake:false },
   engineer:null,
-  techadmin:{ id:'', name:'', pin:'', role:'tech', err:'', result:'' },
+  techadmin:{ id:'', name:'', pin:'', role:'tech', err:'', result:'', hasToken:null, tokenInput:'', busy:false, msg:'' },
   adminLog:[], adminPanelOpen:false
 };
 
@@ -277,6 +277,7 @@ var A = {
     if (document.getElementById('fill-overlay')) A.fillClose();
     if (S.auto.on && screen!=='test' && screen!=='report' && screen!=='sensors' && screen!=='stress') A.autoOff();
     S.screen=screen; if(id) S.cat=id; S.running=false; S.runLines=[]; S.runError=null; S.verdict=null; S.runActions=[]; S.act={ confirm:null, busy:false, msg:'', err:'', keyOpen:false, key:'', autoFixDone:false }; S.exported=null; S.tone=null;
+    if(screen==='techadmin'){ A.techadminInit(); }
     if(screen==='drivers'){ A.drvStart(); }
     if(screen==='mb'){ A.mbReset(); }
     if(screen==='sensors'){ A.sensorsStart(); }
@@ -1277,17 +1278,60 @@ var A = {
      Доступно только администратору (S.engineer.role==='admin', см.
      renderNav/go) — сейчас это аккаунт Максима. */
   techadminField:function(k,v){ S.techadmin[k]=v; S.techadmin.err=''; },
-  techadminGenerate:function(){
+  techadminBuild:function(){
     var t = S.techadmin;
     var id = (t.id||'').trim(), name = (t.name||'').trim(), pin = (t.pin||'').trim(), role = t.role==='admin' ? 'admin' : 'tech';
-    if(!/^[a-z0-9_-]{2,32}$/i.test(id)){ t.err='Идентификатор: латиница/цифры/-/_, 2–32 символа.'; render(); return; }
-    if(!name){ t.err='Укажите ФИО.'; render(); return; }
-    if(!/^\d{6,12}$/.test(pin)){ t.err='PIN: только цифры, не меньше 6.'; render(); return; }
+    if(!/^[a-z0-9_-]{2,32}$/i.test(id)){ t.err='Идентификатор: латиница/цифры/-/_, 2–32 символа.'; render(); return null; }
+    if(!name){ t.err='Укажите ФИО.'; render(); return null; }
+    if(!/^\d{6,12}$/.test(pin)){ t.err='PIN: только цифры, не меньше 6.'; render(); return null; }
     var salt = randomHex(16);
-    sha256Hex(salt+':'+pin).then(function(hash){
-      t.result = JSON.stringify({ id:id, name:name, pin_hash:hash, salt:salt, role:role }, null, 2) + ',';
-      t.err=''; render();
+    return sha256Hex(salt+':'+pin).then(function(hash){ return { id:id, name:name, pin_hash:hash, salt:salt, role:role }; });
+  },
+  techadminGenerate:function(){
+    var p = A.techadminBuild(); if(!p) return;
+    p.then(function(entry){
+      S.techadmin.result = JSON.stringify(entry, null, 2) + ',';
+      S.techadmin.err=''; render();
     });
+  },
+  /* Запись прямо в data/techs.json в репозитории (токен админа, см. techs.rs).
+     Тот же id — заменяет запись (так меняется PIN/роль). */
+  techadminPublish:function(){
+    var t = S.techadmin;
+    if(t.busy) return;
+    var p = A.techadminBuild(); if(!p) return;
+    t.busy=true; t.err=''; t.msg=''; render();
+    p.then(function(entry){
+      return invoke('techs_upsert', { tech: entry }).then(function(list){
+        S.lock.techs = list;
+        t.msg = 'Готово: «'+entry.name+'» сохранён в репозитории, на других станциях появится при следующем запуске.';
+        t.id=''; t.name=''; t.pin=''; t.role='tech'; t.result='';
+      });
+    }).catch(function(err){ t.err = typeof err==='string' ? err : 'Не удалось сохранить'; })
+      .then(function(){ t.busy=false; render(); });
+  },
+  techadminRemove:function(id){
+    var t = S.techadmin;
+    if(t.busy) return;
+    if(S.engineer && S.engineer.id===id){ t.err='Себя удалить нельзя.'; render(); return; }
+    if(!window.confirm('Удалить инженера «'+id+'» из списка?')) return;
+    t.busy=true; t.err=''; t.msg=''; render();
+    invoke('techs_remove', { id:id }).then(function(list){
+      S.lock.techs = list; t.msg='Удалён: '+id;
+    }).catch(function(err){ t.err = typeof err==='string' ? err : 'Не удалось удалить'; })
+      .then(function(){ t.busy=false; render(); });
+  },
+  techadminInit:function(){
+    invoke('techs_token_status').then(function(v){ S.techadmin.hasToken=!!v; render(); }).catch(function(){ S.techadmin.hasToken=false; render(); });
+  },
+  techadminSaveToken:function(){
+    var t = S.techadmin;
+    invoke('techs_save_token', { token:t.tokenInput }).then(function(){
+      t.hasToken=true; t.tokenInput=''; t.err=''; render();
+    }).catch(function(err){ t.err = typeof err==='string' ? err : 'Не удалось сохранить токен'; render(); });
+  },
+  techadminClearToken:function(){
+    invoke('techs_clear_token').then(function(){ S.techadmin.hasToken=false; render(); });
   },
   techadminCopy:function(){
     var text = S.techadmin.result;
@@ -3029,13 +3073,26 @@ function screenMb(){
    файл вручную — commit/push уже делает тот, кто добавляет инженера. */
 function screenTechAdmin(){
   var t = S.techadmin;
+  var tokenBlock = t.hasToken
+    ? '<div class="infoline" style="margin:0 0 16px;max-width:560px">Токен GitHub сохранён на этом компьютере. '+
+      '<button class="btn-link" onclick="echips.techadminClearToken()">Удалить токен</button></div>'
+    : '<div class="formgrid" style="margin-bottom:16px"><div class="formfield"><label>Токен GitHub (вводится один раз, хранится только на этом компьютере)</label>'+
+      '<input type="password" value="'+esc(t.tokenInput)+'" oninput="echips.techadminField(\'tokenInput\',this.value)" placeholder="github_pat_…">'+
+      '<div class="hint" style="margin-top:6px">Fine-grained токен на репозиторий echips-diagnostic-assistant, право Contents: read and write.</div></div>'+
+      '<div class="headactions"><button class="btn btn-ghost" onclick="echips.techadminSaveToken()">Сохранить токен</button></div></div>';
+  var list = (S.lock.techs||[]).map(function(x){
+    return '<div class="row"><span class="lbl">'+esc(x.name)+' · '+esc(x.id)+(x.role==='admin'?' · админ':'')+'</span>'+
+      '<span class="val"><button class="btn-link" '+(t.busy||!t.hasToken?'disabled':'')+' onclick="echips.techadminRemove(\''+esc(x.id)+'\')">Удалить</button></span></div>';
+  }).join('');
   return '<div class="pane">'+
     '<div class="crumbs"><button class="btn-link" onclick="echips.go(\'start\')">← режимы</button>'+
-    '<span class="idx">добавить инженера</span></div>'+
-    '<div class="testhead"><div><h2>Новый инженер</h2>'+
-    '<div class="hint">Сгенерируйте запись — вставьте её в массив data/techs.json в репозитории и запушьте. '+
-    'Новый PIN заработает на всех станциях при следующем запуске программы, без пересборки.</div></div></div>'+
-    '<div class="formgrid" style="margin-top:16px">'+
+    '<span class="idx">инженеры</span></div>'+
+    '<div class="testhead"><div><h2>Инженеры</h2>'+
+    '<div class="hint">Изменения сохраняются прямо в data/techs.json в репозитории и подхватываются на всех станциях при следующем запуске. '+
+    'Тот же идентификатор с новым PIN — заменяет запись.</div></div></div>'+
+    '<div style="margin-top:16px">'+tokenBlock+'</div>'+
+    (list ? '<div class="devlist2" style="max-width:560px;margin-bottom:18px">'+list+'</div>' : '')+
+    '<div class="formgrid">'+
     '<div class="formfield"><label>Идентификатор (латиницей)</label><input value="'+esc(t.id)+'" oninput="echips.techadminField(\'id\',this.value)" placeholder="sidorov"></div>'+
     '<div class="formfield"><label>ФИО</label><input value="'+esc(t.name)+'" oninput="echips.techadminField(\'name\',this.value)" placeholder="Сидоров С.С."></div>'+
     '<div class="formfield"><label>PIN (6 и более цифр)</label><input type="password" value="'+esc(t.pin)+'" oninput="echips.techadminField(\'pin\',this.value)" placeholder="••••••"></div>'+
@@ -3044,10 +3101,13 @@ function screenTechAdmin(){
       '<option value="admin"'+(t.role==='admin'?' selected':'')+'>Администратор</option>'+
     '</select></div>'+
     (t.err?'<div class="err" style="margin:-6px 0 12px">'+esc(t.err)+'</div>':'')+
+    (t.msg?'<div class="infoline" style="margin:0 0 12px">'+esc(t.msg)+'</div>':'')+
     '</div>'+
-    '<div class="headactions"><button class="btn btn-primary" onclick="echips.techadminGenerate()">Сгенерировать</button></div>'+
+    '<div class="headactions">'+
+      (t.hasToken ? '<button class="btn btn-primary" '+(t.busy?'disabled':'')+' onclick="echips.techadminPublish()">'+(t.busy?'Сохраняю…':'Сохранить в репозиторий')+'</button>' : '')+
+      '<button class="btn btn-ghost" onclick="echips.techadminGenerate()">Только сгенерировать запись</button></div>'+
     (t.result ?
-      '<div class="card" style="margin-top:18px;max-width:560px"><div class="k">Вставить в data/techs.json</div>'+
+      '<div class="card" style="margin-top:18px;max-width:560px"><div class="k">Вставить в data/techs.json вручную</div>'+
       '<pre class="techjson" style="margin-top:10px">'+esc(t.result)+'</pre>'+
       '<div class="headactions" style="margin-top:10px"><button class="btn btn-ghost" onclick="echips.techadminCopy()">Скопировать</button></div></div>'
       : '')+

@@ -85,3 +85,170 @@ pub async fn fetch_techs() -> Result<Vec<Tech>, String> {
         ),
     }
 }
+
+// ---------- управление списком из приложения (только администратор) ----------
+//
+// Токен GitHub (fine-grained, один репозиторий, Contents: write) админ вводит
+// один раз — он хранится локально в %LOCALAPPDATA%\Echips\HardwareCheck\
+// admin_token.txt и в exe/репозиторий не попадает. Обычные техники токена не
+// имеют, поэтому писать в data/techs.json могут только с машины админа.
+// Запись — через GitHub Contents API (GET sha + текущее содержимое, затем PUT
+// с новым содержимым и тем же sha: если файл успели изменить, GitHub вернёт
+// 409 и мы ничего не затрём).
+
+const API_URL: &str =
+    "https://api.github.com/repos/yanlax/echips-diagnostic-assistant/contents/data/techs.json";
+
+fn token_path() -> std::path::PathBuf {
+    let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into());
+    std::path::PathBuf::from(base)
+        .join("Echips")
+        .join("HardwareCheck")
+        .join("admin_token.txt")
+}
+
+fn read_token() -> Option<String> {
+    std::fs::read_to_string(token_path())
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+}
+
+#[tauri::command]
+pub fn techs_token_status() -> bool {
+    read_token().is_some()
+}
+
+#[tauri::command]
+pub fn techs_save_token(token: String) -> Result<(), String> {
+    let t = token.trim();
+    if t.len() < 20 || t.chars().any(|c| c.is_whitespace()) {
+        return Err("Похоже, это не токен GitHub (слишком короткий или с пробелами)".to_string());
+    }
+    let path = token_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(path, t).map_err(|e| format!("Не удалось сохранить токен: {e}"))
+}
+
+#[tauri::command]
+pub fn techs_clear_token() {
+    let _ = std::fs::remove_file(token_path());
+}
+
+fn b64_encode(data: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    for chunk in data.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(T[(n >> 18) as usize & 63] as char);
+        out.push(T[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { T[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+fn gh_error(status: reqwest::StatusCode) -> String {
+    match status.as_u16() {
+        401 => "Токен недействителен или истёк — введите новый".to_string(),
+        403 | 404 => "Нет доступа к репозиторию: у токена должно быть право Contents: write на yanlax/echips-diagnostic-assistant".to_string(),
+        409 | 422 => "Файл в репозитории изменили параллельно — повторите действие".to_string(),
+        s => format!("GitHub вернул ошибку {s}"),
+    }
+}
+
+/// Читает актуальный список и sha, применяет правку, коммитит. Возвращает
+/// новый список (чтобы приложение сразу показало его, не дожидаясь CDN raw).
+async fn commit_list<F>(message: String, edit: F) -> Result<Vec<Tech>, String>
+where
+    F: Send + FnOnce(&mut Vec<Tech>) -> Result<(), String>,
+{
+    let token = read_token().ok_or("Сначала введите GitHub-токен")?;
+    let client = reqwest::Client::new();
+    let get = |accept: &'static str| {
+        client
+            .get(API_URL)
+            .query(&[("ref", "main")])
+            .header("User-Agent", "echips-diagnostic-app")
+            .header("Accept", accept)
+            .bearer_auth(&token)
+    };
+
+    let meta = get("application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|e| format!("Нет связи с GitHub: {e}"))?;
+    if !meta.status().is_success() {
+        return Err(gh_error(meta.status()));
+    }
+    let meta: serde_json::Value = meta.json().await.map_err(|e| e.to_string())?;
+    let sha = meta["sha"].as_str().ok_or("GitHub не вернул sha файла")?.to_string();
+
+    let raw = get("application/vnd.github.raw+json")
+        .send()
+        .await
+        .map_err(|e| format!("Нет связи с GitHub: {e}"))?;
+    if !raw.status().is_success() {
+        return Err(gh_error(raw.status()));
+    }
+    let mut list: Vec<Tech> = serde_json::from_str(&raw.text().await.map_err(|e| e.to_string())?)
+        .map_err(|e| format!("techs.json в репозитории повреждён: {e}"))?;
+
+    edit(&mut list)?;
+
+    let mut body = serde_json::to_string_pretty(&list).map_err(|e| e.to_string())?;
+    body.push('\n');
+    let put = client
+        .put(API_URL)
+        .header("User-Agent", "echips-diagnostic-app")
+        .header("Accept", "application/vnd.github+json")
+        .bearer_auth(&token)
+        .json(&serde_json::json!({
+            "message": message,
+            "content": b64_encode(body.as_bytes()),
+            "sha": sha,
+            "branch": "main",
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("Нет связи с GitHub: {e}"))?;
+    if !put.status().is_success() {
+        return Err(gh_error(put.status()));
+    }
+    let _ = std::fs::write(cache_path(), &body);
+    Ok(list)
+}
+
+/// Добавляет инженера или (если id уже есть) заменяет запись — так же меняется PIN.
+#[tauri::command(async)]
+pub async fn techs_upsert(tech: Tech) -> Result<Vec<Tech>, String> {
+    let msg = format!("Инженеры: {} ({})", tech.name, tech.id);
+    commit_list(msg, move |list| {
+        match list.iter_mut().find(|t| t.id == tech.id) {
+            Some(existing) => *existing = tech,
+            None => list.push(tech),
+        }
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command(async)]
+pub async fn techs_remove(id: String) -> Result<Vec<Tech>, String> {
+    let msg = format!("Инженеры: удалён {id}");
+    commit_list(msg, move |list| {
+        let before = list.len();
+        list.retain(|t| t.id != id);
+        if list.len() == before {
+            return Err("Такого инженера уже нет в списке".to_string());
+        }
+        if !list.iter().any(|t| t.role == "admin") {
+            return Err("Нельзя удалить последнего администратора".to_string());
+        }
+        Ok(())
+    })
+    .await
+}

@@ -76,6 +76,11 @@ pub fn run() {
             commands::update::check_for_update,
             commands::update::download_update,
             commands::techs::fetch_techs,
+            commands::techs::techs_token_status,
+            commands::techs::techs_save_token,
+            commands::techs::techs_clear_token,
+            commands::techs::techs_upsert,
+            commands::techs::techs_remove,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

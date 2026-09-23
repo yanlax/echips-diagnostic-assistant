@@ -344,11 +344,13 @@ fn draw_rounded_stroke(layer: &PdfLayerReference, color: Rgb, thickness_pt: f32,
     layer.add_line(line);
 }
 
-/// Цвета отчёта — светлая «бумага» с тёмной обложкой сверху (см. заметку
-/// выше) и статусными цветами, взятыми из присланного референс-шаблона
-/// (echips_report_template.html), а не из тёмной темы интерфейса — так
-/// пожелал пользователь после проверки первой (полностью тёмной) версии.
+/// Цвета отчёта — тема «Графит» (вариант A из макетов, выбран пользователем):
+/// тёмный фон на всех страницах, чуть более тёмная обложка, карточки на
+/// «поднятой» поверхности, оранжевый акцент; статусные цвета — яркий текст на
+/// приглушённой тёмной плашке того же оттенка.
 struct PdfPalette {
+    page_bg: Rgb,
+    card_bg: Rgb,
     cover_bg: Rgb,
     cover_text: Rgb,
     cover_text_muted: Rgb,
@@ -374,28 +376,30 @@ struct PdfPalette {
 }
 fn palette() -> PdfPalette {
     PdfPalette {
-        cover_bg: Rgb::new(0.0824, 0.0902, 0.1059, None),        // #15171B
+        page_bg: Rgb::new(0.0824, 0.0902, 0.1059, None),         // #15171B
+        card_bg: Rgb::new(0.1137, 0.1255, 0.1451, None),         // #1D2025
+        cover_bg: Rgb::new(0.0549, 0.0627, 0.0745, None),        // #0E1013
         cover_text: Rgb::new(0.949, 0.953, 0.961, None),         // #F2F3F5
-        cover_text_muted: Rgb::new(0.784, 0.796, 0.816, None),   // #C8CBD0
-        text: Rgb::new(0.102, 0.110, 0.125, None),               // #1A1C20
-        text_muted: Rgb::new(0.416, 0.431, 0.463, None),         // #6A6E76
-        text_faint: Rgb::new(0.604, 0.616, 0.639, None),         // #9A9DA3
-        line: Rgb::new(0.894, 0.882, 0.855, None),               // #E4E1DA
-        line_soft: Rgb::new(0.929, 0.922, 0.898, None),          // #EDEBE5
-        accent: Rgb::new(0.914, 0.463, 0.0, None),               // #E97600
-        ok_fg: Rgb::new(0.0824, 0.502, 0.239, None),             // #15803D
-        ok_bg: Rgb::new(0.914, 0.969, 0.933, None),              // #E9F7EE
-        ok_border: Rgb::new(0.745, 0.902, 0.796, None),          // #BEE6CB
-        bad_fg: Rgb::new(0.753, 0.157, 0.106, None),             // #C0281B
-        bad_bg: Rgb::new(0.992, 0.925, 0.918, None),             // #FDECEA
-        bad_border: Rgb::new(0.961, 0.749, 0.718, None),         // #F5BFB7
-        na_fg: Rgb::new(0.357, 0.392, 0.447, None),              // #5B6472
-        na_bg: Rgb::new(0.945, 0.941, 0.925, None),              // #F1F0EC
-        na_border: Rgb::new(0.882, 0.871, 0.839, None),          // #E1DED6
-        warn_fg: Rgb::new(0.604, 0.357, 0.0, None),              // #9A5B00
-        warn_bg: Rgb::new(1.0, 0.953, 0.863, None),              // #FFF3DC
-        warn_border: Rgb::new(0.953, 0.847, 0.627, None),        // #F3D8A0
-        paper_soft: Rgb::new(0.969, 0.965, 0.953, None),         // #F7F6F3
+        cover_text_muted: Rgb::new(0.604, 0.627, 0.659, None),   // #9AA0A8
+        text: Rgb::new(0.914, 0.918, 0.925, None),               // #E9EAEC
+        text_muted: Rgb::new(0.604, 0.627, 0.659, None),         // #9AA0A8
+        text_faint: Rgb::new(0.486, 0.506, 0.537, None),         // #7C8189
+        line: Rgb::new(0.169, 0.184, 0.212, None),               // #2B2F36
+        line_soft: Rgb::new(0.169, 0.184, 0.212, None),          // #2B2F36
+        accent: Rgb::new(1.0, 0.541, 0.0, None),                 // #FF8A00
+        ok_fg: Rgb::new(0.373, 0.816, 0.553, None),              // #5FD08D
+        ok_bg: Rgb::new(0.071, 0.188, 0.122, None),              // #12301F
+        ok_border: Rgb::new(0.122, 0.322, 0.212, None),          // #1F5236
+        bad_fg: Rgb::new(1.0, 0.561, 0.510, None),               // #FF8F82
+        bad_bg: Rgb::new(0.227, 0.082, 0.071, None),             // #3A1512
+        bad_border: Rgb::new(0.478, 0.169, 0.145, None),         // #7A2B25
+        na_fg: Rgb::new(0.604, 0.627, 0.659, None),              // #9AA0A8
+        na_bg: Rgb::new(0.137, 0.149, 0.173, None),              // #23262C
+        na_border: Rgb::new(0.2, 0.216, 0.243, None),            // #33373E
+        warn_fg: Rgb::new(0.941, 0.761, 0.294, None),            // #F0C24B
+        warn_bg: Rgb::new(0.180, 0.149, 0.071, None),            // #2E2612
+        warn_border: Rgb::new(0.420, 0.337, 0.125, None),        // #6B5620
+        paper_soft: Rgb::new(0.141, 0.157, 0.180, None),         // #24282E
     }
 }
 
@@ -556,7 +560,9 @@ struct PdfWriter {
 impl PdfWriter {
     fn new_page(doc: &PdfDocumentReference) -> (PdfLayerReference, f32) {
         let (page, layer) = doc.add_page(Mm(PDF_PAGE_W), Mm(PDF_PAGE_H), "Layer");
-        (doc.get_page(page).get_layer(layer), PDF_PAGE_H - PDF_MARGIN_TOP)
+        let layer = doc.get_page(page).get_layer(layer);
+        draw_rule(&layer, palette().page_bg, 0.0, PDF_PAGE_W, 0.0, PDF_PAGE_H);
+        (layer, PDF_PAGE_H - PDF_MARGIN_TOP)
     }
 
     fn ensure_space(&mut self, doc: &PdfDocumentReference, needed_mm: f32) {
@@ -1017,6 +1023,12 @@ fn draw_card(w: &mut PdfWriter, doc: &PdfDocumentReference, p: &PdfPalette, r: &
     let (fg, bg, border) = bucket_colors(p, &bucket);
     let label = badge_label(r);
 
+    // Поверхность карточки — рисуется до содержимого (иначе перекроет текст);
+    // высота известна из measured, если карточка целиком умещается на странице.
+    if measured <= page_h_usable {
+        draw_rounded_fill(&w.layer, p.card_bg.clone(), PDF_MARGIN_L, w.y - measured, PDF_PAGE_W - PDF_MARGIN_R, w.y, RADIUS_BOX);
+    }
+
     w.y -= 5.0;
 
     // Бейдж — фиксированная позиция у верхнего края карточки, рисуется до
@@ -1123,6 +1135,7 @@ fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("Не удалось встроить шрифт: {e}"))?;
     let layer = doc.get_page(page1).get_layer(layer1);
     let p = palette();
+    draw_rule(&layer, p.page_bg.clone(), 0.0, PDF_PAGE_W, 0.0, PDF_PAGE_H);
 
     let mut w = PdfWriter {
         layer,
@@ -1378,7 +1391,7 @@ fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
                 x = PDF_MARGIN_L + 8.0;
                 row_top -= CHIP_H + 3.0;
             }
-            draw_rounded_fill(&w.layer, Rgb::new(1.0, 1.0, 1.0, None), x, row_top - CHIP_H, x + w_chip, row_top, CHIP_H / 2.0);
+            draw_rounded_fill(&w.layer, p.page_bg.clone(), x, row_top - CHIP_H, x + w_chip, row_top, CHIP_H / 2.0);
             draw_rounded_stroke(&w.layer, vb_border.clone(), 0.4, x, row_top - CHIP_H, x + w_chip, row_top, CHIP_H / 2.0);
             w.layer.set_fill_color(Color::Rgb(vb_fg.clone()));
             w.layer.use_text(f.title.clone(), 10.0, Mm(x + 6.0), Mm(row_top - CHIP_H + 2.3), &w.font_bold);

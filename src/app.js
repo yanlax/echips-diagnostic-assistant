@@ -73,7 +73,7 @@ var KEYROWS = [
   ['Tab','Q','W','E','R','T','Y','U','I','O','P','[',']','\\'],
   ['Caps','A','S','D','F','G','H','J','K','L',';',"'",'Enter'],
   ['Shift','Z','X','C','V','B','N','M',',','.','/','Shift'],
-  ['Ctrl','Win','Alt','Space','Alt','←','↑','↓','→']
+  ['Ctrl','Win','Alt','Space','Alt','Ctrl','←','↑','↓','→']
 ];
 var WIDE = { Bksp:2, Tab:1.5, Caps:1.8, Enter:2.2, Shift:2.4, Space:6, Del:1.2 };
 var TONES = ['1 кГц синус','Левый / правый','Echo-тест микрофона'];
@@ -1606,7 +1606,7 @@ var MEDIA = [['AudioVolumeUp','Гром. +'],['AudioVolumeDown','Гром. −']
 var CODEMAP = (function(){
   var named = { 'Esc':['Escape'],'Del':['Delete'],'`':['Backquote'],'-':['Minus'],'=':['Equal'],'Bksp':['Backspace'],'Tab':['Tab'],
     '[':['BracketLeft'],']':['BracketRight'],'\\':['Backslash'],'Caps':['CapsLock'],';':['Semicolon'],"'":['Quote'],
-    'Enter':['Enter'],',':['Comma'],'.':['Period'],'/':['Slash'],'Ctrl':['ControlLeft','ControlRight'],
+    'Enter':['Enter'],',':['Comma'],'.':['Period'],'/':['Slash'],
     'Win':['MetaLeft','MetaRight'],'Space':['Space'],'←':['ArrowLeft'],'↑':['ArrowUp'],'↓':['ArrowDown'],'→':['ArrowRight'] };
   var map = {};
   KEYROWS.forEach(function(row,ri){
@@ -1615,8 +1615,13 @@ var CODEMAP = (function(){
       // Индекс левой/правой клавиши в ряду определяем через indexOf, а не
       // жёстко зашитой колонкой — после удаления Fn из раскладки позиция
       // сдвинулась, а завязка на конкретный номер колонки была бы хрупкой.
+      // Ctrl раньше был один блок на оба физических кода (ControlLeft и
+      // ControlRight сразу) — техник не мог проверить правый Ctrl отдельно
+      // ("нет в тесте правого Ctrl, при нажатии отображается левый"),
+      // теперь в раскладке два блока Ctrl, разведены так же, как Shift/Alt.
       if (label==='Shift') codes = [ki===row.indexOf('Shift') ? 'ShiftLeft' : 'ShiftRight'];
       else if (label==='Alt') codes = [ki===row.indexOf('Alt') ? 'AltLeft' : 'AltRight'];
+      else if (label==='Ctrl') codes = [ki===row.indexOf('Ctrl') ? 'ControlLeft' : 'ControlRight'];
       else if (named[label]) codes = named[label];
       else if (/^F\d+$/.test(label)) codes = [label];
       else if (/^\d$/.test(label)) codes = ['Digit'+label];

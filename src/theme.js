@@ -1,33 +1,57 @@
-// Переключение тёмной/светлой темы — та же схема, что в echips-driver-assistant:
-// атрибут data-theme на <html>, сохранение выбора в localStorage.
+// Переключатель темы — тот же паттерн, что в echips-driver-assistant:
+// сегментированная пилюля (тёмная/светлая, каждая — своя кнопка) поверх
+// рабочей области, а не один тумблер. Тема ставится на <html data-theme>
+// сразу при загрузке скрипта (до отрисовки), чтобы не мигало неверной
+// темой; выбор хранится в localStorage.
 (function () {
   var STORAGE_KEY = "echips-diagnostic-theme";
+  var saved = null;
+  try { saved = localStorage.getItem(STORAGE_KEY); } catch (e) {}
+  var theme = saved === "light" || saved === "dark" ? saved : "dark";
+  document.documentElement.setAttribute("data-theme", theme);
 
-  function applyStoredTheme() {
-    try {
-      var saved = localStorage.getItem(STORAGE_KEY);
-      if (saved === "light" || saved === "dark") {
-        document.documentElement.setAttribute("data-theme", saved);
-      }
-    } catch (e) {
-      // localStorage может быть недоступен — остаёмся на теме по умолчанию (dark)
-    }
+  var ICON = {
+    dark: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg>',
+    light: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.4 5.4l1.6 1.6M17 17l1.6 1.6M18.6 5.4L17 7M7 17l-1.6 1.6"/></svg>'
+  };
+
+  function apply(next) {
+    theme = next;
+    document.documentElement.setAttribute("data-theme", next);
+    try { localStorage.setItem(STORAGE_KEY, next); } catch (e) {}
+    var root = document.querySelector(".theme-toggle");
+    if (!root) return;
+    root.querySelectorAll("button").forEach(function (b) {
+      b.setAttribute("aria-pressed", String(b.dataset.theme === next));
+    });
+  }
+
+  function mount() {
+    var host = document.querySelector(".content");
+    if (!host || host.querySelector(".theme-toggle")) return;
+    var el = document.createElement("div");
+    el.className = "theme-toggle";
+    el.setAttribute("role", "group");
+    el.setAttribute("aria-label", "Тема оформления");
+    el.innerHTML =
+      '<button type="button" data-theme="dark" title="Тёмная тема" aria-label="Тёмная тема">' + ICON.dark + "</button>" +
+      '<button type="button" data-theme="light" title="Светлая тема" aria-label="Светлая тема">' + ICON.light + "</button>";
+    el.addEventListener("click", function (e) {
+      var btn = e.target.closest("button[data-theme]");
+      if (btn) apply(btn.dataset.theme);
+    });
+    host.appendChild(el);
+    apply(theme);
   }
 
   window.EchipsTheme = {
-    get: function () {
-      return document.documentElement.getAttribute("data-theme") || "dark";
-    },
-    set: function (theme) {
-      document.documentElement.setAttribute("data-theme", theme);
-      try { localStorage.setItem(STORAGE_KEY, theme); } catch (e) {}
-    },
-    toggle: function () {
-      var next = window.EchipsTheme.get() === "dark" ? "light" : "dark";
-      window.EchipsTheme.set(next);
-      return next;
-    }
+    get: function () { return theme; },
+    set: apply
   };
 
-  applyStoredTheme();
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", mount);
+  } else {
+    mount();
+  }
 })();

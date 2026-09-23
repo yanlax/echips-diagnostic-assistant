@@ -66,12 +66,31 @@ input::placeholder{color:var(--mute)}
 .winbtn:hover{background:var(--glass-hover);color:var(--text)}
 .winbtn.close:hover{background:#E81123;color:#fff}
 .winbtn svg{width:10px;height:10px;stroke:currentColor;stroke-width:1.2;stroke-linecap:round;fill:none}
-.winbtn.theme{width:36px}
-.winbtn.theme svg{width:14px;height:14px}
-.winbtn.theme .icon-moon{display:none}
-:root[data-theme="light"] .winbtn.theme .icon-sun{display:none}
-:root[data-theme="light"] .winbtn.theme .icon-moon{display:block}
 .main{flex:1;display:flex;min-height:0}
+
+/* ---------- переключатель темы (как в echips-driver-assistant) ---------- */
+.theme-toggle{
+  position:absolute;top:16px;right:20px;z-index:20;
+  display:flex;align-items:center;gap:2px;padding:3px;
+  background:var(--glass);border:1px solid var(--line-input);
+  border-radius:999px;backdrop-filter:blur(10px);
+  -webkit-app-region:no-drag;
+  transition:background-color .2s,border-color .2s;
+}
+.theme-toggle:hover{border-color:var(--accent-line)}
+.theme-toggle button{
+  display:flex;align-items:center;justify-content:center;
+  width:28px;height:24px;padding:0;
+  background:transparent;border:none;border-radius:999px;
+  color:var(--mute);cursor:pointer;
+  transition:background-color .18s,color .18s,box-shadow .18s;
+}
+.theme-toggle button:hover{color:var(--text);background:var(--track)}
+.theme-toggle button[aria-pressed="true"]{
+  background:var(--accent);color:var(--accent-ink);
+  box-shadow:0 2px 10px var(--accent-glow);
+}
+.theme-toggle svg{width:14px;height:14px;display:block}
 
 /* ---------- сайдбар ---------- */
 .sidebar{flex:0 0 228px;display:flex;flex-direction:column;padding:20px 14px 16px;
@@ -99,8 +118,9 @@ input::placeholder{color:var(--mute)}
 .sidefoot a{text-decoration:underline;text-underline-offset:2px}
 
 /* ---------- рабочая область ---------- */
-.content{flex:1;min-width:0;display:flex;flex-direction:column;overflow-y:auto;padding:24px 26px 22px;
+.content{flex:1;min-width:0;display:flex;flex-direction:column;position:relative;
   background:radial-gradient(110% 80% at 100% 0%,rgba(255,138,0,.10),transparent 62%),var(--bg)}
+.screen{flex:1;min-height:0;display:flex;flex-direction:column;overflow-y:auto;padding:24px 26px 22px}
 .pane{display:flex;flex-direction:column;flex:1;min-height:0}
 .eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute)}
 h1.title{font-family:var(--grotesk);font-size:27px;font-weight:600;color:var(--text-hi);line-height:1.15;margin:7px 0 0}
@@ -398,7 +418,7 @@ h1.title{font-family:var(--grotesk);font-size:27px;font-weight:600;color:var(--t
 @keyframes echFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
 @keyframes echShimmer{0%{transform:translateX(-100%)}100%{transform:translateX(320%)}}
 @keyframes echDash{0%{stroke-dashoffset:228}50%{stroke-dashoffset:40}100%{stroke-dashoffset:228}}
-.content > .enter{animation:echRise .35s ease-out}
+.screen > .enter{animation:echRise .35s ease-out}
 .bar::after{content:'';position:absolute;top:0;bottom:0;left:0;width:22%;
   background:linear-gradient(90deg,transparent,var(--shimmer),transparent);animation:echShimmer 1.8s linear infinite}
 .scanpane .hex{animation:echFloat 3.2s ease-in-out infinite}

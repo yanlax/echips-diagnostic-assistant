@@ -60,8 +60,8 @@ mod win {
         SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_BROWSER_BACK,
         VK_BROWSER_FAVORITES, VK_BROWSER_FORWARD, VK_BROWSER_HOME, VK_BROWSER_REFRESH, VK_BROWSER_SEARCH,
         VK_BROWSER_STOP, VK_ESCAPE, VK_LAUNCH_APP1, VK_LAUNCH_APP2, VK_LAUNCH_MAIL, VK_LAUNCH_MEDIA_SELECT,
-        VK_LWIN, VK_MEDIA_NEXT_TRACK, VK_MEDIA_PLAY_PAUSE, VK_MEDIA_PREV_TRACK, VK_MEDIA_STOP, VK_RWIN,
-        VK_SNAPSHOT, VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_VOLUME_UP,
+        VK_F11, VK_F12, VK_F5, VK_LWIN, VK_MEDIA_NEXT_TRACK, VK_MEDIA_PLAY_PAUSE, VK_MEDIA_PREV_TRACK,
+        VK_MEDIA_STOP, VK_RWIN, VK_SNAPSHOT, VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_VOLUME_UP,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, DispatchMessageW, GetClassNameW, GetMessageW, GetWindowThreadProcessId,
@@ -137,6 +137,16 @@ mod win {
     /// Ножницы/Snipping Tool) — яркость сюда не входит: у неё нет
     /// отдельного VK-кода, её обрабатывает встроенный контроллер/BIOS ещё
     /// до ОС (как Fn).
+    ///
+    /// F5/F11/F12 — отдельная история, не системный OSD: это «акселераторы»
+    /// самого WebView2 (движок, на котором работает Tauri) — F11 сворачивает
+    /// наше окно в полноэкранный режим, F5 перезагружает страницу (потеряв
+    /// весь ход теста), F12 открывает DevTools. e.preventDefault() в JS их
+    /// не останавливает — WebView2 перехватывает эти клавиши как акселератор
+    /// раньше, чем событие вообще доходит до DOM-обработчика страницы
+    /// (реальный случай с реального отчёта: "нажимаешь f11 — увеличивается
+    /// на весь экран"). Решение то же, что и для PrtScr/медиа — глушим и
+    /// ретранслируем в JS через relay_key, а не просто блокируем.
     fn is_blocked_vk(vk: u32) -> bool {
         matches!(
             vk as u16,
@@ -161,6 +171,9 @@ mod win {
                 | VK_BROWSER_FAVORITES
                 | VK_BROWSER_HOME
                 | VK_SNAPSHOT
+                | VK_F5
+                | VK_F11
+                | VK_F12
         )
     }
 

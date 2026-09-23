@@ -1736,7 +1736,15 @@ document.addEventListener('keydown', function(e){
 var HOOK_VK_CODE = {
   173:'AudioVolumeMute', 174:'AudioVolumeDown', 175:'AudioVolumeUp',
   176:'MediaTrackNext', 177:'MediaTrackPrevious', 178:'MediaStop', 179:'MediaPlayPause',
-  44:'PrintScreen'
+  44:'PrintScreen',
+  // F5/F11/F12 — акселераторы самого WebView2 (Tauri на нём и работает):
+  // F11 сворачивает наше окно в полноэкранный режим ("нажимаешь f11 —
+  // увеличивается на весь экран" — с реального отчёта), F5 перезагрузил
+  // бы страницу (потеряв весь ход теста), F12 открыл бы DevTools.
+  // preventDefault() в JS их не останавливает — WebView2 перехватывает
+  // раньше, чем событие доходит до DOM. 'F5'/'F11'/'F12' — уже готовые
+  // id в CODEMAP (см. регэксп /^F\d+$/ там), отдельно заводить не нужно.
+  116:'F5', 122:'F11', 123:'F12'
 };
 tauriEvent.listen('hook-relay-key', function(ev){
   if (S.screen!=='test' || cat().kind!=='keyboard') return;

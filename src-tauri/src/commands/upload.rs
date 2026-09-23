@@ -1,7 +1,8 @@
 // Отправка отчётов администратору: после автопрогона и при ручном экспорте
 // приложение кладёт JSON прямо в приватный репозиторий отчётов
 // (yanlax/echips-reports) через GitHub Contents API, по структуре
-// <инженер>/<дата диагностики>/<время>_<серийник>_<auto|manual>.json.
+// <инженер>/<дата диагностики>/<время>_<серийник>_<auto|manual>.json
+// и рядом такой же .pdf.
 //
 // Токен вшивается в exe при сборке из секрета GitHub Actions
 // ECHIPS_REPORTS_TOKEN (в публичном коде его нет). Это осознанный компромисс
@@ -47,6 +48,31 @@ fn client() -> Result<reqwest::Client, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Кладёт один файл в репозиторий. 422 («файл уже есть») считаем успехом: так
+/// повторная отправка после частичного сбоя (JSON ушёл, PDF нет) не плодит
+/// дубликаты и не застревает.
+async fn put_file(client: &reqwest::Client, path: &str, bytes: &[u8], message: &str) -> Result<(), String> {
+    let url_path: Vec<String> = path.split('/').map(|s| urlencoding::encode(s).into_owned()).collect();
+    let url = format!("https://api.github.com/repos/{REPO}/contents/{}", url_path.join("/"));
+    let resp = client
+        .put(&url)
+        .header("User-Agent", "echips-diagnostic-app")
+        .header("Accept", "application/vnd.github+json")
+        .bearer_auth(TOKEN)
+        .json(&json!({ "message": message, "content": b64_encode(bytes) }))
+        .send()
+        .await
+        .map_err(|e| format!("Нет связи: {e}"))?;
+    match resp.status().as_u16() {
+        200 | 201 | 422 => Ok(()),
+        401 => Err("Токен отправки отчётов недействителен или истёк".to_string()),
+        403 | 404 => Err("Нет доступа к репозиторию отчётов".to_string()),
+        s => Err(format!("GitHub вернул {s}")),
+    }
+}
+
+/// Загружает JSON и PDF отчёта. Имя файла строится из sent_at конверта (а не
+/// из текущего времени) — при повторной отправке из очереди пути те же.
 async fn post(client: &reqwest::Client, envelope: &Value) -> Result<(), String> {
     if TOKEN.is_empty() {
         return Err("В этой сборке нет токена отправки отчётов".to_string());
@@ -55,21 +81,22 @@ async fn post(client: &reqwest::Client, envelope: &Value) -> Result<(), String> 
     let serial = safe(report["device_serial"].as_str().unwrap_or(""));
     let engineer = safe(report["engineer"].as_str().unwrap_or(""));
     let kind = safe(envelope["kind"].as_str().unwrap_or(""));
-    let now = chrono::Local::now();
+    let sent = envelope["sent_at"]
+        .as_str()
+        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+        .map(|t| t.with_timezone(&chrono::Local))
+        .unwrap_or_else(chrono::Local::now);
     // Папка дня — дата самой диагностики (начало прогона), а не отправки:
     // отчёт из очереди, ушедший на следующий день, всё равно ляжет в свой день.
     let day = report["started_at"]
         .as_str()
         .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
         .map(|t| t.with_timezone(&chrono::Local))
-        .unwrap_or(now)
+        .unwrap_or(sent)
         .format("%Y-%m-%d")
         .to_string();
-    // Структура: <инженер>/<дата диагностики>/<время отправки>_<серийник>_<тип>.json
-    let path = format!("{}/{}/{}_{}_{}.json", engineer, day, now.format("%H%M%S%3f"), serial, kind);
-    let url_path: Vec<String> = path.split('/').map(|s| urlencoding::encode(s).into_owned()).collect();
-    let url = format!("https://api.github.com/repos/{REPO}/contents/{}", url_path.join("/"));
-    let pretty = serde_json::to_string_pretty(envelope).map_err(|e| e.to_string())?;
+    // Структура: <инженер>/<дата диагностики>/<время отправки>_<серийник>_<тип>.{json,pdf}
+    let base = format!("{}/{}/{}_{}_{}", engineer, day, sent.format("%H%M%S%3f"), serial, kind);
     let message = format!(
         "Отчёт: {} / {} ({})",
         safe(report["device_model"].as_str().unwrap_or("")),
@@ -77,21 +104,18 @@ async fn post(client: &reqwest::Client, envelope: &Value) -> Result<(), String> 
         kind
     );
 
-    let resp = client
-        .put(&url)
-        .header("User-Agent", "echips-diagnostic-app")
-        .header("Accept", "application/vnd.github+json")
-        .bearer_auth(TOKEN)
-        .json(&json!({ "message": message, "content": b64_encode(pretty.as_bytes()) }))
-        .send()
-        .await
-        .map_err(|e| format!("Нет связи: {e}"))?;
-    match resp.status().as_u16() {
-        200 | 201 => Ok(()),
-        401 => Err("Токен отправки отчётов недействителен или истёк".to_string()),
-        403 | 404 => Err("Нет доступа к репозиторию отчётов".to_string()),
-        s => Err(format!("GitHub вернул {s}")),
+    let pretty = serde_json::to_string_pretty(envelope).map_err(|e| e.to_string())?;
+    put_file(client, &format!("{base}.json"), pretty.as_bytes(), &message).await?;
+
+    // PDF — тот же, что «Экспорт PDF» (тема «Графит»). Ошибка самой сборки PDF
+    // (не сети) не должна вечно держать отчёт в очереди — тогда остаётся
+    // хотя бы JSON.
+    if let Ok(rep) = serde_json::from_value::<super::report::DiagnosticReport>(report.clone()) {
+        if let Ok(pdf) = super::report::render_pdf(&rep) {
+            put_file(client, &format!("{base}.pdf"), &pdf, &message).await?;
+        }
     }
+    Ok(())
 }
 
 /// Отправляет накопленное в очереди; на первой же неудаче останавливается.

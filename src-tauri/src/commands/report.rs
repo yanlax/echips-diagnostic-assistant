@@ -1121,7 +1121,7 @@ fn draw_card(w: &mut PdfWriter, doc: &PdfDocumentReference, p: &PdfPalette, r: &
     w.y -= CARD_GAP;
 }
 
-fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
+pub(crate) fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
     let (doc, page1, layer1) =
         PdfDocument::new("Echips Hardware Check — отчёт", Mm(PDF_PAGE_W), Mm(PDF_PAGE_H), "Layer");
     let font_regular = doc

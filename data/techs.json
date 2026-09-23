@@ -19,5 +19,12 @@
     "pin_hash": "a6b8ec31acec15b54ec44d1f7337b2848c64e07884389bdfd0c27fbb897932c1",
     "salt": "e1efe98994fd74a61aa3d343747c38f3",
     "role": "tech"
+  },
+  {
+    "id": "sidorov",
+    "name": "авпрвапр",
+    "pin_hash": "78881cb96077ce282934e2396793e360a2b5120a98e769a59b85987743b1f32d",
+    "salt": "f86311916f47760f5fbecf57ac20e5f3",
+    "role": "tech"
   }
 ]

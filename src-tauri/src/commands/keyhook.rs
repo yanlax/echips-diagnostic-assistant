@@ -137,13 +137,24 @@ mod win {
         CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
     }
 
-    /// Подстраховка: если «Пуск» всё же стал активным окном, пока блок
-    /// включён — сразу шлём ему Escape. У Start UI (Windows 10/11) класс
-    /// окна "Windows.UI.Core.CoreWindow", но так называются и другие
-    /// системные оверлеи (Поиск, Центр уведомлений) — поэтому дополнительно
-    /// проверяем, что процесс окна называется именно StartMenuExperienceHost
-    /// или (старый Windows 10) ShellExperienceHost, чтобы случайно не
-    /// закрыть что-то ещё нажатием Escape.
+    /// Подстраховка: если «Пуск»/Поиск всё же стал активным окном, пока блок
+    /// включён — сразу шлём ему Escape. По реальному логу (keyhook.log,
+    /// v0.11.0) подтвердилось: hook_proc честно глотает КАЖДОЕ нажатие Win
+    /// (vk=0x5B) — но меню всё равно открывается, причём foreground
+    /// переключается на системный UI даже раньше, чем наш хук вообще успел
+    /// увидеть нажатие. Значит открытие «Пуска»/Поиска по Win идёт в обход
+    /// цепочки WH_KEYBOARD_LL целиком (какой-то более низкоуровневый путь в
+    /// самой ОС) — подстраховка через Escape здесь не запасной вариант,
+    /// а единственный реально работающий механизм.
+    ///
+    /// У Start UI (Windows 10/11) класс окна "Windows.UI.Core.CoreWindow",
+    /// но так называются и другие системные оверлеи (Поиск, Центр
+    /// уведомлений) — поэтому дополнительно проверяем процесс. По тому же
+    /// логу выяснилось: на актуальной сборке Windows 11 нажатие Win
+    /// открывает не StartMenuExperienceHost.exe, а SearchApp.exe (тот же
+    /// объединённый UI Поиска/Пуска) — раньше в списке было только старое
+    /// имя процесса, поэтому Escape ни разу не отправлялся (start=false в
+    /// каждой строке лога, несмотря на смену foreground).
     unsafe extern "system" fn win_event_proc(
         _hook: HWINEVENTHOOK,
         event: u32,
@@ -177,9 +188,12 @@ mod win {
                 CloseHandle(handle);
             }
         }
+        let proc_lower = proc_name.to_lowercase();
         let is_start = class_name == "Windows.UI.Core.CoreWindow"
-            && (proc_name.to_lowercase().ends_with("startmenuexperiencehost.exe")
-                || proc_name.to_lowercase().ends_with("shellexperiencehost.exe"));
+            && (proc_lower.ends_with("startmenuexperiencehost.exe")
+                || proc_lower.ends_with("shellexperiencehost.exe")
+                || proc_lower.ends_with("searchapp.exe")
+                || proc_lower.ends_with("searchhost.exe"));
         log(&format!(
             "win_event_proc: foreground класс=\"{class_name}\" процесс=\"{proc_name}\" pid={pid} start={is_start}"
         ));

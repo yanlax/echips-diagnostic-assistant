@@ -118,7 +118,7 @@ var S = {
   sm:{ disks:null, sel:0, err:null, loading:false },
   sf:{ disks:null, sel:0, range:'all', running:false, pos:0, total:0, mbps:0, startPct:0, endPct:100, classes:[0,0,0,0,0,0,0], bad:[], cols:[], res:null, err:null, t0:0 },
   dw:{ vols:null, live:[], sel:0, mb:512, running:false, pct:0, phase:'', mbps:0, res:null, err:null },
-  mem:{ size:1024, passes:1, running:false, pct:0, pass:1, pattern:'', errors:0, res:null, err:null },
+  mem:{ size:1024, passes:1, running:false, pct:0, pass:1, pattern:'', errors:0, res:null, err:null, t0:0 },
   auto:{ on:false, ids:[], idx:-1, stopped:false, waiting:false, msg:'', cls:'' },
   drv:{ step:'idle' },
   mb:{ step:'login', techId:'', techName:'', pin:'', pinErr:'', ticket:'', serial:'', uuid:'', formErr:'', before:null, writeError:null }
@@ -499,7 +499,7 @@ var A = {
     }).catch(function(err){ S.dw.err = typeof err==='string'?err:'Не удалось получить список томов'; render(); A.autoApply(null); });
   },
   memAuto:function(){
-    S.mem.size = profile().memTestMb || 16384; S.mem.passes = profile().memPasses || 4; S.mem.res=null; S.mem.err=null;
+    S.mem.size = profile().memTestMb || 4096; S.mem.passes = profile().memPasses || 4; S.mem.res=null; S.mem.err=null;
     A.memStart();
   },
   sensorsAuto:function(){
@@ -614,12 +614,14 @@ var A = {
   memPasses:function(v){ if(!S.mem.running){ S.mem.passes=v; render(); } },
   memStart:function(){
     if (S.mem.running) return;
-    var m = S.mem; m.running=true; m.pct=0; m.pass=1; m.pattern=''; m.errors=0; m.res=null; m.err=null; render();
+    var m = S.mem; m.running=true; m.pct=0; m.pass=1; m.pattern=''; m.errors=0; m.res=null; m.err=null; m.t0=Date.now(); render();
     var unlisten=null;
     tauriEvent.listen('mem-progress', function(ev){
       var p=ev.payload; m.pct=p.pct; m.pass=p.pass; m.pattern=p.pattern; m.errors=p.errors;
       var f=document.getElementById('mem-fill'), t=document.getElementById('mem-txt');
-      if (f && t){ f.style.width=m.pct+'%'; t.textContent=m.pct+'% · проход '+m.pass+' · '+m.pattern+' · ошибок '+m.errors; } else render();
+      var el=(Date.now()-m.t0)/1000, eta = m.pct>1 ? el/m.pct*(100-m.pct) : null;
+      var etaTxt = eta!=null ? ' · осталось ~'+Math.max(0,Math.round(eta))+' с' : '';
+      if (f && t){ f.style.width=m.pct+'%'; t.textContent=m.pct+'% · проход '+m.pass+' · '+m.pattern+' · ошибок '+m.errors+etaTxt; } else render();
     }).then(function(u){ unlisten=u; });
     function fin(){ if(unlisten) unlisten(); m.running=false; }
     invoke('run_memory_test', { sizeMb:m.size, passes:m.passes }).then(function(r){
@@ -2155,10 +2157,11 @@ function fieldMem(){
     }).join('') +'</div></div>'+
     '<div class="runrow" style="margin-top:14px"><button class="btn btn-primary" onclick="echips.memStart()" '+(m.running?'disabled':'')+'>'+(m.running?'Идёт проверка…':r?'Повторить':'Запустить')+'</button>'+
     (m.running?'<button class="btn btn-ghost" onclick="echips.memStop()">Остановить</button>':'')+
-    '<span class="n">объём ограничивается 60% свободной памяти; окно остаётся отзывчивым</span></div>';
+    '<span class="n">объём ограничивается 75% свободной памяти; окно остаётся отзывчивым</span></div>';
   if (m.running || r){
+    var elF = (Date.now()-m.t0)/1000, etaF = m.running && m.pct>1 ? elF/m.pct*(100-m.pct) : null;
     out += '<div class="bar" style="margin-top:14px"><div class="fill" id="mem-fill" style="width:'+(r?100:m.pct)+'%"></div></div>'+
-      '<div class="mbtext" id="mem-txt">'+(m.running ? m.pct+'% · проход '+m.pass+' · '+esc(m.pattern)+' · ошибок '+m.errors : '')+'</div>';
+      '<div class="mbtext" id="mem-txt">'+(m.running ? m.pct+'% · проход '+m.pass+' · '+esc(m.pattern)+' · ошибок '+m.errors+(etaF!=null?' · осталось ~'+Math.max(0,Math.round(etaF))+' с':'') : '')+'</div>';
   }
   if (m.err) out += '<div class="idle" style="color:var(--err);margin-top:10px"><span>'+esc(m.err)+'</span></div>';
   if (r){
@@ -2167,7 +2170,7 @@ function fieldMem(){
       '<div class="stat4"><div class="k">проходов</div><div class="v">'+r.passes+'</div></div>'+
       '<div class="stat4"><div class="k">ошибок</div><div class="v '+(r.errors?'err':'ok')+'">'+r.errors+'</div></div>'+
       '<div class="stat4"><div class="k">время</div><div class="v">'+r.elapsed_secs+' с</div></div></div>'+
-      '<div class="kbnote" style="margin-top:8px">'+(r.stopped?'Остановлено пользователем. ':'')+(r.capped?'Объём урезан до 60% свободной памяти. ':'')+
+      '<div class="kbnote" style="margin-top:8px">'+(r.stopped?'Остановлено пользователем. ':'')+(r.capped?'Объём урезан до 75% свободной памяти. ':'')+
       (r.errors ? 'Обнаружены ошибки памяти — модуль или слот неисправны.' : 'Ошибок не найдено. Это быстрая проверка из-под Windows: для полной уверенности используйте длительный тест.')+'</div>'+
       (r.first_errors.length ? '<div class="log" style="margin-top:8px">'+r.first_errors.map(function(t,i){ return '<div><span class="t">'+String(i+1).padStart(2,'0')+'</span><span>'+esc(t)+'</span></div>'; }).join('')+'</div>' : '');
   }
@@ -2829,8 +2832,8 @@ function screenReport(){
     '<div class="head"><div><div class="eyebrow">Итог прогона</div><h1 class="title">Отчёт</h1></div>'+
     '<div class="headactions">'+
       '<button class="btn btn-ghost" onclick="echips.exp(\'json\')">Экспорт JSON</button>'+
-      '<button class="btn btn-ghost" onclick="echips.exp(\'pdf\')">Экспорт PDF</button>'+
-      '<button class="btn btn-primary" onclick="echips.exp(\'txt\')">Экспорт TXT</button>'+
+      '<button class="btn btn-ghost" onclick="echips.exp(\'txt\')">Экспорт TXT</button>'+
+      '<button class="btn btn-primary" onclick="echips.exp(\'pdf\')">Экспорт PDF</button>'+
     '</div></div>'+
     '<div style="margin-bottom:16px"><label style="display:block;font-size:12px;color:var(--dim);margin-bottom:6px">Общий комментарий инженера (попадёт в TXT/JSON/PDF)</label>'+
     '<textarea class="repsummary" rows="3" style="resize:vertical" placeholder="Итог по устройству, что сделано, на что обратить внимание клиенту/сервису…" oninput="echips.reportSummary(this.value)">'+esc(S.reportSummary||'')+'</textarea></div>'+

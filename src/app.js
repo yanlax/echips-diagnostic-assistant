@@ -9,9 +9,24 @@
 (function () {
 'use strict';
 
-var invoke = window.__TAURI__.core.invoke;
+var _rawInvoke = window.__TAURI__.core.invoke;
 var tauriEvent = window.__TAURI__.event;
 var getCurrentWindow = window.__TAURI__.window.getCurrentWindow;
+
+/* Обёртка invoke() — пишет каждый вызов в S.adminLog (кольцевой буфер) для
+   админ-панели (Shift+F10, только для инженера с role==='admin', см.
+   isAdmin/renderAdminPanel ниже). Сама логика вызовов не меняется — просто
+   наблюдение сбоку, поведение invoke() для остального кода идентично. */
+function invoke(cmd, args){
+  var entry = { t:Date.now(), cmd:cmd, args:args, state:'pending' };
+  S.adminLog.push(entry);
+  if (S.adminLog.length > 300) S.adminLog.shift();
+  if (S.adminPanelOpen) renderAdminPanel();
+  var p = _rawInvoke(cmd, args);
+  p.then(function(res){ entry.state='ok'; entry.result=res; if (S.adminPanelOpen) renderAdminPanel(); },
+         function(err){ entry.state='err'; entry.error=err; if (S.adminPanelOpen) renderAdminPanel(); });
+  return p;
+}
 
 var CATS = [
   { id:'sys', tag:'SYS', name:'Системная информация', method:'Процессор, ОЗУ, диски, видеокарта, плата, BIOS + сверка с профилем модели', impl:'реальные данные', kind:'runner', fetch:'sys' },
@@ -119,7 +134,8 @@ var S = {
      (или error, если нет сети и нет кэша). */
   lock:{ phase:'boot', techs:null, err:'', techId:'', pin:'', shake:false },
   engineer:null,
-  techadmin:{ id:'', name:'', pin:'', err:'', result:'' }
+  techadmin:{ id:'', name:'', pin:'', role:'tech', err:'', result:'' },
+  adminLog:[], adminPanelOpen:false
 };
 
 /* Кэш дорогих запросов (WMI/PowerShell): один и тот же список дисков не запрашивается
@@ -181,6 +197,7 @@ function deviceLabel(){
   return (S.device.manufacturer + ' ' + S.device.model).trim() || 'неизвестная модель';
 }
 function deviceSn(){ return S.device ? S.device.serial_number : ''; }
+function isAdmin(){ return !!(S.engineer && S.engineer.role==='admin'); }
 
 /* ---------- окно: свернуть/закрыть ---------- */
 (function initWindowControls(){
@@ -242,6 +259,7 @@ function stopAudio(){
 
 var A = {
   go:function(screen,id){
+    if(screen==='techadmin' && !isAdmin()) screen='start'; // экран только для администратора (см. isAdmin)
     stopSensorPoll(); stopCamera(); stopAudio();
     if (S.rm.timer){ clearInterval(S.rm.timer); S.rm.timer=null; }
     if (S.kbT){ clearInterval(S.kbT); S.kbT=null; }
@@ -1223,11 +1241,12 @@ var A = {
     });
   },
 
-  /* ---- вход по PIN (см. lockInit/renderLock ниже) ---- */
-  lockPick:function(id){ S.lock.techId=id; S.lock.err=''; renderLock(); },
+  /* ---- вход по PIN (см. lockInit/renderLock ниже) ----
+     Экран имени убран по запросу — только PIN; кто ввёл, определяется
+     перебором data/techs.json (совпадение хэша), имя показывается уже
+     после успешного входа (сайдбар, отчёт), а не запрашивается заранее. */
   lockDigit:function(d){
     var L = S.lock;
-    if(!L.techId){ L.err='Сначала выберите себя из списка.'; renderLock(); return; }
     if(L.pin.length>=8) return;
     L.err=''; L.pin += d; renderLock();
   },
@@ -1235,17 +1254,19 @@ var A = {
   lockSubmit:function(){ lockTrySubmit(); },
   lockRetry:function(){ lockInit(); },
 
-  /* ---- добавление инженера (генератор записи для data/techs.json) ---- */
+  /* ---- добавление инженера (генератор записи для data/techs.json) ----
+     Доступно только администратору (S.engineer.role==='admin', см.
+     renderNav/go) — сейчас это аккаунт Максима. */
   techadminField:function(k,v){ S.techadmin[k]=v; S.techadmin.err=''; },
   techadminGenerate:function(){
     var t = S.techadmin;
-    var id = (t.id||'').trim(), name = (t.name||'').trim(), pin = (t.pin||'').trim();
+    var id = (t.id||'').trim(), name = (t.name||'').trim(), pin = (t.pin||'').trim(), role = t.role==='admin' ? 'admin' : 'tech';
     if(!/^[a-z0-9_-]{2,32}$/i.test(id)){ t.err='Идентификатор: латиница/цифры/-/_, 2–32 символа.'; render(); return; }
     if(!name){ t.err='Укажите ФИО.'; render(); return; }
     if(!/^\d{6,12}$/.test(pin)){ t.err='PIN: только цифры, не меньше 6.'; render(); return; }
     var salt = randomHex(16);
     sha256Hex(salt+':'+pin).then(function(hash){
-      t.result = JSON.stringify({ id:id, name:name, pin_hash:hash, salt:salt }, null, 2) + ',';
+      t.result = JSON.stringify({ id:id, name:name, pin_hash:hash, salt:salt, role:role }, null, 2) + ',';
       t.err=''; render();
     });
   },
@@ -1253,7 +1274,10 @@ var A = {
     var text = S.techadmin.result;
     if(!text) return;
     (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).catch(function(){});
-  }
+  },
+
+  /* ---- админ-панель (Shift+F10, только role==='admin') ---- */
+  adminClose:function(){ S.adminPanelOpen = false; renderAdminPanel(); }
 };
 window.echips = A;
 S.startedAt = new Date().toISOString();
@@ -1580,6 +1604,7 @@ function renderNav(){
   document.getElementById('devbox-name').textContent = S.device ? deviceLabel() : (S.deviceError ? 'ошибка определения' : 'определяется…');
   document.getElementById('devbox-sn').textContent = S.device ? ('SN ' + (S.device.serial_number || '—')) : '';
   document.getElementById('techbox-name').textContent = S.engineer ? S.engineer.name : '—';
+  document.getElementById('techbox-add').style.display = isAdmin() ? '' : 'none';
 }
 
 /* ---------- экраны ---------- */
@@ -2995,6 +3020,10 @@ function screenTechAdmin(){
     '<div class="formfield"><label>Идентификатор (латиницей)</label><input value="'+esc(t.id)+'" oninput="echips.techadminField(\'id\',this.value)" placeholder="sidorov"></div>'+
     '<div class="formfield"><label>ФИО</label><input value="'+esc(t.name)+'" oninput="echips.techadminField(\'name\',this.value)" placeholder="Сидоров С.С."></div>'+
     '<div class="formfield"><label>PIN (6 и более цифр)</label><input type="password" value="'+esc(t.pin)+'" oninput="echips.techadminField(\'pin\',this.value)" placeholder="••••••"></div>'+
+    '<div class="formfield"><label>Роль</label><select onchange="echips.techadminField(\'role\',this.value)">'+
+      '<option value="tech"'+(t.role!=='admin'?' selected':'')+'>Техник</option>'+
+      '<option value="admin"'+(t.role==='admin'?' selected':'')+'>Администратор</option>'+
+    '</select></div>'+
     (t.err?'<div class="err" style="margin:-6px 0 12px">'+esc(t.err)+'</div>':'')+
     '</div>'+
     '<div class="headactions"><button class="btn btn-primary" onclick="echips.techadminGenerate()">Сгенерировать</button></div>'+
@@ -3121,7 +3150,7 @@ function padPoint(e, move){
    каждом запуске. Экран поверх всего приложения (#lock-overlay в
    index.html, вне #screen — render() его не трогает). */
 function lockInit(){
-  S.lock = { phase:'boot', techs:null, err:'', techId:'', pin:'', shake:false };
+  S.lock = { phase:'boot', techs:null, err:'', pin:'', shake:false };
   renderLock();
   invoke('fetch_techs').then(function(list){
     S.lock.techs = list || [];
@@ -3133,17 +3162,27 @@ function lockInit(){
     renderLock();
   });
 }
+/* Экрана выбора имени нет — вводится только PIN, инженер определяется
+   перебором data/techs.json по совпадению хэша (имя показывается уже
+   после успешного входа). Список короткий (несколько человек), поэтому
+   последовательный перебор с ожиданием каждого хэша не проблема. */
+function lockFindMatch(pin){
+  var chain = Promise.resolve(null);
+  (S.lock.techs||[]).forEach(function(t){
+    chain = chain.then(function(found){
+      if(found) return found;
+      return sha256Hex(t.salt+':'+pin).then(function(hash){ return hash===t.pin_hash ? t : null; });
+    });
+  });
+  return chain;
+}
 function lockTrySubmit(){
   var L = S.lock;
-  if(!L.techId){ L.err='Сначала выберите себя из списка.'; renderLock(); return; }
   if(!L.pin){ L.err='Введите PIN.'; renderLock(); return; }
-  var tech = null;
-  (L.techs||[]).forEach(function(t){ if(t.id===L.techId) tech=t; });
-  if(!tech){ L.err='Инженер не найден в списке.'; renderLock(); return; }
   L.phase='verifying'; renderLock();
-  sha256Hex(tech.salt+':'+L.pin).then(function(hash){
-    if(hash===tech.pin_hash){
-      S.engineer = { id:tech.id, name:tech.name };
+  lockFindMatch(L.pin).then(function(tech){
+    if(tech){
+      S.engineer = { id:tech.id, name:tech.name, role:tech.role||'tech' };
       L.phase='ok'; renderLock(); render();
       setTimeout(function(){ L.phase='unlocked'; renderLock(); }, 650);
     } else {
@@ -3189,10 +3228,7 @@ function renderLock(){
       '<div class="lock-status">Добро пожаловать, '+esc(S.engineer?S.engineer.name:'')+'</div>';
   } else {
     body =
-      '<div class="lock-techs">'+(L.techs||[]).map(function(t){
-        return '<div class="lock-tech'+(L.techId===t.id?' on':'')+'" onclick="echips.lockPick(\''+t.id+'\')">'+esc(t.name)+'</div>';
-      }).join('')+'</div>'+
-      '<div class="lock-dots'+(L.shake?' shake':'')+'">'+dotsHtml(L.pin.length)+'</div>'+
+      '<div class="lock-dots'+(L.shake?' shake':'')+'" style="margin-top:8px">'+dotsHtml(L.pin.length)+'</div>'+
       '<div class="lock-keypad">'+keypadHtml()+'</div>'+
       (L.err?'<div class="lock-err">'+esc(L.err)+'</div>':'');
   }
@@ -3210,6 +3246,39 @@ document.addEventListener('keydown', function(e){
   if (/^[0-9]$/.test(e.key)){ e.preventDefault(); A.lockDigit(e.key); }
   else if (e.key==='Backspace'){ e.preventDefault(); A.lockBackspace(); }
   else if (e.key==='Enter'){ e.preventDefault(); A.lockSubmit(); }
+});
+
+/* ---------- админ-панель (Shift+F10) ----------
+   Идея пользователя: список всех IPC-вызовов (invoke → Rust) с результатом,
+   для диагностики на месте. Доступно только role==='admin' (сейчас — только
+   аккаунт Максима, см. isAdmin/data/techs.json) и не во время теста
+   клавиатуры (там F10 — часть проверяемой раскладки, ловить его нельзя). */
+function renderAdminPanel(){
+  var host = document.getElementById('admin-panel');
+  if(!host) return;
+  if(!S.adminPanelOpen){ host.innerHTML=''; return; }
+  var rows = S.adminLog.slice().reverse().map(function(e){
+    var time = new Date(e.t).toLocaleTimeString();
+    var cls = e.state==='err' ? 'err' : e.state==='ok' ? 'ok' : 'pending';
+    var tail = e.state==='err' ? esc(typeof e.error==='string'?e.error:JSON.stringify(e.error))
+      : e.state==='ok' ? esc(JSON.stringify(e.result)).slice(0,300)
+      : '…';
+    return '<div class="admin-row '+cls+'"><span class="t">'+time+'</span>'+
+      '<span class="cmd">'+esc(e.cmd)+'</span>'+
+      '<span class="args">'+esc(JSON.stringify(e.args||{})).slice(0,200)+'</span>'+
+      '<span class="res">'+tail+'</span></div>';
+  }).join('');
+  host.innerHTML =
+    '<div class="admin-head">Вывод команд (Shift+F10) — '+S.adminLog.length+'<button type="button" class="btn-link" onclick="echips.adminClose()">Закрыть ×</button></div>'+
+    '<div class="admin-rows">'+(rows || '<div class="admin-empty">Пока нет вызовов</div>')+'</div>';
+}
+document.addEventListener('keydown', function(e){
+  if (e.key!=='F10' || !e.shiftKey) return;
+  if (S.screen==='test' && cat().kind==='keyboard') return; // F10 — часть проверяемой раскладки
+  if (!isAdmin()) return;
+  e.preventDefault();
+  S.adminPanelOpen = !S.adminPanelOpen;
+  renderAdminPanel();
 });
 
 document.addEventListener('DOMContentLoaded', function(){

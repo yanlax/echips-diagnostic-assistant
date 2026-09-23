@@ -22,12 +22,21 @@
 
 use serde::{Deserialize, Serialize};
 
+fn default_role() -> String {
+    "tech".to_string()
+}
+
+/// role: "tech" (по умолчанию, если поля нет в старой записи/кэше — обратная
+/// совместимость) или "admin" — админские фичи (например, панель команд по
+/// Shift+F10) показываются только при role=="admin", см. app.js.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Tech {
     pub id: String,
     pub name: String,
     pub pin_hash: String,
     pub salt: String,
+    #[serde(default = "default_role")]
+    pub role: String,
 }
 
 const TECHS_URL: &str =

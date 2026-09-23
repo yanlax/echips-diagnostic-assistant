@@ -601,11 +601,6 @@ h1.title{font-family:var(--grotesk);font-size:27px;font-weight:600;color:var(--t
   animation:echDash 1.6s ease-in-out infinite}
 .lock-status{font-family:var(--mono);font-size:11.5px;color:var(--mute);letter-spacing:.03em}
 .lock-status.err{color:var(--err)}
-.lock-techs{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-bottom:22px}
-.lock-tech{padding:9px 15px;border-radius:20px;background:var(--glass);border:1px solid var(--line);
-  font-family:var(--grotesk);font-size:12.5px;color:var(--text-2);cursor:pointer;transition:border-color .18s,background-color .18s}
-.lock-tech:hover{border-color:var(--accent-line)}
-.lock-tech.on{background:var(--accent-soft);border-color:var(--accent-line);color:var(--text-hi)}
 .lock-dots{display:flex;justify-content:center;gap:11px;height:16px;margin-bottom:22px}
 .lock-dots.shake{animation:lockShake .4s ease}
 .lock-dot{width:12px;height:12px;border-radius:50%;border:1.5px solid var(--line-strong);transition:background-color .15s,border-color .15s,transform .15s}
@@ -638,3 +633,22 @@ h1.title{font-family:var(--grotesk);font-size:27px;font-weight:600;color:var(--t
 /* ---------- добавление инженера (генератор хэша PIN) ---------- */
 .techjson{font-family:var(--mono);font-size:11.5px;color:var(--text-2);background:var(--glass-2);
   border:1px solid var(--line);border-radius:9px;padding:12px 13px;white-space:pre-wrap;word-break:break-all}
+
+/* ---------- админ-панель (Shift+F10, см. app.js renderAdminPanel) ---------- */
+.admin-panel:empty{display:none}
+.admin-panel{position:fixed;right:16px;bottom:16px;top:52px;width:min(560px,42vw);z-index:9000;
+  display:flex;flex-direction:column;background:var(--side-top);border:1px solid var(--line-strong);
+  border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.45);overflow:hidden;animation:echRise .25s ease-out}
+.admin-head{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:10px 14px;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:11px;
+  letter-spacing:.04em;text-transform:uppercase;color:var(--faint)}
+.admin-rows{flex:1;min-height:0;overflow-y:auto;padding:6px 0}
+.admin-row{display:grid;grid-template-columns:70px 130px 1fr;gap:8px;padding:6px 14px;
+  font-family:var(--mono);font-size:10.5px;border-bottom:1px solid var(--line-soft);align-items:start}
+.admin-row .t{color:var(--faint)}
+.admin-row .cmd{color:var(--accent-hi);font-weight:600;white-space:nowrap}
+.admin-row .args{color:var(--mute);word-break:break-all;grid-column:1/4}
+.admin-row .res{color:var(--text-3);word-break:break-all;grid-column:1/4}
+.admin-row.err .res{color:var(--err)}
+.admin-row.pending .res{color:var(--faint);font-style:italic}
+.admin-empty{padding:20px 14px;color:var(--faint);font-family:var(--mono);font-size:11px;text-align:center}

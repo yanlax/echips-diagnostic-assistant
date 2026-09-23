@@ -3,12 +3,14 @@
     "id": "alexey",
     "name": "Алексей",
     "pin_hash": "6bb23830a2a001f742ce52b15a03ea53f9f1a31a4cd8b450b6b3c782d7494518",
-    "salt": "79b224276a11832f1b967c033d9f0ed5"
+    "salt": "79b224276a11832f1b967c033d9f0ed5",
+    "role": "tech"
   },
   {
     "id": "maksim",
     "name": "Максим",
     "pin_hash": "36179dbf3b6381f7a6f1495bb766474ff004c3fa8b91a8728107b5bfb34ac17b",
-    "salt": "1d7e3627da2025452460af69fef436e6"
+    "salt": "1d7e3627da2025452460af69fef436e6",
+    "role": "admin"
   }
 ]

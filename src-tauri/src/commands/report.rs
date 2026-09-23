@@ -267,22 +267,64 @@ fn draw_circle_fill(layer: &PdfLayerReference, color: Rgb, cx: f32, cy: f32, r: 
     draw_rounded_fill(layer, color, cx - r, cy - r, cx + r, cy + r, r);
 }
 
+/// Четверть круга («сектор», не «ломтик» — залитая площадь между двумя
+/// радиусами и дугой между ними), растущая от точки (cx,cy) СТРОГО в
+/// направлении (dx,dy) (каждый ±1.0). Тот же приём кубической аппроксимации
+/// четверти окружности, что и в rounded_rect_points (см. константу K там) —
+/// но здесь не угол прямоугольника, а самостоятельная фигура: 6 точек,
+/// [центр → точка на первом радиусе (bezier-триггер) → 2 контрольные точки
+/// → точка на втором радиусе → обратно в центр], с явным замыканием через
+/// оба радиуса, а не через дугу целиком.
+fn quarter_disc_points(cx: f32, cy: f32, r: f32, dx: f32, dy: f32) -> Vec<(Point, bool)> {
+    const K: f32 = 0.5522847498;
+    let pt = |x: f32, y: f32| Point::new(Mm(x), Mm(y));
+    let p_a = (cx + dx * r, cy);
+    let ctrl1 = (cx + dx * (r - K * r), cy);
+    let ctrl2 = (cx, cy + dy * (r - K * r));
+    let p_b = (cx, cy + dy * r);
+    vec![
+        (pt(cx, cy), false),
+        (pt(p_a.0, p_a.1), true),
+        (pt(ctrl1.0, ctrl1.1), true),
+        (pt(ctrl2.0, ctrl2.1), false),
+        (pt(p_b.0, p_b.1), false),
+        (pt(cx, cy), false),
+    ]
+}
+fn draw_quarter_disc_fill(layer: &PdfLayerReference, color: Rgb, cx: f32, cy: f32, r: f32, dx: f32, dy: f32) {
+    layer.set_fill_color(Color::Rgb(color));
+    let poly = Polygon { rings: vec![quarter_disc_points(cx, cy, r, dx, dy)], mode: PaintMode::Fill, winding_order: WindingOrder::NonZero };
+    layer.add_polygon(poly);
+}
+
 /// Приближение radial-gradient из референса (.cover::after — тёплое
 /// оранжевое свечение по углам тёмной обложки, `rgba(255,138,0,.2..0)`)
-/// через несколько вложенных кругов от большого бледного к маленькому
+/// через несколько вложенных секторов от большого бледного к маленькому
 /// насыщенному — printpdf 0.7 не поддерживает градиентные заливки, а
 /// плоский без него цвет обложки был одной из причин, почему шапка
 /// «выглядела не так» (референс объёмнее/теплее, у нас было плоско).
+///
+/// ВАЖНО: раньше здесь рисовались ПОЛНЫЕ круги с центром ровно в углу
+/// обложки — у полного круга с центром на самой границе фигуры ПОЛОВИНА
+/// всегда оказывается за её пределами. В браузере это скрыто через
+/// `.cover{overflow:hidden}`, у printpdf готового клиппинга нет — в
+/// реальном PDF круг физически протекал на белую страницу под обложкой
+/// (обнаружено пользователем на реальном экспорте — "залез круг вниз").
+/// Сектор (четверть круга), растущий СТРОГО в сторону (dx,dy) от угла
+/// внутрь обложки, физически не может выйти за её границы — это не
+/// подбор радиуса на глаз, а фигура, которая по построению не пересекает
+/// границу.
 /// `max_alpha` — насколько сильно цвет свечения смешивается с базовым
-/// в центре (на краю всегда 0, т.е. чистый базовый цвет).
-fn draw_radial_glow(layer: &PdfLayerReference, base: &Rgb, glow: &Rgb, cx: f32, cy: f32, max_r: f32, max_alpha: f32) {
+/// в центре (на краю всегда 0, т.е. чистый базовый цвет). `(dx,dy)` —
+/// направление внутрь обложки от точки-угла (см. вызовы в render_pdf).
+fn draw_radial_glow(layer: &PdfLayerReference, base: &Rgb, glow: &Rgb, cx: f32, cy: f32, max_r: f32, max_alpha: f32, dx: f32, dy: f32) {
     const STEPS: usize = 10;
-    // Рисуем от большого бледного круга (фон) к маленькому насыщенному
+    // Рисуем от большого бледного сектора (фон) к маленькому насыщенному
     // (поверх) — иначе более поздний слой перекрыл бы всё, что нарисовано
-    // раньше, и результат выглядел бы как один сплошной бледный круг без
+    // раньше, и результат выглядел бы как один сплошной бледный сектор без
     // видимого затухания к центру.
     for i in 0..STEPS {
-        let t = i as f32 / (STEPS - 1) as f32; // 0.0 на первом (большом) круге … 1.0 на последнем (маленьком)
+        let t = i as f32 / (STEPS - 1) as f32; // 0.0 на первом (большом) секторе … 1.0 на последнем (маленьком)
         let r = max_r * (1.0 - 0.85 * t); // от max_r до 0.15×max_r — маленькое насыщенное ядро всегда видно
         let a = max_alpha * t * t; // квадратичное усиление к центру — мягче на глаз, чем линейное
         let color = Rgb::new(
@@ -291,7 +333,7 @@ fn draw_radial_glow(layer: &PdfLayerReference, base: &Rgb, glow: &Rgb, cx: f32, 
             base.b * (1.0 - a) + glow.b * a,
             None,
         );
-        draw_circle_fill(layer, color, cx, cy, r);
+        draw_quarter_disc_fill(layer, color, cx, cy, r, dx, dy);
     }
 }
 
@@ -973,9 +1015,13 @@ fn draw_card(w: &mut PdfWriter, doc: &PdfDocumentReference, p: &PdfPalette, r: &
 
     // Бейдж — фиксированная позиция у верхнего края карточки, рисуется до
     // заголовка (не зависит от финальной высоты карточки).
+    // Раньше правый край бейджа стоял вплотную к рамке карточки (badge_x1
+    // = самому краю поля) — визуально «впритык», не как у остальных
+    // элементов (draw_row/список/журнал уже давно отступают на
+    // CARD_RIGHT_PAD). Выровнено на тот же отступ.
     let badge_w = pt_to_mm(8.5) * 0.6 * label.chars().count() as f32 + 6.0;
     let badge_h = 6.0;
-    let badge_x1 = PDF_PAGE_W - PDF_MARGIN_R;
+    let badge_x1 = PDF_PAGE_W - PDF_MARGIN_R - CARD_RIGHT_PAD;
     let badge_x0 = badge_x1 - badge_w;
     let badge_y1 = w.y + 1.5;
     let badge_y0 = badge_y1 - badge_h;
@@ -991,7 +1037,7 @@ fn draw_card(w: &mut PdfWriter, doc: &PdfDocumentReference, p: &PdfPalette, r: &
 
     if has_body {
         w.y -= 1.0;
-        draw_rule(&w.layer, p.line_soft.clone(), PDF_MARGIN_L + CARD_INDENT, PDF_PAGE_W - PDF_MARGIN_R, w.y - 0.1, w.y + 0.1);
+        draw_rule(&w.layer, p.line_soft.clone(), PDF_MARGIN_L + CARD_INDENT, PDF_PAGE_W - PDF_MARGIN_R - CARD_RIGHT_PAD, w.y - 0.1, w.y + 0.1);
         w.y -= 2.0;
         for line in &override_lines {
             w.draw_line(doc, line, DETAIL_SZ, false, &p.text_muted, CARD_INDENT);
@@ -1099,8 +1145,10 @@ fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
     // см. draw_radial_glow. Рисуется поверх плоской заливки, но до любого
     // текста/лого, поэтому ничего не перекрывает.
     let glow = Rgb::new(1.0, 0.541, 0.0, None); // #FF8A00
-    draw_radial_glow(&w.layer, &p.cover_bg, &glow, PDF_PAGE_W, cover_top + PDF_MARGIN_TOP, 60.0, 0.20);
-    draw_radial_glow(&w.layer, &p.cover_bg, &glow, 0.0, cover_top - cover_h, 50.0, 0.10);
+    // dx/dy — направление сектора СТРОГО внутрь обложки от угла: сверху-
+    // справа растёт влево-вниз (-1,-1), снизу-слева — вправо-вверх (1,1).
+    draw_radial_glow(&w.layer, &p.cover_bg, &glow, PDF_PAGE_W, cover_top + PDF_MARGIN_TOP, 60.0, 0.20, -1.0, -1.0);
+    draw_radial_glow(&w.layer, &p.cover_bg, &glow, 0.0, cover_top - cover_h, 50.0, 0.10, 1.0, 1.0);
 
     // ---- .brand: знак + "ECHIPS" + плашка "HARDWARE CHECK", одной строкой ----
     let mark_h = 7.0_f32;

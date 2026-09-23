@@ -88,15 +88,6 @@ var STATUS = {
 // Каталог драйверов — та же публичная ссылка, что в echips-driver-assistant.
 var MANIFEST_PUBLIC_URL = "https://disk.360.yandex.ru/d/79yQHBN93UDZGg";
 
-// Техники для замены платы — временно захардкожено, как в макете. ЭТО
-// НЕБЕЗОПАСНО для продакшена (PIN лежит открытым текстом во фронтенде) —
-// перед реальным использованием вынести в защищённый источник (сервер/файл
-// с хэшами PIN), это отмечено в README как TODO.
-var TECHS = [
-  { id:'ivanov', name:'Иванов И.И.', pin:'1234' },
-  { id:'petrov', name:'Петров П.П.', pin:'5678' }
-];
-
 var S = {
   screen:'start', cat:'usb', results:{}, comments:{},
   keys:{}, fill:0, padDots:[], padCount:0, padMax:0, padMoves:0,
@@ -121,7 +112,14 @@ var S = {
   mem:{ size:1024, passes:1, running:false, pct:0, pass:1, pattern:'', errors:0, res:null, err:null, t0:0 },
   auto:{ on:false, ids:[], idx:-1, stopped:false, waiting:false, msg:'', cls:'' },
   drv:{ step:'idle' },
-  mb:{ step:'login', techId:'', techName:'', pin:'', pinErr:'', ticket:'', serial:'', uuid:'', formErr:'', before:null, writeError:null }
+  mb:{ step:'reading', techId:'', techName:'', pin:'', pinErr:'', ticket:'', serial:'', uuid:'', formErr:'', before:null, writeError:null },
+  /* Общий вход по PIN при запуске (см. CLAUDE.md, задача №2). Список техников —
+     data/techs.json в публичном репозитории (подтягивается lockInit, только
+     хэши PIN, см. commands/techs.rs). phase: boot → pin → verifying → ok → unlocked
+     (или error, если нет сети и нет кэша). */
+  lock:{ phase:'boot', techs:null, err:'', techId:'', pin:'', shake:false },
+  engineer:null,
+  techadmin:{ id:'', name:'', pin:'', err:'', result:'' }
 };
 
 /* Кэш дорогих запросов (WMI/PowerShell): один и тот же список дисков не запрашивается
@@ -134,6 +132,26 @@ function invokeCached(cmd, args, ttl){
 }
 
 function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+/* Хэш PIN — SHA-256(salt+":"+pin) через Web Crypto (доступен в WebView2,
+   secure context). Используется и на входе (lockSubmit сравнивает с
+   pin_hash из data/techs.json), и в генераторе (techadminGenerate) — один
+   и тот же код с обеих сторон, поэтому дублировать алгоритм в Rust не нужно. */
+function sha256Hex(text){
+  var bytes = new TextEncoder().encode(text);
+  return crypto.subtle.digest('SHA-256', bytes).then(function(buf){
+    var arr = new Uint8Array(buf), hex = '';
+    for (var i=0;i<arr.length;i++) hex += arr[i].toString(16).padStart(2,'0');
+    return hex;
+  });
+}
+function randomHex(numBytes){
+  var arr = new Uint8Array(numBytes);
+  crypto.getRandomValues(arr);
+  var hex = '';
+  for (var i=0;i<arr.length;i++) hex += arr[i].toString(16).padStart(2,'0');
+  return hex;
+}
 function cat(){ for (var i=0;i<CATS.length;i++) if (CATS[i].id===S.cat) return CATS[i]; return CATS[0]; }
 /* Сохранение подробностей теста для отчёта: строки лога, автовердикт, ряд точек графика. */
 function recordDetail(id, patch){
@@ -1134,23 +1152,18 @@ var A = {
     });
   },
 
-  /* ---- замена платы ---- */
+  /* ---- замена платы ----
+     Отдельный PIN-шаг здесь убран (см. CLAUDE.md, задача №2) — техник уже
+     определён общим экраном входа при запуске (S.engineer), спрашивать
+     PIN второй раз для этой вкладки незачем. */
   mbReset:function(){
-    S.mb = { step:'login', techId:'', techName:'', pin:'', pinErr:'', ticket:'', serial:'', uuid:'', formErr:'', before:null, writeError:null };
+    S.mb = { step:'reading', techId:'', techName: S.engineer ? S.engineer.name : '', pin:'', pinErr:'', ticket:'', serial:'', uuid:'', formErr:'', before:null, writeError:null };
     render();
-  },
-  mbPickTech:function(id){ S.mb.techId=id; S.mb.pinErr=''; render(); },
-  mbPin:function(v){ S.mb.pin=v; },
-  mbLogin:function(){
-    var t=null; TECHS.forEach(function(x){ if(x.id===S.mb.techId) t=x; });
-    if(!t){ S.mb.pinErr='Выберите техника.'; render(); return; }
-    if(t.pin!==S.mb.pin){ S.mb.pinErr='Неверный PIN.'; render(); return; }
-    S.mb.techName=t.name; S.mb.step='reading'; render();
     invoke('read_board_identity').then(function(id){
       S.mb.before = id; S.mb.step='form'; render();
     }).catch(function(err){
       S.mb.pinErr = typeof err==='string'?err:'Не удалось прочитать SN/UUID платы';
-      S.mb.step='login'; render();
+      S.mb.step='readerror'; render();
     });
   },
   mbField:function(k,v){ S.mb[k]=v; },
@@ -1189,7 +1202,7 @@ var A = {
     var report = {
       device_model: deviceLabel(),
       device_serial: deviceSn(),
-      engineer: '',
+      engineer: S.engineer ? S.engineer.name : '',
       summary_comment: S.reportSummary || '',
       started_at: S.startedAt || new Date().toISOString(),
       finished_at: new Date().toISOString(),
@@ -1208,6 +1221,38 @@ var A = {
     }).catch(function(err){
       S.runError = typeof err==='string'?err:'Не удалось сохранить отчёт'; render();
     });
+  },
+
+  /* ---- вход по PIN (см. lockInit/renderLock ниже) ---- */
+  lockPick:function(id){ S.lock.techId=id; S.lock.err=''; renderLock(); },
+  lockDigit:function(d){
+    var L = S.lock;
+    if(!L.techId){ L.err='Сначала выберите себя из списка.'; renderLock(); return; }
+    if(L.pin.length>=8) return;
+    L.err=''; L.pin += d; renderLock();
+  },
+  lockBackspace:function(){ S.lock.pin = S.lock.pin.slice(0,-1); S.lock.err=''; renderLock(); },
+  lockSubmit:function(){ lockTrySubmit(); },
+  lockRetry:function(){ lockInit(); },
+
+  /* ---- добавление инженера (генератор записи для data/techs.json) ---- */
+  techadminField:function(k,v){ S.techadmin[k]=v; S.techadmin.err=''; },
+  techadminGenerate:function(){
+    var t = S.techadmin;
+    var id = (t.id||'').trim(), name = (t.name||'').trim(), pin = (t.pin||'').trim();
+    if(!/^[a-z0-9_-]{2,32}$/i.test(id)){ t.err='Идентификатор: латиница/цифры/-/_, 2–32 символа.'; render(); return; }
+    if(!name){ t.err='Укажите ФИО.'; render(); return; }
+    if(!/^\d{6,12}$/.test(pin)){ t.err='PIN: только цифры, не меньше 6.'; render(); return; }
+    var salt = randomHex(16);
+    sha256Hex(salt+':'+pin).then(function(hash){
+      t.result = JSON.stringify({ id:id, name:name, pin_hash:hash, salt:salt }, null, 2) + ',';
+      t.err=''; render();
+    });
+  },
+  techadminCopy:function(){
+    var text = S.techadmin.result;
+    if(!text) return;
+    (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).catch(function(){});
   }
 };
 window.echips = A;
@@ -1518,7 +1563,7 @@ function fetchCategory(kind){
 
 /* ---------- сайдбар ---------- */
 function renderNav(){
-  var active = { start:'start', drivers:'start', mb:'start', dash:'dash', test:'dash', sensors:'sensors', stress:'stress', report:'report', repdetail:'report' }[S.screen];
+  var active = { start:'start', drivers:'start', mb:'start', techadmin:'start', dash:'dash', test:'dash', sensors:'sensors', stress:'stress', report:'report', repdetail:'report' }[S.screen];
   var c = counts();
   var items = [
     { k:'start', label:'Режим', meta:'' },
@@ -1534,6 +1579,7 @@ function renderNav(){
 
   document.getElementById('devbox-name').textContent = S.device ? deviceLabel() : (S.deviceError ? 'ошибка определения' : 'определяется…');
   document.getElementById('devbox-sn').textContent = S.device ? ('SN ' + (S.device.serial_number || '—')) : '';
+  document.getElementById('techbox-name').textContent = S.engineer ? S.engineer.name : '—';
 }
 
 /* ---------- экраны ---------- */
@@ -2873,20 +2919,14 @@ window.echips_restart = function(){ invoke('restart_system').catch(function(){})
 /* ---------- замена платы (гарантия) ---------- */
 function screenMb(){
   var m = S.mb, body;
-  if(m.step==='login'){
-    body =
-      '<div class="picklist">'+TECHS.map(function(t){
-        return '<div class="pickrow'+(m.techId===t.id?' on':'')+'" onclick="echips.mbPickTech(\''+t.id+'\')">'+
-          '<span class="radio"></span><span class="lbl">'+t.name+'</span></div>';
-      }).join('')+'</div>'+
-      '<div class="formfield" style="max-width:220px;margin-top:14px"><label>PIN</label>'+
-      '<input type="password" value="'+esc(m.pin)+'" oninput="echips.mbPin(this.value)" placeholder="••••">'+
-      (m.pinErr?'<div class="err">'+esc(m.pinErr)+'</div>':'')+'</div>'+
-      '<div class="headactions" style="margin-top:6px">'+
-      '<button class="btn btn-ghost" onclick="echips.go(\'start\')">Отмена</button>'+
-      '<button class="btn btn-primary" onclick="echips.mbLogin()">Войти</button></div>';
-  } else if(m.step==='reading'){
+  if(m.step==='reading'){
     body = hexSpinner('ЧТЕНИЕ ТЕКУЩИХ SN/UUID С ПЛАТЫ');
+  } else if(m.step==='readerror'){
+    body =
+      '<div class="resultpane">'+resultIcon(false)+
+      '<div class="msg">'+esc(m.pinErr)+'</div>'+
+      '<div class="actions"><button class="btn btn-ghost" onclick="echips.go(\'start\')">Назад</button>'+
+      '<button class="btn btn-primary" onclick="echips.mbReset()">Повторить</button></div></div>';
   } else if(m.step==='form'){
     body =
       '<div class="card"><div class="k">Текущие значения</div>'+
@@ -2934,6 +2974,36 @@ function screenMb(){
     '<div class="testhead"><div><h2>Замена платы</h2>'+
     '<div class="hint">Доступ только для авторизованного техника. Чтение SN/UUID — реальное (WMI); запись требует донастройки, см. предупреждение ниже.</div></div></div>'+
     '<div class="field" style="margin-top:16px">'+body+'</div></div>';
+}
+
+/* ---------- добавление инженера ----------
+   Список инженеров живёт в data/techs.json публичного репозитория (см.
+   commands/techs.rs) — этот экран не пишет туда напрямую (для этого
+   понадобился бы токен на запись в репозиторий, у приложения его нет и не
+   должно быть), а только считает PIN так же, как это потом сделает вход
+   (sha256Hex(salt+":"+pin)), и показывает готовый JSON-блок для вставки в
+   файл вручную — commit/push уже делает тот, кто добавляет инженера. */
+function screenTechAdmin(){
+  var t = S.techadmin;
+  return '<div class="pane">'+
+    '<div class="crumbs"><button class="btn-link" onclick="echips.go(\'start\')">← режимы</button>'+
+    '<span class="idx">добавить инженера</span></div>'+
+    '<div class="testhead"><div><h2>Новый инженер</h2>'+
+    '<div class="hint">Сгенерируйте запись — вставьте её в массив data/techs.json в репозитории и запушьте. '+
+    'Новый PIN заработает на всех станциях при следующем запуске программы, без пересборки.</div></div></div>'+
+    '<div class="formgrid" style="margin-top:16px">'+
+    '<div class="formfield"><label>Идентификатор (латиницей)</label><input value="'+esc(t.id)+'" oninput="echips.techadminField(\'id\',this.value)" placeholder="sidorov"></div>'+
+    '<div class="formfield"><label>ФИО</label><input value="'+esc(t.name)+'" oninput="echips.techadminField(\'name\',this.value)" placeholder="Сидоров С.С."></div>'+
+    '<div class="formfield"><label>PIN (6 и более цифр)</label><input type="password" value="'+esc(t.pin)+'" oninput="echips.techadminField(\'pin\',this.value)" placeholder="••••••"></div>'+
+    (t.err?'<div class="err" style="margin:-6px 0 12px">'+esc(t.err)+'</div>':'')+
+    '</div>'+
+    '<div class="headactions"><button class="btn btn-primary" onclick="echips.techadminGenerate()">Сгенерировать</button></div>'+
+    (t.result ?
+      '<div class="card" style="margin-top:18px;max-width:560px"><div class="k">Вставить в data/techs.json</div>'+
+      '<pre class="techjson" style="margin-top:10px">'+esc(t.result)+'</pre>'+
+      '<div class="headactions" style="margin-top:10px"><button class="btn btn-ghost" onclick="echips.techadminCopy()">Скопировать</button></div></div>'
+      : '')+
+    '</div>';
 }
 
 function screenReport(){
@@ -3007,6 +3077,7 @@ function render(){
   host.innerHTML = S.screen==='start' ? screenStart()
     : S.screen==='drivers' ? screenDrivers()
     : S.screen==='mb' ? screenMb()
+    : S.screen==='techadmin' ? screenTechAdmin()
     : S.screen==='dash' ? screenDash()
     : S.screen==='test' ? screenTest()
     : S.screen==='repdetail' ? screenRepDetail()
@@ -3044,8 +3115,106 @@ function padPoint(e, move){
   }
 })();
 
+/* ---------- вход по PIN при запуске (см. CLAUDE.md, задача №2) ----------
+   Список инженеров — data/techs.json в публичном репозитории (только
+   SHA-256(salt+":"+pin), см. commands/techs.rs), подтягивается заново при
+   каждом запуске. Экран поверх всего приложения (#lock-overlay в
+   index.html, вне #screen — render() его не трогает). */
+function lockInit(){
+  S.lock = { phase:'boot', techs:null, err:'', techId:'', pin:'', shake:false };
+  renderLock();
+  invoke('fetch_techs').then(function(list){
+    S.lock.techs = list || [];
+    S.lock.phase = 'pin';
+    renderLock();
+  }).catch(function(err){
+    S.lock.phase = 'error';
+    S.lock.err = typeof err==='string' ? err : 'Не удалось загрузить список инженеров';
+    renderLock();
+  });
+}
+function lockTrySubmit(){
+  var L = S.lock;
+  if(!L.techId){ L.err='Сначала выберите себя из списка.'; renderLock(); return; }
+  if(!L.pin){ L.err='Введите PIN.'; renderLock(); return; }
+  var tech = null;
+  (L.techs||[]).forEach(function(t){ if(t.id===L.techId) tech=t; });
+  if(!tech){ L.err='Инженер не найден в списке.'; renderLock(); return; }
+  L.phase='verifying'; renderLock();
+  sha256Hex(tech.salt+':'+L.pin).then(function(hash){
+    if(hash===tech.pin_hash){
+      S.engineer = { id:tech.id, name:tech.name };
+      L.phase='ok'; renderLock(); render();
+      setTimeout(function(){ L.phase='unlocked'; renderLock(); }, 650);
+    } else {
+      L.phase='pin'; L.pin=''; L.err='Неверный PIN.'; L.shake=true; renderLock();
+      setTimeout(function(){ L.shake=false; renderLock(); }, 400);
+    }
+  });
+}
+function dotsHtml(n){
+  var out = '';
+  for (var i=0;i<Math.max(n,4);i++) out += '<span class="lock-dot'+(i<n?' on':'')+'"></span>';
+  return out;
+}
+function keypadHtml(){
+  var keys = ['1','2','3','4','5','6','7','8','9','','0','⌫'];
+  return keys.map(function(k){
+    if(k==='') return '<span class="lock-key" style="visibility:hidden"></span>';
+    if(k==='⌫') return '<button type="button" class="lock-key" onclick="echips.lockBackspace()">⌫</button>';
+    return '<button type="button" class="lock-key" onclick="echips.lockDigit(\''+k+'\')">'+k+'</button>';
+  }).join('') + '<button type="button" class="lock-key ok wide" style="grid-column:1/4" onclick="echips.lockSubmit()">Войти</button>';
+}
+function renderLock(){
+  var host = document.getElementById('lock-overlay');
+  if(!host) return;
+  var L = S.lock, body;
+  if(L.phase==='unlocked'){
+    host.classList.add('closed');
+    setTimeout(function(){ if(S.lock.phase==='unlocked') host.innerHTML=''; }, 400);
+    return;
+  }
+  host.classList.remove('closed');
+  if(L.phase==='boot'){
+    body = '<div class="lock-spin"><svg viewBox="0 0 100 100">'+
+      '<polygon class="trk" points="50,6 89,28 89,72 50,94 11,72 11,28"></polygon>'+
+      '<polygon class="arc" points="50,6 89,28 89,72 50,94 11,72 11,28"></polygon></svg></div>'+
+      '<div class="lock-status">Загрузка списка инженеров…</div>';
+  } else if(L.phase==='error'){
+    body = '<div class="lock-status err">'+esc(L.err)+'</div>'+
+      '<button type="button" class="btn btn-primary" style="margin-top:16px" onclick="echips.lockRetry()">Повторить</button>';
+  } else if(L.phase==='ok'){
+    body = '<div class="lock-ok-check"><svg viewBox="0 0 52 52">'+
+      '<circle cx="26" cy="26" r="23"></circle><path d="M15 27l7 7 15-15"></path></svg></div>'+
+      '<div class="lock-status">Добро пожаловать, '+esc(S.engineer?S.engineer.name:'')+'</div>';
+  } else {
+    body =
+      '<div class="lock-techs">'+(L.techs||[]).map(function(t){
+        return '<div class="lock-tech'+(L.techId===t.id?' on':'')+'" onclick="echips.lockPick(\''+t.id+'\')">'+esc(t.name)+'</div>';
+      }).join('')+'</div>'+
+      '<div class="lock-dots'+(L.shake?' shake':'')+'">'+dotsHtml(L.pin.length)+'</div>'+
+      '<div class="lock-keypad">'+keypadHtml()+'</div>'+
+      (L.err?'<div class="lock-err">'+esc(L.err)+'</div>':'');
+  }
+  host.innerHTML = '<div class="lock-card">'+
+    '<div class="lock-logo"><img src="logo.png" alt="Echips"></div>'+
+    '<div class="lock-title">Echips Hardware Check</div>'+
+    body+
+  '</div>';
+}
+/* Физическая клавиатура для ввода PIN — работает, только пока открыт
+   экран входа (phase 'pin'), чтобы не конфликтовать со слушателем теста
+   клавиатуры (тот включён лишь на S.screen==='test' с категорией kb). */
+document.addEventListener('keydown', function(e){
+  if (S.lock.phase!=='pin') return;
+  if (/^[0-9]$/.test(e.key)){ e.preventDefault(); A.lockDigit(e.key); }
+  else if (e.key==='Backspace'){ e.preventDefault(); A.lockBackspace(); }
+  else if (e.key==='Enter'){ e.preventDefault(); A.lockSubmit(); }
+});
+
 document.addEventListener('DOMContentLoaded', function(){
   loadDevice();
   render();
+  lockInit();
 });
 })();

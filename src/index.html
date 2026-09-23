@@ -9,6 +9,8 @@
 </head>
 <body>
 
+<div class="lock-overlay" id="lock-overlay"></div>
+
 <div class="app">
   <header class="titlebar">
     <div class="t">ECHIPS HARDWARE CHECK</div>
@@ -36,6 +38,12 @@
       <nav class="steps" id="steps"></nav>
 
       <div class="theme-toggle-slot" id="theme-toggle-slot"></div>
+
+      <div class="techbox" id="techbox">
+        <div class="k">Инженер</div>
+        <div class="n" id="techbox-name">—</div>
+        <button type="button" class="btn-link" onclick="echips.go('techadmin')">+ добавить инженера</button>
+      </div>
 
       <div class="devbox" id="devbox">
         <div class="k">Устройство</div>

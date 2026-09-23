@@ -112,6 +112,10 @@ input::placeholder{color:var(--mute)}
 .devbox .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
 .devbox .n{font-family:var(--grotesk);font-size:12.5px;font-weight:500;color:var(--text-2);margin-top:5px;line-height:1.3}
 .devbox .sn{font-family:var(--mono);font-size:10px;color:var(--mute);margin-top:4px}
+.techbox{flex:0 0 auto;margin-top:10px;padding:12px 11px;border-radius:10px;background:var(--glass);border:1px solid var(--line)}
+.techbox .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+.techbox .n{font-family:var(--grotesk);font-size:12.5px;font-weight:500;color:var(--text-2);margin-top:5px;line-height:1.3}
+.techbox .btn-link{margin-top:6px;font-size:10px}
 .sidefoot{display:flex;align-items:center;gap:6px;padding:13px 8px 0;margin-top:12px;border-top:1px solid var(--line);font-family:var(--mono);font-size:10px}
 .sidefoot .c{color:var(--faint)}
 .sidefoot a{text-decoration:underline;text-underline-offset:2px}
@@ -579,3 +583,58 @@ h1.title{font-family:var(--grotesk);font-size:27px;font-weight:600;color:var(--t
 /* ---------- вентиляторы ---------- */
 .fantable .smh,.fantable .smr{grid-template-columns:1.2fr 120px 140px 1.3fr}
 .fantable .range{width:70%;vertical-align:middle;margin:0 6px 0 0}
+
+/* ---------- вход по PIN при запуске ---------- */
+.lock-overlay{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;
+  background:radial-gradient(70% 60% at 50% 0%,rgba(255,138,0,.10),transparent 70%),var(--page);
+  opacity:1;transition:opacity .35s ease}
+.lock-overlay.closed{opacity:0;pointer-events:none}
+.lock-card{width:340px;max-width:88vw;display:flex;flex-direction:column;align-items:center;text-align:center;
+  animation:echRise .4s ease-out}
+.lock-logo{width:56px;height:56px;margin-bottom:14px;animation:echFloat 3.6s ease-in-out infinite}
+.lock-logo img{width:100%;height:100%;object-fit:contain;display:block}
+.lock-title{font-family:var(--grotesk);font-size:15px;font-weight:600;color:var(--text-hi);margin-bottom:22px}
+.lock-spin{width:64px;height:64px;margin:6px 0 16px}
+.lock-spin svg{width:100%;height:100%;animation:echSpin 1.6s linear infinite}
+.lock-spin .trk{fill:none;stroke:var(--line-strong);stroke-width:3}
+.lock-spin .arc{fill:none;stroke:var(--accent);stroke-width:3;stroke-linecap:round;stroke-dasharray:228;
+  animation:echDash 1.6s ease-in-out infinite}
+.lock-status{font-family:var(--mono);font-size:11.5px;color:var(--mute);letter-spacing:.03em}
+.lock-status.err{color:var(--err)}
+.lock-techs{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-bottom:22px}
+.lock-tech{padding:9px 15px;border-radius:20px;background:var(--glass);border:1px solid var(--line);
+  font-family:var(--grotesk);font-size:12.5px;color:var(--text-2);cursor:pointer;transition:border-color .18s,background-color .18s}
+.lock-tech:hover{border-color:var(--accent-line)}
+.lock-tech.on{background:var(--accent-soft);border-color:var(--accent-line);color:var(--text-hi)}
+.lock-dots{display:flex;justify-content:center;gap:11px;height:16px;margin-bottom:22px}
+.lock-dots.shake{animation:lockShake .4s ease}
+.lock-dot{width:12px;height:12px;border-radius:50%;border:1.5px solid var(--line-strong);transition:background-color .15s,border-color .15s,transform .15s}
+.lock-dot.on{background:var(--accent);border-color:var(--accent);transform:scale(1.12)}
+@keyframes lockShake{
+  0%,100%{transform:translateX(0)}
+  20%{transform:translateX(-9px)}
+  40%{transform:translateX(8px)}
+  60%{transform:translateX(-6px)}
+  80%{transform:translateX(4px)}
+}
+.lock-keypad{display:grid;grid-template-columns:repeat(3,56px);gap:10px;justify-content:center;margin-bottom:8px}
+.lock-key{width:56px;height:56px;border-radius:50%;background:var(--glass);border:1px solid var(--line);
+  color:var(--text-2);font-family:var(--grotesk);font-size:17px;font-weight:500;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;transition:background-color .12s,border-color .12s,transform .08s}
+.lock-key:hover{border-color:var(--accent-line);color:var(--text)}
+.lock-key:active{transform:scale(.93)}
+.lock-key.wide{width:100%;height:44px;border-radius:12px;font-size:13px;font-weight:600;margin-top:6px}
+.lock-key.ok{background:var(--accent-soft);border-color:var(--accent-line);color:var(--accent-hi)}
+.lock-err{margin-top:14px;font-size:11.5px;color:var(--err);font-family:var(--mono)}
+.lock-ok-check{width:64px;height:64px;margin:6px auto 16px;color:var(--ok)}
+.lock-ok-check svg{width:100%;height:100%}
+.lock-ok-check circle{fill:none;stroke:var(--ok);stroke-width:3;stroke-dasharray:170;stroke-dashoffset:170;
+  animation:lockCheckRing .5s ease-out forwards}
+.lock-ok-check path{fill:none;stroke:var(--ok);stroke-width:3.5;stroke-linecap:round;stroke-linejoin:round;
+  stroke-dasharray:40;stroke-dashoffset:40;animation:lockCheckMark .35s ease-out .35s forwards}
+@keyframes lockCheckRing{to{stroke-dashoffset:0}}
+@keyframes lockCheckMark{to{stroke-dashoffset:0}}
+
+/* ---------- добавление инженера (генератор хэша PIN) ---------- */
+.techjson{font-family:var(--mono);font-size:11.5px;color:var(--text-2);background:var(--glass-2);
+  border:1px solid var(--line);border-radius:9px;padding:12px 13px;white-space:pre-wrap;word-break:break-all}

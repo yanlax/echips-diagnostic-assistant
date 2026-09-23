@@ -18,3 +18,4 @@ pub mod activation;
 pub mod hwmon;
 pub mod keyhook;
 pub mod update;
+pub mod techs;

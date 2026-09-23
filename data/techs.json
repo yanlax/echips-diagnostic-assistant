@@ -1,0 +1,14 @@
+[
+  {
+    "id": "ivanov",
+    "name": "Иванов И.И.",
+    "pin_hash": "6f15c5deec44fdd5eb024a49e58bb4a9967189ecc1066bd0e1f9b6ba70eb82ab",
+    "salt": "1d7b98af2a2332957d681b7192e28066"
+  },
+  {
+    "id": "petrov",
+    "name": "Петров П.П.",
+    "pin_hash": "9cc8fc6e3ab6e9b8d6356150898b9edbbd1377700a79a61c5b031991776a05c7",
+    "salt": "479fa3dbe431169b004220f955872337"
+  }
+]

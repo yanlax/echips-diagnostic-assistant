@@ -249,6 +249,41 @@ fn draw_rounded_fill(layer: &PdfLayerReference, color: Rgb, x0: f32, y0: f32, x1
     layer.add_polygon(poly);
 }
 
+/// Круг (через rounded_rect_points на квадрате с radius = половина
+/// стороны — при таком радиусе четыре угла превращаются в полную
+/// окружность целиком, без прямых сегментов между дугами).
+fn draw_circle_fill(layer: &PdfLayerReference, color: Rgb, cx: f32, cy: f32, r: f32) {
+    draw_rounded_fill(layer, color, cx - r, cy - r, cx + r, cy + r, r);
+}
+
+/// Приближение radial-gradient из референса (.cover::after — тёплое
+/// оранжевое свечение по углам тёмной обложки, `rgba(255,138,0,.2..0)`)
+/// через несколько вложенных кругов от большого бледного к маленькому
+/// насыщенному — printpdf 0.7 не поддерживает градиентные заливки, а
+/// плоский без него цвет обложки был одной из причин, почему шапка
+/// «выглядела не так» (референс объёмнее/теплее, у нас было плоско).
+/// `max_alpha` — насколько сильно цвет свечения смешивается с базовым
+/// в центре (на краю всегда 0, т.е. чистый базовый цвет).
+fn draw_radial_glow(layer: &PdfLayerReference, base: &Rgb, glow: &Rgb, cx: f32, cy: f32, max_r: f32, max_alpha: f32) {
+    const STEPS: usize = 10;
+    // Рисуем от большого бледного круга (фон) к маленькому насыщенному
+    // (поверх) — иначе более поздний слой перекрыл бы всё, что нарисовано
+    // раньше, и результат выглядел бы как один сплошной бледный круг без
+    // видимого затухания к центру.
+    for i in 0..STEPS {
+        let t = i as f32 / (STEPS - 1) as f32; // 0.0 на первом (большом) круге … 1.0 на последнем (маленьком)
+        let r = max_r * (1.0 - 0.85 * t); // от max_r до 0.15×max_r — маленькое насыщенное ядро всегда видно
+        let a = max_alpha * t * t; // квадратичное усиление к центру — мягче на глаз, чем линейное
+        let color = Rgb::new(
+            base.r * (1.0 - a) + glow.r * a,
+            base.g * (1.0 - a) + glow.g * a,
+            base.b * (1.0 - a) + glow.b * a,
+            None,
+        );
+        draw_circle_fill(layer, color, cx, cy, r);
+    }
+}
+
 fn draw_rounded_stroke(layer: &PdfLayerReference, color: Rgb, thickness_pt: f32, x0: f32, y0: f32, x1: f32, y1: f32, radius: f32) {
     layer.set_outline_color(Color::Rgb(color));
     layer.set_outline_thickness(thickness_pt);
@@ -424,6 +459,22 @@ fn format_time_range(report: &DiagnosticReport) -> Option<String> {
     } else {
         format!("{} → {}", start_local.format("%d.%m.%Y %H:%M"), end_local.format("%d.%m.%Y %H:%M"))
     })
+}
+
+/// "Выявлена 1 неисправность" / "Выявлены 3 неисправности" / "Выявлено
+/// 5 неисправностей" — согласование глагола и числительного с count, как
+/// в референсе (там пример на 1: "Выявлена 1 неисправность"; раньше у нас
+/// всегда было "Выявлено неисправностей: N" без согласования).
+fn ru_defects_verdict(n: usize) -> String {
+    let (verb, noun) = match n % 100 {
+        11..=14 => ("Выявлено", "неисправностей"),
+        _ => match n % 10 {
+            1 => ("Выявлена", "неисправность"),
+            2..=4 => ("Выявлены", "неисправности"),
+            _ => ("Выявлено", "неисправностей"),
+        },
+    };
+    format!("{verb} {n} {noun}")
 }
 
 struct PdfWriter {
@@ -1006,8 +1057,18 @@ fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
 
     // ---- обложка: тёмная плашка с лого, заголовком, метаданными и вердиктом ----
     let cover_top = w.y;
-    let cover_h = if bad_n > 0 { 78.0 } else { 72.0 };
+    // +7мм к прежним 78/72 — компенсация новой линии-разделителя над
+    // метаданными (добавляет вертикальный отступ), чтобы вердикт-пилюля
+    // внизу обложки не оказалась поджатой к самому краю тёмной плашки.
+    let cover_h = if bad_n > 0 { 85.0 } else { 79.0 };
     draw_rule(&w.layer, p.cover_bg.clone(), 0.0, PDF_PAGE_W, cover_top - cover_h, cover_top + PDF_MARGIN_TOP);
+    // Тёплое радиальное свечение по углам обложки, как .cover::after в
+    // референсе (rgba(255,138,0,.20) сверху-справа, .10 снизу-слева) —
+    // см. draw_radial_glow. Рисуется поверх плоской заливки, но до любого
+    // текста/лого, поэтому ничего не перекрывает.
+    let glow = Rgb::new(1.0, 0.541, 0.0, None); // #FF8A00
+    draw_radial_glow(&w.layer, &p.cover_bg, &glow, PDF_PAGE_W, cover_top + PDF_MARGIN_TOP, 60.0, 0.20);
+    draw_radial_glow(&w.layer, &p.cover_bg, &glow, 0.0, cover_top - cover_h, 50.0, 0.10);
 
     // ---- .brand: знак + "ECHIPS" + плашка "HARDWARE CHECK", одной строкой ----
     let mark_h = 7.0_f32;
@@ -1051,7 +1112,11 @@ fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
     w.layer
         .use_text("Полная аппаратная проверка устройства", 10.5, Mm(PDF_MARGIN_L), Mm(w.y), &w.font_regular);
 
-    w.y -= 9.0;
+    w.y -= 8.0;
+    // Тонкая линия над метаданными — как border-top у .cover-meta в
+    // референсе (rgba(255,255,255,.12) поверх тёмной обложки).
+    draw_rule(&w.layer, Rgb::new(0.1925, 0.1994, 0.2132, None), PDF_MARGIN_L, PDF_PAGE_W - PDF_MARGIN_R, w.y, w.y + 0.15);
+    w.y -= 8.0;
     let meta_col_w = PDF_CONTENT_W / 4.0;
     let time_range = format_time_range(report);
     let duration = format_duration(report);
@@ -1075,16 +1140,32 @@ fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
     }
     w.y -= 16.0;
 
-    // вердикт-пилюля + счётчики
-    let (verdict_text, verdict_fg, verdict_bg) = if bad_n > 0 {
-        (format!("Выявлено неисправностей: {bad_n}"), p.bad_fg.clone(), Rgb::new(0.35, 0.15, 0.12, None))
+    // Вердикт-пилюля — текст согласован с числом (ru_defects_verdict),
+    // цветная точка-индикатор слева (.verdict .dot в референсе), цвета —
+    // тот же приём смешивания с тёмным фоном, что и у чипов ниже (см.
+    // заметку про rgba/альфа): rgba(224,68,50,.16)/.40 для bad,
+    // rgba(21,163,101,.16)/.40 для ok, поверх ink-фона обложки.
+    let (verdict_text, verdict_fg, verdict_bg, verdict_border) = if bad_n > 0 {
+        (
+            ru_defects_verdict(bad_n),
+            Rgb::new(1.0, 0.620, 0.561, None),   // #FF9E8F
+            Rgb::new(0.2097, 0.1185, 0.1204, None),
+            Rgb::new(0.4008, 0.1608, 0.1420, None),
+        )
     } else {
-        ("Неисправностей не выявлено".to_string(), p.ok_fg.clone(), Rgb::new(0.10, 0.24, 0.16, None))
+        (
+            "Неисправностей не выявлено".to_string(),
+            Rgb::new(0.498, 0.890, 0.667, None), // #7FE3AA
+            Rgb::new(0.0824, 0.1781, 0.1524, None),
+            Rgb::new(0.0824, 0.3098, 0.2219, None),
+        )
     };
-    let verdict_w = pt_to_mm(11.0) * 0.55 * verdict_text.chars().count() as f32 + 14.0;
+    let verdict_w = pt_to_mm(10.5) * 0.55 * verdict_text.chars().count() as f32 + 20.0;
     draw_rounded_fill(&w.layer, verdict_bg, PDF_MARGIN_L, w.y - 6.0, PDF_MARGIN_L + verdict_w, w.y + 3.0, 4.5);
+    draw_rounded_stroke(&w.layer, verdict_border, 0.4, PDF_MARGIN_L, w.y - 6.0, PDF_MARGIN_L + verdict_w, w.y + 3.0, 4.5);
+    draw_circle_fill(&w.layer, verdict_fg.clone(), PDF_MARGIN_L + 6.0, w.y - 1.5, 0.8);
     w.layer.set_fill_color(Color::Rgb(verdict_fg));
-    w.layer.use_text(verdict_text, 10.5, Mm(PDF_MARGIN_L + 6.0), Mm(w.y - 3.2), &w.font_bold);
+    w.layer.use_text(verdict_text, 10.5, Mm(PDF_MARGIN_L + 10.0), Mm(w.y - 3.2), &w.font_bold);
 
     // Референс красит эти чипы полупрозрачным белым поверх тёмной обложки
     // (rgba(255,255,255,.06) фон, .12 рамка) — printpdf 0.7 не поддерживает
@@ -1168,7 +1249,7 @@ fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
     // остаток на следующую.
     let failed: Vec<&TestResult> = report.results.iter().filter(|r| r.status == "fail").collect();
     let (vb_fg, vb_bg, vb_border) = if failed.is_empty() { (p.ok_fg.clone(), p.ok_bg.clone(), p.ok_border.clone()) } else { (p.bad_fg.clone(), p.bad_bg.clone(), p.bad_border.clone()) };
-    let verdict_title = if failed.is_empty() { "Неисправностей не выявлено".to_string() } else { format!("Выявлено неисправностей: {}", failed.len()) };
+    let verdict_title = if failed.is_empty() { "Неисправностей не выявлено".to_string() } else { ru_defects_verdict(failed.len()) };
     let title_lines = wrap_line(&verdict_title, max_chars(15.0, 8.0));
     const CHIP_H: f32 = 8.0;
     let chip_rows: usize = if failed.is_empty() {

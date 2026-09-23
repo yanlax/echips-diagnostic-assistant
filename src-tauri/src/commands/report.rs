@@ -113,18 +113,29 @@ fn render_txt(report: &DiagnosticReport) -> String {
    перенос строк по эвристике "средний символ ~0.52 кегля", этого
    достаточно для служебного отчёта и не считается точной вёрсткой.
 
-   Упрощения относительно референса (сознательно, чтобы не городить свой
-   layout-движок на низкоуровневом рисовании printpdf):
-   - углы карточек/бейджей/чипов прямые, а не скруглённые;
-   - внутри карточки — один список строк, а не двухколоночная kv-сетка и
-     отдельно оформленная таблица журнала/плашка диагноза: у нас details —
-     плоский Vec<String> уже готовых строк (не структурированные пары
-     ключ-значение), под настоящую 2-колоночную сетку и таблицу событий
-     пришлось бы менять модель данных, которую app.js шлёт в recordDetail
-     по всем тестам — это отдельная, более крупная задача;
-   - карточка не имеет заливки фона (только рамка + цветная полоса слева) —
-     страница и так белая, доп. заливка не нужна и не мешает переносу
-     карточки между страницами (см. draw_card). */
+   Углы карточек/бейджей/пилюль/чипов скруглены по-настоящему — через
+   кубические кривые Безье, которые printpdf 0.7 честно поддерживает в
+   Line/Polygon (см. rounded_rect_points) — а не прямые, как в первой
+   версии переверстки (главная причина, по которой она "выглядела не
+   так, как шаблон").
+
+   Строки `details` — плоский Vec<String> уже готовых строк из app.js
+   (recordDetail), а не структурированные пары ключ-значение, поэтому
+   настоящую 2-колоночную kv-сетку и таблицу журнала (зебра-строки,
+   отдельная колонка времени) без изменения модели данных во всех
+   тестах не сделать — это осталось как есть, одной колонкой текста.
+   Но списки вида "имя — статус" (USB/Bluetooth/Wi-Fi-сети и т.п. —
+   самый частый формат в recordDetail по всему app.js) распознаются
+   эвристикой `classify_detail()` и рисуются как в референсе: имя
+   слева, значение справа, тонкий разделитель под строкой (см.
+   draw_row) — без единой правки на стороне JS.
+
+   Упрощение, оставленное сознательно: карточка не имеет заливки фона
+   (только рамка + цветная полоса слева) — страница и так белая, доп.
+   заливка не нужна и не мешает переносу карточки между страницами
+   (см. draw_card). Таблица журнала сбоев (зебра-строки с отдельной
+   мело-колонкой времени) и плашка диагноза (жёлтый alert-бокс) —
+   тоже одной колонкой текста, не выделены отдельным стилем. */
 
 const PDF_PAGE_W: f32 = 210.0; // A4, мм
 const PDF_PAGE_H: f32 = 297.0;
@@ -139,6 +150,12 @@ const CARD_INDENT: f32 = 6.0;
 const CARD_RIGHT_PAD: f32 = 4.0;
 /// Зазор между карточками.
 const CARD_GAP: f32 = 3.0;
+/// Радиусы скругления — приблизительно как --radius/--radius-sm в референсе
+/// (14px/9px при печатном разрешении ≈ 3.7/2.4мм; взято чуть меньше, чтобы
+/// с толщиной обводки в 0.5-0.7pt не появлялось видимых артефактов на
+/// небольших карточках).
+const RADIUS_BOX: f32 = 3.2;
+const RADIUS_BOX_SM: f32 = 2.4;
 
 const FONT_REGULAR: &[u8] = include_bytes!("../../assets/fonts/PTSans-Regular.ttf");
 const FONT_BOLD: &[u8] = include_bytes!("../../assets/fonts/PTSans-Bold.ttf");
@@ -174,6 +191,66 @@ fn draw_stroke_rect(layer: &PdfLayerReference, color: Rgb, thickness_pt: f32, x0
         ],
         is_closed: true,
     };
+    layer.add_line(line);
+}
+
+/// Обход прямоугольника со скруглёнными углами через кубические кривые
+/// Безье (printpdf 0.7 честно поддерживает bezier в Line/Polygon через
+/// пары точек с флагом "это ручка кривой" — см. line.rs::into_stream_op:
+/// последовательность [конец_ребра(true), ручка1(true), ручка2, конец_дуги]
+/// заставляет два подряд идущих true-флага собраться в один кубический
+/// bezier по следующим 3 точкам). radius=0 даёт обычный прямой угол.
+/// Референс (echips_report_template.html) использует border-radius
+/// повсюду — плоские углы были одной из причин, почему первая версия
+/// переверстки «выглядела не так, как шаблон».
+fn rounded_rect_points(x0: f32, y0: f32, x1: f32, y1: f32, radius: f32) -> Vec<(Point, bool)> {
+    let r = radius.max(0.0).min((x1 - x0).abs() / 2.0).min((y1 - y0).abs() / 2.0);
+    if r < 0.05 {
+        return vec![
+            (Point::new(Mm(x0), Mm(y0)), false),
+            (Point::new(Mm(x1), Mm(y0)), false),
+            (Point::new(Mm(x1), Mm(y1)), false),
+            (Point::new(Mm(x0), Mm(y1)), false),
+        ];
+    }
+    const K: f32 = 0.5522847498; // магическая константа для аппроксимации четверти окружности кубическим bezier
+    let kr = K * r;
+    let pt = |x: f32, y: f32| Point::new(Mm(x), Mm(y));
+    vec![
+        (pt(x0 + r, y0), false),
+        (pt(x1 - r, y0), true),
+        (pt(x1 - r + kr, y0), true),
+        (pt(x1, y0 + r - kr), false),
+        (pt(x1, y0 + r), false),
+        (pt(x1, y1 - r), true),
+        (pt(x1, y1 - r + kr), true),
+        (pt(x1 - r + kr, y1), false),
+        (pt(x1 - r, y1), false),
+        (pt(x0 + r, y1), true),
+        (pt(x0 + r - kr, y1), true),
+        (pt(x0, y1 - r + kr), false),
+        (pt(x0, y1 - r), false),
+        (pt(x0, y0 + r), true),
+        (pt(x0, y0 + r - kr), true),
+        (pt(x0 + r - kr, y0), false),
+        (pt(x0 + r, y0), false),
+    ]
+}
+
+fn draw_rounded_fill(layer: &PdfLayerReference, color: Rgb, x0: f32, y0: f32, x1: f32, y1: f32, radius: f32) {
+    layer.set_fill_color(Color::Rgb(color));
+    let poly = Polygon {
+        rings: vec![rounded_rect_points(x0, y0, x1, y1, radius)],
+        mode: PaintMode::Fill,
+        winding_order: WindingOrder::NonZero,
+    };
+    layer.add_polygon(poly);
+}
+
+fn draw_rounded_stroke(layer: &PdfLayerReference, color: Rgb, thickness_pt: f32, x0: f32, y0: f32, x1: f32, y1: f32, radius: f32) {
+    layer.set_outline_color(Color::Rgb(color));
+    layer.set_outline_thickness(thickness_pt);
+    let line = Line { points: rounded_rect_points(x0, y0, x1, y1, radius), is_closed: true };
     layer.add_line(line);
 }
 
@@ -365,6 +442,39 @@ impl PdfWriter {
         );
     }
 
+    /// Строка списка «имя — значение»: имя слева, значение справа
+    /// (правый край — общее поле минус `right_pad_mm`), тонкий разделитель
+    /// под строкой — как .check-list .row в референсе.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_row(
+        &mut self,
+        doc: &PdfDocumentReference,
+        name: &str,
+        value: &str,
+        size_pt: f32,
+        name_color: &Rgb,
+        value_color: &Rgb,
+        line_color: &Rgb,
+        indent_mm: f32,
+        right_pad_mm: f32,
+        row_h: f32,
+    ) {
+        // Базовая линия текста — на self.y, как в draw_line (иначе при
+        // чередовании строк-списков с обычными строками получается наезд,
+        // т.к. они бы мерили высоту от разных опорных точек).
+        self.ensure_space(doc, row_h);
+        let baseline = self.y;
+        self.layer.set_fill_color(Color::Rgb(name_color.clone()));
+        self.layer.use_text(name.to_string(), size_pt, Mm(PDF_MARGIN_L + indent_mm), Mm(baseline), &self.font_regular);
+        let value_w = pt_to_mm(size_pt) * 0.52 * value.chars().count() as f32;
+        let value_x = (PDF_PAGE_W - PDF_MARGIN_R - right_pad_mm - value_w).max(PDF_MARGIN_L + indent_mm);
+        self.layer.set_fill_color(Color::Rgb(value_color.clone()));
+        self.layer.use_text(value.to_string(), size_pt, Mm(value_x), Mm(baseline), &self.font_regular);
+        let sep_y = baseline - row_h + 1.3;
+        draw_rule(&self.layer, line_color.clone(), PDF_MARGIN_L + indent_mm, PDF_PAGE_W - PDF_MARGIN_R - right_pad_mm, sep_y, sep_y + 0.15);
+        self.y -= row_h;
+    }
+
     /// Одна уже перенесённая строка — с проверкой места на странице.
     fn draw_line(&mut self, doc: &PdfDocumentReference, line: &str, size_pt: f32, bold: bool, color: &Rgb, indent_mm: f32) {
         let lh = line_h(size_pt);
@@ -389,11 +499,42 @@ impl PdfWriter {
 /// вся карточка целиком помещается на свежую страницу; если карточка сама
 /// больше страницы (длинный журнал сбоев и т.п.) — не пытаемся её сберечь
 /// от разрыва, а рамку вокруг нет смысла рисовать (см. ниже page_no).
+/// Одна строка подробностей — либо распознанная как «имя — значение»
+/// (как .check-list в референсе: имя слева, значение справа, тонкая
+/// линия-разделитель между строками), либо обычный перенесённый текст.
+/// Распознаём по эвристике, без изменения модели данных app.js: почти
+/// все списочные подробности (USB/Bluetooth/Wi-Fi и т.п., см. recordDetail
+/// по всему app.js) идут в формате "название — статус" с ОДНИМ тире и
+/// коротким значением справа — описательные предложения с тем же тире
+/// внутри длиннее и/или встречаются с ним не один раз, так что ложных
+/// срабатываний почти нет.
+enum DetailLine {
+    Row(String, String),
+    Text(Vec<String>),
+}
+fn classify_detail(line: &str, card_w: f32, detail_sz: f32) -> DetailLine {
+    let line = line.trim_start();
+    if line.matches(" — ").count() == 1 {
+        if let Some((name, value)) = line.split_once(" — ") {
+            let value = value.trim();
+            if !name.is_empty() && !value.is_empty() && value.chars().count() <= 20 {
+                let value_w = pt_to_mm(detail_sz) * 0.52 * value.chars().count() as f32;
+                let name_max = max_chars_width(detail_sz, (card_w - value_w - 6.0).max(20.0));
+                if name.chars().count() <= name_max {
+                    return DetailLine::Row(name.to_string(), value.to_string());
+                }
+            }
+        }
+    }
+    DetailLine::Text(wrap_line(line, max_chars_width(detail_sz, card_w)))
+}
+
 fn draw_card(w: &mut PdfWriter, doc: &PdfDocumentReference, p: &PdfPalette, r: &TestResult) {
     let card_w = PDF_CONTENT_W - CARD_INDENT - CARD_RIGHT_PAD;
     const TITLE_SZ: f32 = 12.5;
     const SUMMARY_SZ: f32 = 11.0;
     const DETAIL_SZ: f32 = 9.5;
+    const ROW_H: f32 = 6.0;
 
     let summary = r.comment.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let override_line = match (&r.auto_status, &r.auto_note, &r.override_reason) {
@@ -405,8 +546,8 @@ fn draw_card(w: &mut PdfWriter, doc: &PdfDocumentReference, p: &PdfPalette, r: &
         .as_deref()
         .map(|s| wrap_line(s, max_chars_width(DETAIL_SZ, card_w)))
         .unwrap_or_default();
-    let detail_wrapped: Vec<Vec<String>> = r.details.iter().map(|line| wrap_line(line.trim_start(), max_chars_width(DETAIL_SZ, card_w))).collect();
-    let has_body = !override_lines.is_empty() || !detail_wrapped.is_empty();
+    let detail_lines: Vec<DetailLine> = r.details.iter().filter(|l| !l.trim().is_empty()).map(|line| classify_detail(line, card_w, DETAIL_SZ)).collect();
+    let has_body = !override_lines.is_empty() || !detail_lines.is_empty();
 
     let mut measured = 5.0_f32; // верхний паддинг
     measured += line_h(TITLE_SZ);
@@ -414,8 +555,11 @@ fn draw_card(w: &mut PdfWriter, doc: &PdfDocumentReference, p: &PdfPalette, r: &
     if has_body {
         measured += 3.0; // разделитель
         measured += override_lines.len() as f32 * line_h(DETAIL_SZ);
-        for lines in &detail_wrapped {
-            measured += lines.len() as f32 * line_h(DETAIL_SZ);
+        for d in &detail_lines {
+            measured += match d {
+                DetailLine::Row(..) => ROW_H,
+                DetailLine::Text(lines) => lines.len() as f32 * line_h(DETAIL_SZ),
+            };
         }
     }
     measured += 5.0; // нижний паддинг
@@ -441,8 +585,8 @@ fn draw_card(w: &mut PdfWriter, doc: &PdfDocumentReference, p: &PdfPalette, r: &
     let badge_x0 = badge_x1 - badge_w;
     let badge_y1 = w.y + 1.5;
     let badge_y0 = badge_y1 - badge_h;
-    draw_rule(&w.layer, bg, badge_x0, badge_x1, badge_y0, badge_y1);
-    draw_stroke_rect(&w.layer, border, 0.5, badge_x0, badge_y0, badge_x1, badge_y1);
+    draw_rounded_fill(&w.layer, bg, badge_x0, badge_y0, badge_x1, badge_y1, badge_h / 2.0);
+    draw_rounded_stroke(&w.layer, border, 0.5, badge_x0, badge_y0, badge_x1, badge_y1, badge_h / 2.0);
     w.layer.set_fill_color(Color::Rgb(fg.clone()));
     w.layer.use_text(label.to_string(), 8.5, Mm(badge_x0 + 3.0), Mm(badge_y0 + 1.9), &w.font_bold);
 
@@ -458,9 +602,16 @@ fn draw_card(w: &mut PdfWriter, doc: &PdfDocumentReference, p: &PdfPalette, r: &
         for line in &override_lines {
             w.draw_line(doc, line, DETAIL_SZ, false, &p.text_muted, CARD_INDENT);
         }
-        for lines in &detail_wrapped {
-            for line in lines {
-                w.draw_line(doc, line, DETAIL_SZ, false, &p.text, CARD_INDENT);
+        for d in &detail_lines {
+            match d {
+                DetailLine::Row(name, value) => {
+                    w.draw_row(doc, name, value, DETAIL_SZ, &p.text, &p.text_muted, &p.line_soft, CARD_INDENT, CARD_RIGHT_PAD, ROW_H);
+                }
+                DetailLine::Text(lines) => {
+                    for line in lines {
+                        w.draw_line(doc, line, DETAIL_SZ, false, &p.text, CARD_INDENT);
+                    }
+                }
             }
         }
     }
@@ -471,8 +622,8 @@ fn draw_card(w: &mut PdfWriter, doc: &PdfDocumentReference, p: &PdfPalette, r: &
     // между страницами (иначе они бы обрамляли только часть содержимого).
     if w.page_no == start_page {
         let end_y = w.y;
-        draw_stroke_rect(&w.layer, p.line.clone(), 0.7, PDF_MARGIN_L, end_y, PDF_PAGE_W - PDF_MARGIN_R, start_y);
-        draw_rule(&w.layer, fg, PDF_MARGIN_L, PDF_MARGIN_L + 1.1, end_y + 1.5, start_y - 1.5);
+        draw_rounded_stroke(&w.layer, p.line.clone(), 0.7, PDF_MARGIN_L, end_y, PDF_PAGE_W - PDF_MARGIN_R, start_y, RADIUS_BOX);
+        draw_rounded_fill(&w.layer, fg, PDF_MARGIN_L, end_y + 1.5, PDF_MARGIN_L + 1.1, start_y - 1.5, 0.5);
     }
 
     w.y -= CARD_GAP;
@@ -572,16 +723,24 @@ fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
         ("Неисправностей не выявлено".to_string(), p.ok_fg.clone(), Rgb::new(0.10, 0.24, 0.16, None))
     };
     let verdict_w = pt_to_mm(11.0) * 0.55 * verdict_text.chars().count() as f32 + 14.0;
-    draw_rule(&w.layer, verdict_bg, PDF_MARGIN_L, PDF_MARGIN_L + verdict_w, w.y - 6.0, w.y + 3.0);
+    draw_rounded_fill(&w.layer, verdict_bg, PDF_MARGIN_L, w.y - 6.0, PDF_MARGIN_L + verdict_w, w.y + 3.0, 4.5);
     w.layer.set_fill_color(Color::Rgb(verdict_fg));
     w.layer.use_text(verdict_text, 10.5, Mm(PDF_MARGIN_L + 6.0), Mm(w.y - 3.2), &w.font_bold);
 
+    // Референс красит эти чипы полупрозрачным белым поверх тёмной обложки
+    // (rgba(255,255,255,.06) фон, .12 рамка) — printpdf 0.7 не поддерживает
+    // альфа-смешение per-объект без лишней возни с graphics state, поэтому
+    // приближаем тот же эффект «прозрачного белого на тёмном» через готовый
+    // смешанный цвет (cover_bg + белый × 6%/12%).
+    let chip_bg = Rgb::new(0.1558, 0.1630, 0.1774, None);
+    let chip_border = Rgb::new(0.1925, 0.1994, 0.2132, None);
     let mut chip_x = PDF_MARGIN_L + verdict_w + 8.0;
     for (n, label) in [(ok_n, "ОК"), (na_n, "не проверялось"), (bad_n, "неисправно")] {
         let chip_text = format!("{n} {label}");
         let chip_w = pt_to_mm(9.5) * 0.52 * chip_text.chars().count() as f32 + 10.0;
-        draw_rule(&w.layer, Rgb::new(1.0, 1.0, 1.0, None), chip_x, chip_x + chip_w, w.y - 6.0, w.y + 3.0);
-        w.layer.set_fill_color(Color::Rgb(p.cover_bg.clone()));
+        draw_rounded_fill(&w.layer, chip_bg.clone(), chip_x, w.y - 6.0, chip_x + chip_w, w.y + 3.0, 4.5);
+        draw_rounded_stroke(&w.layer, chip_border.clone(), 0.4, chip_x, w.y - 6.0, chip_x + chip_w, w.y + 3.0, 4.5);
+        w.layer.set_fill_color(Color::Rgb(p.cover_text_muted.clone()));
         w.layer.use_text(chip_text, 9.5, Mm(chip_x + 5.0), Mm(w.y - 3.2), &w.font_regular);
         chip_x += chip_w + 5.0;
     }
@@ -596,8 +755,8 @@ fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
         w.ensure_space(&doc, box_h);
         let box_top = w.y;
         let box_bottom = box_top - box_h;
-        draw_rule(&w.layer, p.na_bg.clone(), PDF_MARGIN_L, PDF_PAGE_W - PDF_MARGIN_R, box_bottom, box_top);
-        draw_rule(&w.layer, p.accent.clone(), PDF_MARGIN_L, PDF_MARGIN_L + 1.0, box_bottom, box_top);
+        draw_rounded_fill(&w.layer, p.na_bg.clone(), PDF_MARGIN_L, box_bottom, PDF_PAGE_W - PDF_MARGIN_R, box_top, RADIUS_BOX_SM);
+        draw_rounded_fill(&w.layer, p.accent.clone(), PDF_MARGIN_L, box_bottom, PDF_MARGIN_L + 1.0, box_top, 0.5);
         w.y -= 5.0;
         w.draw_line(&doc, "КОММЕНТАРИЙ ИНЖЕНЕРА", 8.5, true, &p.accent, 8.0);
         for line in &lines {
@@ -621,8 +780,8 @@ fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
     {
         let (fg, bg, border) = bucket_colors(&p, &bucket);
         let x0 = PDF_MARGIN_L + (chip_w3 + 4.0) * i as f32;
-        draw_rule(&w.layer, bg, x0, x0 + chip_w3, chips_top - chips_h, chips_top);
-        draw_stroke_rect(&w.layer, border, 0.6, x0, chips_top - chips_h, x0 + chip_w3, chips_top);
+        draw_rounded_fill(&w.layer, bg, x0, chips_top - chips_h, x0 + chip_w3, chips_top, RADIUS_BOX_SM);
+        draw_rounded_stroke(&w.layer, border, 0.6, x0, chips_top - chips_h, x0 + chip_w3, chips_top, RADIUS_BOX_SM);
         w.layer.set_fill_color(Color::Rgb(fg));
         w.layer.use_text(n.to_string(), 16.0, Mm(x0 + 4.0), Mm(chips_top - 8.5), &w.font_bold);
         w.layer.set_fill_color(Color::Rgb(p.text_muted.clone()));
@@ -643,23 +802,58 @@ fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
     draw_rule(&w.layer, p.accent.clone(), PDF_MARGIN_L, PDF_MARGIN_L + 7.0, w.y + line_h(13.0) - 1.5, w.y + line_h(13.0) - 0.8);
     w.gap(3.0);
 
+    // Референс кладёт заголовок и цветные плашки неисправностей в один
+    // ряд (flex, title слева / чипы справа) — printpdf не даёт готового
+    // flex-лейаута, поэтому раскладываем чипы построчно сами: считаем,
+    // сколько чипов помещается в оставшуюся ширину строки, переносим
+    // остаток на следующую.
     let failed: Vec<&TestResult> = report.results.iter().filter(|r| r.status == "fail").collect();
     let (vb_fg, vb_bg, vb_border) = if failed.is_empty() { (p.ok_fg.clone(), p.ok_bg.clone(), p.ok_border.clone()) } else { (p.bad_fg.clone(), p.bad_bg.clone(), p.bad_border.clone()) };
-    let verdict_line = if failed.is_empty() {
-        "Неисправностей не выявлено.".to_string()
+    let verdict_title = if failed.is_empty() { "Неисправностей не выявлено".to_string() } else { format!("Выявлено неисправностей: {}", failed.len()) };
+    let title_lines = wrap_line(&verdict_title, max_chars(15.0, 8.0));
+    const CHIP_H: f32 = 8.0;
+    let chip_rows: usize = if failed.is_empty() {
+        0
     } else {
-        format!("Выявлено неисправностей: {}. {}", failed.len(), failed.iter().map(|f| f.title.as_str()).collect::<Vec<_>>().join(", "))
+        let mut rows = 1usize;
+        let mut x = PDF_MARGIN_L + 8.0;
+        for f in &failed {
+            let w_chip = pt_to_mm(10.0) * 0.55 * f.title.chars().count() as f32 + 12.0;
+            if x + w_chip > PDF_PAGE_W - PDF_MARGIN_R - 8.0 && x > PDF_MARGIN_L + 8.0 {
+                rows += 1;
+                x = PDF_MARGIN_L + 8.0;
+            }
+            x += w_chip + 5.0;
+        }
+        rows
     };
-    let vb_lines = wrap_line(&verdict_line, max_chars(13.0, 8.0));
-    let vb_h = 8.0 + vb_lines.len() as f32 * line_h(13.0) + 6.0;
+    let vb_h = 10.0 + title_lines.len() as f32 * line_h(15.0) + if chip_rows > 0 { chip_rows as f32 * (CHIP_H + 3.0) + 3.0 } else { 0.0 } + 6.0;
     w.ensure_space(&doc, vb_h);
     let vb_top = w.y;
     let vb_bottom = vb_top - vb_h;
-    draw_rule(&w.layer, vb_bg, PDF_MARGIN_L, PDF_PAGE_W - PDF_MARGIN_R, vb_bottom, vb_top);
-    draw_stroke_rect(&w.layer, vb_border, 0.7, PDF_MARGIN_L, vb_bottom, PDF_PAGE_W - PDF_MARGIN_R, vb_top);
+    draw_rounded_fill(&w.layer, vb_bg, PDF_MARGIN_L, vb_bottom, PDF_PAGE_W - PDF_MARGIN_R, vb_top, RADIUS_BOX);
+    draw_rounded_stroke(&w.layer, vb_border.clone(), 0.7, PDF_MARGIN_L, vb_bottom, PDF_PAGE_W - PDF_MARGIN_R, vb_top, RADIUS_BOX);
     w.y -= 8.0;
-    for line in &vb_lines {
-        w.draw_line(&doc, line, 13.0, true, &vb_fg, 8.0);
+    for line in &title_lines {
+        w.draw_line(&doc, line, 15.0, true, &vb_fg, 8.0);
+    }
+    if !failed.is_empty() {
+        w.gap(2.0);
+        let mut x = PDF_MARGIN_L + 8.0;
+        let mut row_top = w.y;
+        for f in &failed {
+            let w_chip = pt_to_mm(10.0) * 0.55 * f.title.chars().count() as f32 + 12.0;
+            if x + w_chip > PDF_PAGE_W - PDF_MARGIN_R - 8.0 && x > PDF_MARGIN_L + 8.0 {
+                x = PDF_MARGIN_L + 8.0;
+                row_top -= CHIP_H + 3.0;
+            }
+            draw_rounded_fill(&w.layer, Rgb::new(1.0, 1.0, 1.0, None), x, row_top - CHIP_H, x + w_chip, row_top, CHIP_H / 2.0);
+            draw_rounded_stroke(&w.layer, vb_border.clone(), 0.4, x, row_top - CHIP_H, x + w_chip, row_top, CHIP_H / 2.0);
+            w.layer.set_fill_color(Color::Rgb(vb_fg.clone()));
+            w.layer.use_text(f.title.clone(), 10.0, Mm(x + 6.0), Mm(row_top - CHIP_H + 2.3), &w.font_bold);
+            x += w_chip + 5.0;
+        }
+        w.y = row_top - CHIP_H;
     }
 
     doc.save_to_bytes().map_err(|e| format!("Не удалось сформировать PDF: {e}"))

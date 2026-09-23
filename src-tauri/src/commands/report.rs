@@ -120,22 +120,34 @@ fn render_txt(report: &DiagnosticReport) -> String {
    так, как шаблон").
 
    Строки `details` — плоский Vec<String> уже готовых строк из app.js
-   (recordDetail), а не структурированные пары ключ-значение, поэтому
-   настоящую 2-колоночную kv-сетку и таблицу журнала (зебра-строки,
-   отдельная колонка времени) без изменения модели данных во всех
-   тестах не сделать — это осталось как есть, одной колонкой текста.
-   Но списки вида "имя — статус" (USB/Bluetooth/Wi-Fi-сети и т.п. —
-   самый частый формат в recordDetail по всему app.js) распознаются
-   эвристикой `classify_detail()` и рисуются как в референсе: имя
-   слева, значение справа, тонкий разделитель под строкой (см.
-   draw_row) — без единой правки на стороне JS.
+   (recordDetail), а не структурированные пары ключ-значение — но почти
+   весь app.js и так собирает их по шаблону "Метка: значение" (через
+   `chk()` и аналогичные хелперы) или "имя — статус" (списки устройств),
+   поэтому вместо смены модели данных во всех тестах используется
+   эвристика `classify_detail()`, которая по каждой строке распознаёт:
+   - "Метка: значение" → двухколоночная kv-сетка (`DetailRun::KvGrid`,
+     `draw_kv_pair`) — как .check-details в референсе, по два элемента
+     в ряд; метка над значением, а не инлайн как в CSS (printpdf не даёт
+     готового inline-flex, а длинные значения почти всегда переносятся
+     на новую строку в любом случае);
+   - "имя — статус" → список-таблица (`DetailRun::Row`, `draw_row`) — имя
+     слева, значение справа, тонкий разделитель под строкой, как
+     .check-list в референсе (USB/Bluetooth/Wi-Fi-сети и т.п.);
+   - всё остальное → обычный перенесённый текст (`DetailRun::Text`).
+   Порог длины метки (KV_LABEL_MAX_CHARS) отсекает случайные
+   двоеточия внутри предложений (диагнозы, пояснения) от настоящих пар
+   ключ-значение. Без единой правки на стороне JS.
+
+   Не сделано (осталось одной колонкой текста через DetailRun::Text):
+   таблица журнала сбоев с зеброй и отдельной колонкой времени, и жёлтая
+   плашка-алерт диагноза — эти два элемента визуально сложнее одной
+   эвристики (нужна декомпозиция строки на время/сообщение/код и
+   заголовок/пояснение диагноза), пока не делалось.
 
    Упрощение, оставленное сознательно: карточка не имеет заливки фона
    (только рамка + цветная полоса слева) — страница и так белая, доп.
    заливка не нужна и не мешает переносу карточки между страницами
-   (см. draw_card). Таблица журнала сбоев (зебра-строки с отдельной
-   мело-колонкой времени) и плашка диагноза (жёлтый alert-бокс) —
-   тоже одной колонкой текста, не выделены отдельным стилем. */
+   (см. draw_card). */
 
 const PDF_PAGE_W: f32 = 210.0; // A4, мм
 const PDF_PAGE_H: f32 = 297.0;
@@ -270,6 +282,7 @@ struct PdfPalette {
     cover_text_muted: Rgb,
     text: Rgb,
     text_muted: Rgb,
+    text_faint: Rgb,
     line: Rgb,
     line_soft: Rgb,
     accent: Rgb,
@@ -290,6 +303,7 @@ fn palette() -> PdfPalette {
         cover_text_muted: Rgb::new(0.784, 0.796, 0.816, None),   // #C8CBD0
         text: Rgb::new(0.102, 0.110, 0.125, None),               // #1A1C20
         text_muted: Rgb::new(0.416, 0.431, 0.463, None),         // #6A6E76
+        text_faint: Rgb::new(0.604, 0.616, 0.639, None),         // #9A9DA3
         line: Rgb::new(0.894, 0.882, 0.855, None),               // #E4E1DA
         line_soft: Rgb::new(0.929, 0.922, 0.898, None),          // #EDEBE5
         accent: Rgb::new(0.914, 0.463, 0.0, None),               // #E97600
@@ -496,6 +510,47 @@ impl PdfWriter {
         self.y -= row_h;
     }
 
+    /// Пара элементов kv-сетки бок о бок (левый/правый столбец) — метка
+    /// мелким тусклым текстом, значение крупнее под ней (перенесено под
+    /// ширину своей половины колонки заранее, в group_detail_runs). Как
+    /// .check-details{grid-template-columns:repeat(2,1fr)} в референсе,
+    /// только не инлайн (метка — значение на одной строке), а метка над
+    /// значением: так не нужно измерять ширину метки для выравнивания
+    /// внутренней «изгороди» с переносом — printpdf не даёт готового
+    /// inline-flex, а длинные значения (например, строка процессора)
+    /// всё равно почти всегда переносятся на новую строку.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_kv_pair(
+        &mut self,
+        doc: &PdfDocumentReference,
+        left: &(String, Vec<String>),
+        right: Option<&(String, Vec<String>)>,
+        label_sz: f32,
+        value_sz: f32,
+        label_color: &Rgb,
+        value_color: &Rgb,
+        indent_mm: f32,
+        half_col_w: f32,
+        gap_mm: f32,
+    ) {
+        let row_h = left.1.len().max(right.map(|r| r.1.len()).unwrap_or(0)).max(1) as f32 * line_h(value_sz) + line_h(label_sz);
+        self.ensure_space(doc, row_h);
+        let top = self.y;
+        for (col, item) in [Some(left), right].into_iter().flatten().enumerate() {
+            let x = PDF_MARGIN_L + indent_mm + col as f32 * (half_col_w + gap_mm);
+            let mut y = top;
+            self.layer.set_fill_color(Color::Rgb(label_color.clone()));
+            self.layer.use_text(item.0.clone(), label_sz, Mm(x), Mm(y), &self.font_regular);
+            y -= line_h(label_sz);
+            self.layer.set_fill_color(Color::Rgb(value_color.clone()));
+            for line in &item.1 {
+                self.layer.use_text(line.clone(), value_sz, Mm(x), Mm(y), &self.font_regular);
+                y -= line_h(value_sz);
+            }
+        }
+        self.y -= row_h;
+    }
+
     /// Одна уже перенесённая строка — с проверкой места на странице.
     fn draw_line(&mut self, doc: &PdfDocumentReference, line: &str, size_pt: f32, bold: bool, color: &Rgb, indent_mm: f32) {
         let lh = line_h(size_pt);
@@ -520,21 +575,40 @@ impl PdfWriter {
 /// вся карточка целиком помещается на свежую страницу; если карточка сама
 /// больше страницы (длинный журнал сбоев и т.п.) — не пытаемся её сберечь
 /// от разрыва, а рамку вокруг нет смысла рисовать (см. ниже page_no).
-/// Одна строка подробностей — либо распознанная как «имя — значение»
-/// (как .check-list в референсе: имя слева, значение справа, тонкая
-/// линия-разделитель между строками), либо обычный перенесённый текст.
-/// Распознаём по эвристике, без изменения модели данных app.js: почти
-/// все списочные подробности (USB/Bluetooth/Wi-Fi и т.п., см. recordDetail
-/// по всему app.js) идут в формате "название — статус" с ОДНИМ тире и
-/// коротким значением справа — описательные предложения с тем же тире
-/// внутри длиннее и/или встречаются с ним не один раз, так что ложных
-/// срабатываний почти нет.
+/// Одна строка подробностей, распознанная по эвристике — без изменения
+/// модели данных app.js (там `details` остаётся плоским Vec<String>):
+/// - "Метка: значение" (после `chk()`/аналогичных хелперов почти весь
+///   app.js собирает строки именно так — "Процессор: ...", "BIOS: ...",
+///   "Статус лицензии: ..." и т.д.) — как .kv в референсе;
+/// - "имя — статус" (USB/Bluetooth/Wi-Fi-сети и т.п.) — как .check-list;
+/// - всё остальное — обычный перенесённый текст (узкие сентенции вроде
+///   диагноза сбоев, где после первого совпадения по эвристике выходит
+///   не пара ключ-значение, а начало предложения, отсекается порогом
+///   длины метки — см. ниже).
 enum DetailLine {
+    Kv(String, String),
     Row(String, String),
     Text(Vec<String>),
 }
+/// Метки вида "Процессор"/"Статус лицензии" короткие (до ~2-3 слов) —
+/// длиннее уже почти наверняка начало предложения с двоеточием внутри
+/// (диагнозы, пояснения), а не ключ-значение.
+const KV_LABEL_MAX_CHARS: usize = 34;
+
 fn classify_detail(line: &str, card_w: f32, detail_sz: f32) -> DetailLine {
-    let line = line.trim_start();
+    let mut line = line.trim_start();
+    for prefix in ["• ", "✓ ", "✗ "] {
+        if let Some(rest) = line.strip_prefix(prefix) {
+            line = rest;
+            break;
+        }
+    }
+    if let Some((label, value)) = line.split_once(": ") {
+        let value = value.trim();
+        if !label.is_empty() && label.chars().count() <= KV_LABEL_MAX_CHARS && !value.is_empty() {
+            return DetailLine::Kv(label.to_string(), value.to_string());
+        }
+    }
     if line.matches(" — ").count() == 1 {
         if let Some((name, value)) = line.split_once(" — ") {
             let value = value.trim();
@@ -548,6 +622,45 @@ fn classify_detail(line: &str, card_w: f32, detail_sz: f32) -> DetailLine {
         }
     }
     DetailLine::Text(wrap_line(line, max_chars_width(detail_sz, card_w)))
+}
+
+/// Подряд идущие Kv-строки группируются в один блок и рисуются двухколоночной
+/// сеткой (по два элемента в ряд) — как .check-details в референсе.
+/// Остальные типы (Row/Text) рисуются по одной строке, как раньше.
+enum DetailRun {
+    KvGrid(Vec<(String, Vec<String>)>), // (метка, перенесённые строки значения)
+    Row(String, String),
+    Text(Vec<String>),
+}
+fn group_detail_runs(lines: &[DetailLine], half_col_w: f32, value_sz: f32) -> Vec<DetailRun> {
+    let mut runs = Vec::new();
+    let mut kv_buf: Vec<(String, Vec<String>)> = Vec::new();
+    let flush = |runs: &mut Vec<DetailRun>, buf: &mut Vec<(String, Vec<String>)>| {
+        if !buf.is_empty() {
+            runs.push(DetailRun::KvGrid(std::mem::take(buf)));
+        }
+    };
+    for d in lines {
+        match d {
+            DetailLine::Kv(label, value) => {
+                let value_lines = wrap_line(value, max_chars_width(value_sz, half_col_w));
+                kv_buf.push((label.clone(), value_lines));
+            }
+            DetailLine::Row(name, value) => {
+                flush(&mut runs, &mut kv_buf);
+                runs.push(DetailRun::Row(name.clone(), value.clone()));
+            }
+            DetailLine::Text(wrapped) => {
+                flush(&mut runs, &mut kv_buf);
+                runs.push(DetailRun::Text(wrapped.clone()));
+            }
+        }
+    }
+    flush(&mut runs, &mut kv_buf);
+    runs
+}
+fn kv_item_height(value_lines_len: usize, label_sz: f32, value_sz: f32) -> f32 {
+    line_h(label_sz) + value_lines_len.max(1) as f32 * line_h(value_sz)
 }
 
 fn draw_card(w: &mut PdfWriter, doc: &PdfDocumentReference, p: &PdfPalette, r: &TestResult) {
@@ -567,8 +680,12 @@ fn draw_card(w: &mut PdfWriter, doc: &PdfDocumentReference, p: &PdfPalette, r: &
         .as_deref()
         .map(|s| wrap_line(s, max_chars_width(DETAIL_SZ, card_w)))
         .unwrap_or_default();
+    const KV_GAP: f32 = 6.0;
+    const KV_LABEL_SZ: f32 = 8.0;
+    let half_col_w = (card_w - KV_GAP) / 2.0;
     let detail_lines: Vec<DetailLine> = r.details.iter().filter(|l| !l.trim().is_empty()).map(|line| classify_detail(line, card_w, DETAIL_SZ)).collect();
-    let has_body = !override_lines.is_empty() || !detail_lines.is_empty();
+    let runs = group_detail_runs(&detail_lines, half_col_w, DETAIL_SZ);
+    let has_body = !override_lines.is_empty() || !runs.is_empty();
 
     let mut measured = 5.0_f32; // верхний паддинг
     measured += line_h(TITLE_SZ);
@@ -576,10 +693,16 @@ fn draw_card(w: &mut PdfWriter, doc: &PdfDocumentReference, p: &PdfPalette, r: &
     if has_body {
         measured += 3.0; // разделитель
         measured += override_lines.len() as f32 * line_h(DETAIL_SZ);
-        for d in &detail_lines {
-            measured += match d {
-                DetailLine::Row(..) => ROW_H,
-                DetailLine::Text(lines) => lines.len() as f32 * line_h(DETAIL_SZ),
+        for run in &runs {
+            measured += match run {
+                DetailRun::Row(..) => ROW_H,
+                DetailRun::Text(lines) => lines.len() as f32 * line_h(DETAIL_SZ),
+                DetailRun::KvGrid(items) => items
+                    .chunks(2)
+                    .map(|pair| {
+                        pair.iter().map(|(_, v)| kv_item_height(v.len(), KV_LABEL_SZ, DETAIL_SZ)).fold(0.0_f32, f32::max)
+                    })
+                    .sum(),
             };
         }
     }
@@ -623,14 +746,19 @@ fn draw_card(w: &mut PdfWriter, doc: &PdfDocumentReference, p: &PdfPalette, r: &
         for line in &override_lines {
             w.draw_line(doc, line, DETAIL_SZ, false, &p.text_muted, CARD_INDENT);
         }
-        for d in &detail_lines {
-            match d {
-                DetailLine::Row(name, value) => {
+        for run in &runs {
+            match run {
+                DetailRun::Row(name, value) => {
                     w.draw_row(doc, name, value, DETAIL_SZ, &p.text, &p.text_muted, &p.line_soft, CARD_INDENT, CARD_RIGHT_PAD, ROW_H);
                 }
-                DetailLine::Text(lines) => {
+                DetailRun::Text(lines) => {
                     for line in lines {
                         w.draw_line(doc, line, DETAIL_SZ, false, &p.text, CARD_INDENT);
+                    }
+                }
+                DetailRun::KvGrid(items) => {
+                    for pair in items.chunks(2) {
+                        w.draw_kv_pair(doc, &pair[0], pair.get(1), KV_LABEL_SZ, DETAIL_SZ, &p.text_faint, &p.text, CARD_INDENT, half_col_w, KV_GAP);
                     }
                 }
             }

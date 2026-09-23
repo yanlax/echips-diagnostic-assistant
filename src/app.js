@@ -68,7 +68,7 @@ var FILLS = [
 ];
 function fillBg(f){ return f.bg || f.color; }
 var KEYROWS = [
-  ['Esc','F1','F2','F3','F4','F5','F6','F7','F8','F9','F10','F11','F12','Del'],
+  ['Esc','F1','F2','F3','F4','F5','F6','F7','F8','F9','F10','F11','F12','PrtScr','Del'],
   ['`','1','2','3','4','5','6','7','8','9','0','-','=','Bksp'],
   ['Tab','Q','W','E','R','T','Y','U','I','O','P','[',']','\\'],
   ['Caps','A','S','D','F','G','H','J','K','L',';',"'",'Enter'],
@@ -1604,7 +1604,7 @@ var NUMPAD = [
 ];
 var MEDIA = [['AudioVolumeUp','Гром. +'],['AudioVolumeDown','Гром. −'],['AudioVolumeMute','Mute'],['MediaPlayPause','Play/Pause'],['MediaTrackNext','След.'],['MediaTrackPrevious','Пред.']];
 var CODEMAP = (function(){
-  var named = { 'Esc':['Escape'],'Del':['Delete'],'`':['Backquote'],'-':['Minus'],'=':['Equal'],'Bksp':['Backspace'],'Tab':['Tab'],
+  var named = { 'Esc':['Escape'],'Del':['Delete'],'PrtScr':['PrintScreen'],'`':['Backquote'],'-':['Minus'],'=':['Equal'],'Bksp':['Backspace'],'Tab':['Tab'],
     '[':['BracketLeft'],']':['BracketRight'],'\\':['Backslash'],'Caps':['CapsLock'],';':['Semicolon'],"'":['Quote'],
     'Enter':['Enter'],',':['Comma'],'.':['Period'],'/':['Slash'],
     'Win':['MetaLeft','MetaRight'],'Space':['Space'],'←':['ArrowLeft'],'↑':['ArrowUp'],'↓':['ArrowDown'],'→':['ArrowRight'] };
@@ -1665,28 +1665,91 @@ function kbSummaryLines(){
 }
 document.addEventListener('keyup', function(e){
   if (S.screen!=='test' || cat().kind!=='keyboard') return;
+  // Клавишу отпустили раньше, чем сработал отложенный коммит ControlLeft
+  // (см. ниже про AltGr) — например, короткий одиночный тап Ctrl без
+  // Alt: пометим, чтобы коммит не выставил "нажата" уже после отпускания.
+  if (e.code === 'ControlLeft' && S.altGrPendingCtrl) S.altGrPendingCtrl.released = true;
   var id = CODEMAP[e.code]; if (!id) return;
   var k = kbStat(id); k.down = false; k.lastUp = Date.now();
   render();
 });
 window.addEventListener('blur', function(){ Object.keys(S.kstat).forEach(function(id){ S.kstat[id].down = false; }); });
-document.addEventListener('keydown', function(e){
-  if (S.screen!=='test' || cat().kind!=='keyboard') return;
-  if (e.target && (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA')) return;
-  e.preventDefault();
-  var id = CODEMAP[e.code];
-  if (!id){ S.lastUnknown = e.code; return; }
-  var k = kbStat(id), now = Date.now();
-  if (e.repeat){ k.rep++; return; }
+// Отмечает клавишу нажатой в статистике — вынесено из обработчика keydown
+// отдельной функцией, т.к. для ControlLeft вызов теперь может отложиться
+// (см. ниже про фантомный Ctrl от AltGr).
+function kbCommitPress(id, now, stillDown){
+  var k = kbStat(id);
   k.n++;
   if (k.n>1 && k.lastUp && now-k.lastUp<25) k.chat++;
-  k.down = true; k.downAt = now;
+  if (stillDown === false) { k.down = false; } else { k.down = true; k.downAt = now; }
   S.keys[id] = true;
   // пока есть нажатые клавиши, раз в 0,4 с обновляем признак залипания
   if (!S.kbT) S.kbT = setInterval(function(){
     var any = Object.keys(S.kstat).some(function(i){ return S.kstat[i].down; });
     if (S.screen==='test' && cat().kind==='keyboard' && any) render(); else if (!any){ clearInterval(S.kbT); S.kbT = null; }
   }, 400);
+}
+document.addEventListener('keydown', function(e){
+  if (S.screen!=='test' || cat().kind!=='keyboard') return;
+  if (e.target && (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA')) return;
+  e.preventDefault();
+  var id = CODEMAP[e.code];
+  if (!id){ S.lastUnknown = e.code; return; }
+  var now = Date.now();
+
+  // AltGr (правый Alt) на многих раскладках физически шлёт синтетическое
+  // нажатие левого Ctrl прямо перед собой — так исторически работает
+  // Windows для обратной совместимости (эмуляция Ctrl+Alt), не наш баг и
+  // не дребезг реальной клавиши. Техник писал в отчёте: "при нажатии
+  // правого alt считает нажатие на него и на левый ctrl". Ловим: не
+  // засчитываем ControlLeft сразу, а откладываем на короткое окно — если
+  // следом придёт AltRight, значит это и был фантомный Ctrl, гасим его и
+  // считаем только настоящее нажатие Alt.
+  if (e.code === 'ControlLeft' && !e.repeat) {
+    S.altGrPendingCtrl = { id: id, at: now, released: false };
+    setTimeout(function(){
+      if (S.altGrPendingCtrl && S.altGrPendingCtrl.at === now) {
+        kbCommitPress(id, now, !S.altGrPendingCtrl.released);
+        S.altGrPendingCtrl = null;
+        render();
+      }
+    }, 30);
+    return;
+  }
+  if (e.code === 'AltRight' && S.altGrPendingCtrl && now - S.altGrPendingCtrl.at < 30) {
+    S.altGrPendingCtrl = null; // фантомный Ctrl погашен, ниже считаем только AltRight
+  }
+
+  var k = kbStat(id);
+  if (e.repeat){ k.rep++; return; }
+  kbCommitPress(id, now);
+  render();
+});
+
+// Клавиши, которые keyhook.rs глушит целиком для системы (Win-блокировка на
+// время теста, см. kbWinToggle) — hook сам шлёт их обратно нам событием
+// "hook-relay-key" (vk-код + нажата/отпущена), иначе тест бы вообще не
+// увидел эти нажатия (низкоуровневый хук блокирует клавишу для всей
+// системы, включая наш же webview). Числовые vk-коды — те же VK_*
+// константы, что в keyhook.rs::is_blocked_vk (кроме Win — он не
+// отображается в раскладке теста, ретранслировать нечего).
+var HOOK_VK_CODE = {
+  173:'AudioVolumeMute', 174:'AudioVolumeDown', 175:'AudioVolumeUp',
+  176:'MediaTrackNext', 177:'MediaTrackPrevious', 178:'MediaStop', 179:'MediaPlayPause',
+  44:'PrintScreen'
+};
+tauriEvent.listen('hook-relay-key', function(ev){
+  if (S.screen!=='test' || cat().kind!=='keyboard') return;
+  var code = HOOK_VK_CODE[ev.payload.vk];
+  if (!code) return;
+  var id = CODEMAP[code];
+  if (!id){ S.lastUnknown = code; render(); return; }
+  var now = Date.now();
+  if (ev.payload.down) {
+    kbCommitPress(id, now);
+  } else {
+    var k = kbStat(id); k.down = false; k.lastUp = now;
+  }
   render();
 });
 

@@ -32,15 +32,25 @@
 // powershell.rs): пишется, установились ли оба хука, каждое «съеденное»
 // нажатие Win/медиа-клавиши и каждое срабатывание EVENT_SYSTEM_FOREGROUND
 // (класс+процесс окна, совпало ли с «Пуском», отправлен ли Escape) — пока
-// блок включён. Следующий реальный прогон с этим логом покажет, где именно
-// цепочка рвётся (хук вообще не видит нажатие? окно другого класса/
-// процесса, чем ожидали? событие не приходит вовсе?), вместо очередной
-// догадки без данных.
+// блок включён. Следующий реальный прогон с этим логом (v0.12.0) подтвердил:
+// работает — Escape уходит сразу, фокус возвращается в наше окно.
+//
+// PrtScr тоже добавлена в список блокируемых (Windows 11 по умолчанию
+// открывает Ножницы прямо на неё) — но здесь другая проблема: раз хук
+// глушит клавишу ДЛЯ ВСЕЙ СИСТЕМЫ, включая наш собственный webview, простое
+// добавление в is_blocked_vk означало бы, что тест клавиатуры вообще
+// перестал бы видеть нажатие PrtScr (или F-клавиш, если они на конкретном
+// ноутбуке уходят медиа-кодами, а не VK_F1..F12 — см. is_blocked_vk).
+// Поэтому теперь при перехвате хук сам ретранслирует нажатие обратно в наш
+// JS отдельным Tauri-событием "hook-relay-key" (см. relay_key/WINDOW ниже),
+// а не просто глушит его — тест по-прежнему видит и засчитывает нажатие.
 
 #[cfg(target_os = "windows")]
 mod win {
     use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
-    use std::sync::mpsc;
+    use std::sync::{mpsc, Mutex};
+    use serde::Serialize;
+    use tauri::{Emitter, Window};
     use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::System::Threading::{
         GetCurrentThreadId, OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -51,7 +61,7 @@ mod win {
         VK_BROWSER_FAVORITES, VK_BROWSER_FORWARD, VK_BROWSER_HOME, VK_BROWSER_REFRESH, VK_BROWSER_SEARCH,
         VK_BROWSER_STOP, VK_ESCAPE, VK_LAUNCH_APP1, VK_LAUNCH_APP2, VK_LAUNCH_MAIL, VK_LAUNCH_MEDIA_SELECT,
         VK_LWIN, VK_MEDIA_NEXT_TRACK, VK_MEDIA_PLAY_PAUSE, VK_MEDIA_PREV_TRACK, VK_MEDIA_STOP, VK_RWIN,
-        VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_VOLUME_UP,
+        VK_SNAPSHOT, VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_VOLUME_UP,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, DispatchMessageW, GetClassNameW, GetMessageW, GetWindowThreadProcessId,
@@ -65,6 +75,33 @@ mod win {
     /// Нужен, чтобы разбудить GetMessageW сообщением WM_QUIT при остановке
     /// (низкоуровневые хуки требуют цикла сообщений именно на своём потоке).
     static HOOK_THREAD_ID: AtomicIsize = AtomicIsize::new(0);
+    /// Окно, которому шлём событие "hook-relay-key" — установлено при
+    /// start(). Нужно, потому что WH_KEYBOARD_LL глушит клавишу для ВСЕЙ
+    /// системы, включая наш же webview: просто добавить, скажем, PrtScr в
+    /// is_blocked_vk означало бы, что тест клавиатуры перестал бы видеть
+    /// нажатие PrtScr вообще (см. relay_key ниже).
+    static WINDOW: Mutex<Option<Window>> = Mutex::new(None);
+
+    #[derive(Serialize, Clone)]
+    struct RelayKey {
+        vk: u32,
+        down: bool,
+    }
+    /// Раз хук глушит нажатие для всей системы (иначе не подавить системное
+    /// действие — OSD громкости, Snipping Tool на PrtScr и т.п.), сами же
+    /// отправляем его обратно в JS отдельным Tauri-событием, чтобы тест
+    /// клавиатуры всё равно засчитал нажатие. Win/меню «Пуск» сюда не
+    /// входит — эта клавиша в раскладке теста не отображается, ретранслировать нечего.
+    fn relay_key(vk: u32, down: bool) {
+        if vk as u16 == VK_LWIN || vk as u16 == VK_RWIN {
+            return;
+        }
+        if let Ok(guard) = WINDOW.lock() {
+            if let Some(w) = guard.as_ref() {
+                let _ = w.emit("hook-relay-key", RelayKey { vk, down });
+            }
+        }
+    }
 
     /// Диагностический лог для этого хука — отдельно от perf.log
     /// (powershell.rs), т.к. это не про время вызова, а про сам факт и
@@ -96,8 +133,10 @@ mod win {
 
     /// «Съедаемые» коды клавиш: сама Win + медиа-клавиши F-ряда, которые
     /// на многих ноутбуках всплывают системным OSD (громкость/медиа/
-    /// браузер) — яркость сюда не входит: у неё нет отдельного VK-кода,
-    /// её обрабатывает встроенный контроллер/BIOS ещё до ОС (как Fn).
+    /// браузер), + PrtScr (на Windows 11 по умолчанию сама открывает
+    /// Ножницы/Snipping Tool) — яркость сюда не входит: у неё нет
+    /// отдельного VK-кода, её обрабатывает встроенный контроллер/BIOS ещё
+    /// до ОС (как Fn).
     fn is_blocked_vk(vk: u32) -> bool {
         matches!(
             vk as u16,
@@ -121,6 +160,7 @@ mod win {
                 | VK_BROWSER_SEARCH
                 | VK_BROWSER_FAVORITES
                 | VK_BROWSER_HOME
+                | VK_SNAPSHOT
         )
     }
 
@@ -131,6 +171,8 @@ mod win {
             let is_key_msg = msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP;
             if is_key_msg && is_blocked_vk(kb.vkCode) {
                 log(&format!("hook_proc: съедена vk=0x{:02X} msg=0x{:04X}", kb.vkCode, msg));
+                let down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
+                relay_key(kb.vkCode, down);
                 return 1; // «съедаем» нажатие — дальше по системе не идёт
             }
         }
@@ -215,9 +257,12 @@ mod win {
         SendInput(2, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32);
     }
 
-    pub fn start() -> Result<(), String> {
+    pub fn start(window: Window) -> Result<(), String> {
         if ACTIVE.swap(true, Ordering::SeqCst) {
             return Ok(()); // уже включено
+        }
+        if let Ok(mut guard) = WINDOW.lock() {
+            *guard = Some(window);
         }
         log("start: включение блокировки");
         let (tx, rx) = mpsc::channel::<Result<(), String>>();
@@ -276,17 +321,21 @@ mod win {
                 PostThreadMessageW(tid as u32, WM_QUIT, 0, 0);
             }
         }
+        if let Ok(mut guard) = WINDOW.lock() {
+            *guard = None;
+        }
     }
 }
 
 #[tauri::command(async)]
-pub fn start_win_key_block() -> Result<(), String> {
+pub fn start_win_key_block(window: tauri::Window) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        win::start()
+        win::start(window)
     }
     #[cfg(not(target_os = "windows"))]
     {
+        let _ = window;
         Err("Доступно только в Windows-сборке".to_string())
     }
 }

@@ -90,7 +90,7 @@ pub async fn fetch_techs() -> Result<Vec<Tech>, String> {
 //
 // Токен GitHub (fine-grained, один репозиторий, Contents: write) админ вводит
 // один раз — он хранится локально в %LOCALAPPDATA%\Echips\HardwareCheck\
-// admin_token.txt и в exe/репозиторий не попадает. Обычные техники токена не
+// admin_token.dat (зашифрован DPAPI, см. ниже) и в exe/репозиторий не попадает. Обычные техники токена не
 // имеют, поэтому писать в data/techs.json могут только с машины админа.
 // Запись — через GitHub Contents API (GET sha + текущее содержимое, затем PUT
 // с новым содержимым и тем же sha: если файл успели изменить, GitHub вернёт
@@ -99,24 +99,67 @@ pub async fn fetch_techs() -> Result<Vec<Tech>, String> {
 const API_URL: &str =
     "https://api.github.com/repos/yanlax/echips-diagnostic-assistant/contents/data/techs.json";
 
-fn token_path() -> std::path::PathBuf {
+fn token_dir() -> std::path::PathBuf {
     let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into());
-    std::path::PathBuf::from(base)
-        .join("Echips")
-        .join("HardwareCheck")
-        .join("admin_token.txt")
+    std::path::PathBuf::from(base).join("Echips").join("HardwareCheck")
+}
+
+/// Токен хранится зашифрованным через DPAPI (ProtectedData, область
+/// CurrentUser): расшифровать его может только тот же пользователь Windows на
+/// этом же компьютере — копия файла на другой машине/под другим пользователем
+/// бесполезна. Файл — base64 от зашифрованного блока.
+fn token_path() -> std::path::PathBuf {
+    token_dir().join("admin_token.dat")
+}
+
+/// Открытый файл из версий до 0.18 — при первом чтении переезжает в DPAPI.
+fn legacy_token_path() -> std::path::PathBuf {
+    token_dir().join("admin_token.txt")
+}
+
+#[cfg(target_os = "windows")]
+fn dpapi(protect: bool, input_b64: &str) -> Result<String, String> {
+    // input_b64 — только base64 (A–Z a–z 0–9 + / = - _), в одинарные кавычки безопасно.
+    let method = if protect { "Protect" } else { "Unprotect" };
+    let script = format!(
+        "Add-Type -AssemblyName System.Security; \
+         $b = [Convert]::FromBase64String('{input_b64}'); \
+         [Convert]::ToBase64String([System.Security.Cryptography.ProtectedData]::{method}($b, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser))"
+    );
+    crate::powershell::run_ps(&script).map(|o| o.trim().to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn dpapi(_protect: bool, _input_b64: &str) -> Result<String, String> {
+    Err("Шифрование токена доступно только в Windows-сборке".to_string())
+}
+
+fn store_token(token: &str) -> Result<(), String> {
+    let cipher = dpapi(true, &b64_encode(token.as_bytes()))?;
+    std::fs::create_dir_all(token_dir()).map_err(|e| e.to_string())?;
+    std::fs::write(token_path(), cipher).map_err(|e| format!("Не удалось сохранить токен: {e}"))
 }
 
 fn read_token() -> Option<String> {
-    std::fs::read_to_string(token_path())
-        .ok()
-        .map(|t| t.trim().to_string())
-        .filter(|t| !t.is_empty())
+    if let Ok(cipher) = std::fs::read_to_string(token_path()) {
+        let plain_b64 = dpapi(false, cipher.trim()).ok()?;
+        let bytes = b64_decode(&plain_b64)?;
+        return String::from_utf8(bytes).ok().filter(|t| !t.trim().is_empty());
+    }
+    let legacy = std::fs::read_to_string(legacy_token_path()).ok()?;
+    let t = legacy.trim().to_string();
+    if t.is_empty() {
+        return None;
+    }
+    if store_token(&t).is_ok() {
+        let _ = std::fs::remove_file(legacy_token_path());
+    }
+    Some(t)
 }
 
 #[tauri::command]
 pub fn techs_token_status() -> bool {
-    read_token().is_some()
+    token_path().exists() || legacy_token_path().exists()
 }
 
 #[tauri::command]
@@ -125,16 +168,15 @@ pub fn techs_save_token(token: String) -> Result<(), String> {
     if t.len() < 20 || t.chars().any(|c| c.is_whitespace()) {
         return Err("Похоже, это не токен GitHub (слишком короткий или с пробелами)".to_string());
     }
-    let path = token_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(path, t).map_err(|e| format!("Не удалось сохранить токен: {e}"))
+    store_token(t)?;
+    let _ = std::fs::remove_file(legacy_token_path());
+    Ok(())
 }
 
 #[tauri::command]
 pub fn techs_clear_token() {
     let _ = std::fs::remove_file(token_path());
+    let _ = std::fs::remove_file(legacy_token_path());
 }
 
 fn b64_encode(data: &[u8]) -> String {
@@ -149,6 +191,35 @@ fn b64_encode(data: &[u8]) -> String {
         out.push(if chunk.len() > 2 { T[n as usize & 63] as char } else { '=' });
     }
     out
+}
+
+fn b64_decode(s: &str) -> Option<Vec<u8>> {
+    let val = |c: u8| -> Option<u32> {
+        match c {
+            b'A'..=b'Z' => Some((c - b'A') as u32),
+            b'a'..=b'z' => Some((c - b'a') as u32 + 26),
+            b'0'..=b'9' => Some((c - b'0') as u32 + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    };
+    let bytes: Vec<u8> = s.bytes().filter(|c| !c.is_ascii_whitespace() && *c != b'=').collect();
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
+    for chunk in bytes.chunks(4) {
+        let mut n = 0u32;
+        for (i, c) in chunk.iter().enumerate() {
+            n |= val(*c)? << (18 - 6 * i as u32);
+        }
+        out.push((n >> 16) as u8);
+        if chunk.len() > 2 {
+            out.push((n >> 8) as u8);
+        }
+        if chunk.len() > 3 {
+            out.push(n as u8);
+        }
+    }
+    Some(out)
 }
 
 fn gh_error(status: reqwest::StatusCode) -> String {

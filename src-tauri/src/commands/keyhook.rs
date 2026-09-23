@@ -24,9 +24,18 @@
 // механизм, добавлена подстраховка через SetWinEventHook
 // (EVENT_SYSTEM_FOREGROUND): если, несмотря на перехват клавиши, «Пуск»
 // всё же стал активным окном — тут же шлём ему Escape, пока блок включён.
-// Это тоже не железобетонная гарантия (см. HANDOFF.md/CLAUDE.md — нужен
-// ещё один реальный прогон на Windows для проверки), но должно закрывать
-// подавляющее большинство случаев мгновенно, без заметного мигания.
+//
+// ПОВТОРНЫЙ реальный тест (v0.11.0) показал: «Пуск» всё так же открывается,
+// подстраховка не помогла. Вслепую гадать дальше третий раз подряд не имеет
+// смысла — вместо этого добавлено логирование (см. `log()` ниже,
+// %LOCALAPPDATA%\Echips\HardwareCheck\keyhook.log, как и perf.log в
+// powershell.rs): пишется, установились ли оба хука, каждое «съеденное»
+// нажатие Win/медиа-клавиши и каждое срабатывание EVENT_SYSTEM_FOREGROUND
+// (класс+процесс окна, совпало ли с «Пуском», отправлен ли Escape) — пока
+// блок включён. Следующий реальный прогон с этим логом покажет, где именно
+// цепочка рвётся (хук вообще не видит нажатие? окно другого класса/
+// процесса, чем ожидали? событие не приходит вовсе?), вместо очередной
+// догадки без данных.
 
 #[cfg(target_os = "windows")]
 mod win {
@@ -56,6 +65,34 @@ mod win {
     /// Нужен, чтобы разбудить GetMessageW сообщением WM_QUIT при остановке
     /// (низкоуровневые хуки требуют цикла сообщений именно на своём потоке).
     static HOOK_THREAD_ID: AtomicIsize = AtomicIsize::new(0);
+
+    /// Диагностический лог для этого хука — отдельно от perf.log
+    /// (powershell.rs), т.к. это не про время вызова, а про сам факт и
+    /// детали срабатывания. См. заметку в начале файла: без этого третья
+    /// попытка починить блокировку Win была бы такой же догадкой вслепую,
+    /// как первые две.
+    fn log(line: &str) {
+        let base = match std::env::var("LOCALAPPDATA") {
+            Ok(v) if !v.is_empty() => v,
+            _ => return,
+        };
+        let dir = std::path::PathBuf::from(base).join("Echips").join("HardwareCheck");
+        if std::fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+        let path = dir.join("keyhook.log");
+        if std::fs::metadata(&path).map(|m| m.len() > 512 * 1024).unwrap_or(false) {
+            let _ = std::fs::rename(&path, dir.join("keyhook.old.log"));
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            use std::io::Write;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            let _ = writeln!(f, "{now} · {line}");
+        }
+    }
 
     /// «Съедаемые» коды клавиш: сама Win + медиа-клавиши F-ряда, которые
     /// на многих ноутбуках всплывают системным OSD (громкость/медиа/
@@ -93,6 +130,7 @@ mod win {
             let msg = wparam as u32;
             let is_key_msg = msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP;
             if is_key_msg && is_blocked_vk(kb.vkCode) {
+                log(&format!("hook_proc: съедена vk=0x{:02X} msg=0x{:04X}", kb.vkCode, msg));
                 return 1; // «съедаем» нажатие — дальше по системе не идёт
             }
         }
@@ -121,34 +159,35 @@ mod win {
         let mut class_buf = [0u16; 256];
         let len = GetClassNameW(hwnd, class_buf.as_mut_ptr(), class_buf.len() as i32);
         if len <= 0 {
+            log("win_event_proc: foreground сменился, GetClassNameW не удалось");
             return;
         }
         let class_name = String::from_utf16_lossy(&class_buf[..len as usize]);
-        if class_name != "Windows.UI.Core.CoreWindow" {
-            return;
-        }
         let mut pid: u32 = 0;
         GetWindowThreadProcessId(hwnd, &mut pid);
-        if pid == 0 {
-            return;
+        let mut proc_name = String::from("?");
+        if pid != 0 {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if !handle.is_null() {
+                let mut name_buf = [0u16; 260];
+                let mut name_len = name_buf.len() as u32;
+                if QueryFullProcessImageNameW(handle, 0, name_buf.as_mut_ptr(), &mut name_len) != 0 {
+                    proc_name = String::from_utf16_lossy(&name_buf[..name_len as usize]);
+                }
+                CloseHandle(handle);
+            }
         }
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if handle.is_null() {
-            return;
-        }
-        let mut name_buf = [0u16; 260];
-        let mut name_len = name_buf.len() as u32;
-        let ok = QueryFullProcessImageNameW(handle, 0, name_buf.as_mut_ptr(), &mut name_len);
-        CloseHandle(handle);
-        if ok == 0 {
-            return;
-        }
-        let path = String::from_utf16_lossy(&name_buf[..name_len as usize]).to_lowercase();
-        let is_start = path.ends_with("startmenuexperiencehost.exe") || path.ends_with("shellexperiencehost.exe");
+        let is_start = class_name == "Windows.UI.Core.CoreWindow"
+            && (proc_name.to_lowercase().ends_with("startmenuexperiencehost.exe")
+                || proc_name.to_lowercase().ends_with("shellexperiencehost.exe"));
+        log(&format!(
+            "win_event_proc: foreground класс=\"{class_name}\" процесс=\"{proc_name}\" pid={pid} start={is_start}"
+        ));
         if !is_start {
             return;
         }
         send_escape();
+        log("win_event_proc: Escape отправлен");
     }
 
     unsafe fn send_escape() {
@@ -166,14 +205,17 @@ mod win {
         if ACTIVE.swap(true, Ordering::SeqCst) {
             return Ok(()); // уже включено
         }
+        log("start: включение блокировки");
         let (tx, rx) = mpsc::channel::<Result<(), String>>();
         std::thread::spawn(move || unsafe {
             let hook: HHOOK = SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), std::ptr::null_mut(), 0);
             if hook.is_null() {
+                log("start: SetWindowsHookExW(WH_KEYBOARD_LL) — ОШИБКА");
                 ACTIVE.store(false, Ordering::SeqCst);
                 let _ = tx.send(Err("Не удалось установить перехват клавиатуры".to_string()));
                 return;
             }
+            log("start: WH_KEYBOARD_LL установлен");
             let win_event_hook = SetWinEventHook(
                 EVENT_SYSTEM_FOREGROUND,
                 EVENT_SYSTEM_FOREGROUND,
@@ -183,6 +225,11 @@ mod win {
                 0,
                 WINEVENT_OUTOFCONTEXT,
             );
+            log(if win_event_hook.is_null() {
+                "start: SetWinEventHook — ОШИБКА, подстраховки Escape не будет"
+            } else {
+                "start: SetWinEventHook установлен"
+            });
             HOOK_THREAD_ID.store(GetCurrentThreadId() as isize, Ordering::SeqCst);
             let _ = tx.send(Ok(()));
             let mut msg: MSG = std::mem::zeroed();
@@ -208,6 +255,7 @@ mod win {
         if !ACTIVE.load(Ordering::SeqCst) {
             return;
         }
+        log("stop: выключение блокировки");
         let tid = HOOK_THREAD_ID.load(Ordering::SeqCst);
         if tid != 0 {
             unsafe {

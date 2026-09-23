@@ -1,6 +1,7 @@
 // Отправка отчётов администратору: после автопрогона и при ручном экспорте
 // приложение кладёт JSON прямо в приватный репозиторий отчётов
-// (yanlax/echips-reports) через GitHub Contents API.
+// (yanlax/echips-reports) через GitHub Contents API, по структуре
+// <инженер>/<дата диагностики>/<время>_<серийник>_<auto|manual>.json.
 //
 // Токен вшивается в exe при сборке из секрета GitHub Actions
 // ECHIPS_REPORTS_TOKEN (в публичном коде его нет). Это осознанный компромисс
@@ -55,14 +56,17 @@ async fn post(client: &reqwest::Client, envelope: &Value) -> Result<(), String> 
     let engineer = safe(report["engineer"].as_str().unwrap_or(""));
     let kind = safe(envelope["kind"].as_str().unwrap_or(""));
     let now = chrono::Local::now();
-    let path = format!(
-        "reports/{}/{}_{}_{}_{}.json",
-        now.format("%Y-%m"),
-        now.format("%Y%m%d-%H%M%S%3f"),
-        serial,
-        engineer,
-        kind
-    );
+    // Папка дня — дата самой диагностики (начало прогона), а не отправки:
+    // отчёт из очереди, ушедший на следующий день, всё равно ляжет в свой день.
+    let day = report["started_at"]
+        .as_str()
+        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+        .map(|t| t.with_timezone(&chrono::Local))
+        .unwrap_or(now)
+        .format("%Y-%m-%d")
+        .to_string();
+    // Структура: <инженер>/<дата диагностики>/<время отправки>_<серийник>_<тип>.json
+    let path = format!("{}/{}/{}_{}_{}.json", engineer, day, now.format("%H%M%S%3f"), serial, kind);
     let url_path: Vec<String> = path.split('/').map(|s| urlencoding::encode(s).into_owned()).collect();
     let url = format!("https://api.github.com/repos/{REPO}/contents/{}", url_path.join("/"));
     let pretty = serde_json::to_string_pretty(envelope).map_err(|e| e.to_string())?;

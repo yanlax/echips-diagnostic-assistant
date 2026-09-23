@@ -410,7 +410,7 @@ GitHub Actions (`.github/workflows/build.yml`, ручной запуск чер�
 
 0.20.0 — отчёты уходят администратору: после автопрогона и при ручном
 экспорте приложение кладёт JSON в приватный репозиторий
-`yanlax/echips-reports` (`reports/ГГГГ-ММ/…`) через GitHub Contents API.
+`yanlax/echips-reports` (структура `<инженер>/<дата диагностики>/<время>_<серийник>_<auto|manual>.json`) через GitHub Contents API.
 Токен (fine-grained, только этот репозиторий) вшивается в exe из секрета
 Actions `ECHIPS_REPORTS_TOKEN`; без сети отчёт ждёт в локальной очереди.
 

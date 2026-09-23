@@ -159,9 +159,15 @@ const RADIUS_BOX_SM: f32 = 2.4;
 
 const FONT_REGULAR: &[u8] = include_bytes!("../../assets/fonts/PTSans-Regular.ttf");
 const FONT_BOLD: &[u8] = include_bytes!("../../assets/fonts/PTSans-Bold.ttf");
-const LOGO_PNG: &[u8] = include_bytes!("../../assets/logo.png");
-const LOGO_PX_W: f32 = 194.0;
-const LOGO_PX_H: f32 = 256.0;
+/// Фирменный знак шапки — растеризован из logo/echips-mark-orange.svg,
+/// присланного пользователем отдельным пакетом (echips-report.zip):
+/// оранжевый шестиугольник для тёмного фона, как в .brand .hex референса.
+/// Раньше здесь использовался обычный логотип приложения (logo.png) —
+/// пятиугольник с вписанным текстом ECHIPS — и рядом ещё раз рисовался
+/// текст "ECHIPS HARDWARE CHECK": получалось два разных знака и дублирующая
+/// подпись, отсюда и замечание "шапка отличается, логотип другой".
+const MARK_PNG: &[u8] = include_bytes!("../../assets/mark_orange.png");
+const MARK_PX: f32 = 256.0;
 
 fn draw_rule(layer: &PdfLayerReference, color: Rgb, x0: f32, x1: f32, y0: f32, y1: f32) {
     layer.set_fill_color(Color::Rgb(color));
@@ -396,6 +402,21 @@ fn format_duration(report: &DiagnosticReport) -> Option<String> {
         format!("{m} мин {s} с")
     } else {
         format!("{s} с")
+    })
+}
+
+/// "23.09.2026 08:33 → 08:39" (или с датой на обоих концах, если сутки
+/// разные) — как в референсе (.cover-meta "Начало / окончание"), вместо
+/// сырых ISO-строк started_at/finished_at.
+fn format_time_range(report: &DiagnosticReport) -> Option<String> {
+    let start = chrono::DateTime::parse_from_rfc3339(&report.started_at).ok()?;
+    let end = chrono::DateTime::parse_from_rfc3339(&report.finished_at).ok()?;
+    let start_local = start.with_timezone(&chrono::Local);
+    let end_local = end.with_timezone(&chrono::Local);
+    Some(if start_local.date_naive() == end_local.date_naive() {
+        format!("{} {} → {}", start_local.format("%d.%m.%Y"), start_local.format("%H:%M"), end_local.format("%H:%M"))
+    } else {
+        format!("{} → {}", start_local.format("%d.%m.%Y %H:%M"), end_local.format("%d.%m.%Y %H:%M"))
     })
 }
 
@@ -660,18 +681,18 @@ fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
     let cover_h = if bad_n > 0 { 78.0 } else { 72.0 };
     draw_rule(&w.layer, p.cover_bg.clone(), 0.0, PDF_PAGE_W, cover_top - cover_h, cover_top + PDF_MARGIN_TOP);
 
-    let logo_h = 13.0_f32;
-    let logo_w = logo_h * (LOGO_PX_W / LOGO_PX_H);
-    let logo_y = cover_top - 3.0 - logo_h;
-    if let Ok(decoder) = printpdf::image_crate::codecs::png::PngDecoder::new(std::io::Cursor::new(LOGO_PNG)) {
-        if let Ok(logo) = Image::try_from(decoder) {
-            let natural_h_mm = LOGO_PX_H / 300.0 * 25.4;
-            let scale = logo_h / natural_h_mm;
-            logo.add_to_layer(
+    // ---- .brand: знак + "ECHIPS" + плашка "HARDWARE CHECK", одной строкой ----
+    let mark_h = 7.0_f32;
+    let mark_y = cover_top - 3.0 - mark_h;
+    if let Ok(decoder) = printpdf::image_crate::codecs::png::PngDecoder::new(std::io::Cursor::new(MARK_PNG)) {
+        if let Ok(mark) = Image::try_from(decoder) {
+            let natural_h_mm = MARK_PX / 300.0 * 25.4;
+            let scale = mark_h / natural_h_mm;
+            mark.add_to_layer(
                 w.layer.clone(),
                 ImageTransform {
                     translate_x: Some(Mm(PDF_MARGIN_L)),
-                    translate_y: Some(Mm(logo_y)),
+                    translate_y: Some(Mm(mark_y)),
                     scale_x: Some(scale),
                     scale_y: Some(scale),
                     ..Default::default()
@@ -679,11 +700,22 @@ fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
             );
         }
     }
+    let word_x = PDF_MARGIN_L + mark_h + 4.0;
+    let brand_baseline = mark_y + mark_h / 2.0 - 1.8;
     w.layer.set_fill_color(Color::Rgb(p.cover_text.clone()));
-    w.layer
-        .use_text("ECHIPS HARDWARE CHECK", 14.0, Mm(PDF_MARGIN_L + logo_w + 5.0), Mm(logo_y + logo_h / 2.0 - 2.0), &w.font_bold);
+    w.layer.use_text("ECHIPS", 12.5, Mm(word_x), Mm(brand_baseline), &w.font_bold);
+    let word_w = pt_to_mm(12.5) * 0.62 * "ECHIPS".chars().count() as f32;
+    let kicker_text = "HARDWARE CHECK";
+    let kicker_x0 = word_x + word_w + 4.0;
+    let kicker_w = pt_to_mm(8.0) * 0.58 * kicker_text.chars().count() as f32 + 8.0;
+    let kicker_h = 5.0;
+    let kicker_y0 = brand_baseline - kicker_h / 2.0 + 0.8;
+    draw_rounded_fill(&w.layer, Rgb::new(0.1742, 0.1353, 0.0953, None), kicker_x0, kicker_y0, kicker_x0 + kicker_w, kicker_y0 + kicker_h, kicker_h / 2.0);
+    draw_rounded_stroke(&w.layer, Rgb::new(0.4036, 0.3029, 0.1910, None), 0.35, kicker_x0, kicker_y0, kicker_x0 + kicker_w, kicker_y0 + kicker_h, kicker_h / 2.0);
+    w.layer.set_fill_color(Color::Rgb(Rgb::new(1.0, 0.698, 0.349, None)));
+    w.layer.use_text(kicker_text.to_string(), 8.0, Mm(kicker_x0 + 4.0), Mm(kicker_y0 + 1.5), &w.font_bold);
 
-    w.y = logo_y - 10.0;
+    w.y = mark_y - 10.0;
     w.layer.set_fill_color(Color::Rgb(p.cover_text.clone()));
     w.layer.use_text("Отчёт диагностики", 19.0, Mm(PDF_MARGIN_L), Mm(w.y), &w.font_bold);
     w.y -= 7.0;
@@ -692,15 +724,14 @@ fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
         .use_text("Полная аппаратная проверка устройства", 10.5, Mm(PDF_MARGIN_L), Mm(w.y), &w.font_regular);
 
     w.y -= 9.0;
-    let meta_col_w = PDF_CONTENT_W / 3.0;
+    let meta_col_w = PDF_CONTENT_W / 4.0;
+    let time_range = format_time_range(report);
     let duration = format_duration(report);
-    let meta: Vec<(&str, String)> = vec![
+    let meta: [(&str, String); 4] = [
         ("УСТРОЙСТВО", report.device_model.clone()),
         ("СЕРИЙНЫЙ НОМЕР", report.device_serial.clone()),
-        (
-            "НАЧАЛО / ДЛИТЕЛЬНОСТЬ",
-            duration.map(|d| format!("{} · {}", report.started_at, d)).unwrap_or_else(|| report.started_at.clone()),
-        ),
+        ("НАЧАЛО / ОКОНЧАНИЕ", time_range.unwrap_or_else(|| report.started_at.clone())),
+        ("ДЛИТЕЛЬНОСТЬ", duration.unwrap_or_else(|| "—".to_string())),
     ];
     for (i, (label, value)) in meta.iter().enumerate() {
         let x = PDF_MARGIN_L + meta_col_w * i as f32;

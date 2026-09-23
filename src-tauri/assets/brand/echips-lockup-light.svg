@@ -1,0 +1,7 @@
+<!-- ECHIPS — полный логотип (знак + название) на белом/светлом фоне.
+     Для бланков, счетов, футеров писем и т.д. Прозрачный фон. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 44" width="220" height="44">
+  <polygon points="22,6 33,12 33,24 22,30 11,24 11,12" fill="none" stroke="#FF8A00" stroke-width="3" stroke-linecap="round"/>
+  <text x="42" y="23" font-family="'Space Grotesk',Arial,sans-serif" font-weight="700" font-size="14" letter-spacing="1" fill="#15171B">ECHIPS</text>
+  <text x="42" y="36" font-family="Arial,sans-serif" font-weight="500" font-size="8" letter-spacing=".6" fill="#6A6E76">HARDWARE CHECK</text>
+</svg>

@@ -1,6 +1,8 @@
-// Переключатель темы — тот же паттерн, что в echips-driver-assistant:
-// сегментированная пилюля (тёмная/светлая, каждая — своя кнопка) поверх
-// рабочей области, а не один тумблер. Тема ставится на <html data-theme>
+// Переключатель темы — сегментированная пилюля (тёмная/светлая, каждая —
+// своя кнопка), как в echips-driver-assistant, но в левом сайдбаре снизу
+// (#theme-toggle-slot), а не поверх рабочей области — там она перекрывала
+// кнопки типа «Автопрогон»/«К отчёту» в правом верхнем углу экранов
+// (замечание по реальному отчёту). Тема ставится на <html data-theme>
 // сразу при загрузке скрипта (до отрисовки), чтобы не мигало неверной
 // темой; выбор хранится в localStorage.
 (function () {
@@ -27,7 +29,7 @@
   }
 
   function mount() {
-    var host = document.querySelector(".content");
+    var host = document.getElementById("theme-toggle-slot") || document.querySelector(".sidebar");
     if (!host || host.querySelector(".theme-toggle")) return;
     var el = document.createElement("div");
     el.className = "theme-toggle";

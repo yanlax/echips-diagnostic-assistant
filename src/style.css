@@ -68,13 +68,12 @@ input::placeholder{color:var(--mute)}
 .winbtn svg{width:10px;height:10px;stroke:currentColor;stroke-width:1.2;stroke-linecap:round;fill:none}
 .main{flex:1;display:flex;min-height:0}
 
-/* ---------- переключатель темы (как в echips-driver-assistant) ---------- */
+/* ---------- переключатель темы (в сайдбаре снизу) ---------- */
+.theme-toggle-slot{flex:0 0 auto;margin-top:12px;display:flex;justify-content:center}
 .theme-toggle{
-  position:absolute;top:16px;right:20px;z-index:20;
   display:flex;align-items:center;gap:2px;padding:3px;
   background:var(--glass);border:1px solid var(--line-input);
-  border-radius:999px;backdrop-filter:blur(10px);
-  -webkit-app-region:no-drag;
+  border-radius:999px;
   transition:background-color .2s,border-color .2s;
 }
 .theme-toggle:hover{border-color:var(--accent-line)}

@@ -967,7 +967,13 @@ fn draw_card(w: &mut PdfWriter, doc: &PdfDocumentReference, p: &PdfPalette, r: &
         .unwrap_or_default();
     const KV_GAP: f32 = 6.0;
     const KV_LABEL_SZ: f32 = 8.0;
-    const LOG_TIME_W: f32 = 32.0;
+    // 32мм были откалиброваны под старый пропорциональный PT Sans (0.52
+    // символа/кегль) — после перехода времени в журнале на моноширинный
+    // JetBrains Mono (0.62 символа/кегль, см. draw_log_item) метка вида
+    // "2026-09-15 10:12:51" (19 символов, кегль 8.5pt) стала шире колонки
+    // (~35мм без отступов) и наезжала на текст события. Посчитано с
+    // запасом под отступ слева (2мм) и зазор перед сообщением (2мм).
+    const LOG_TIME_W: f32 = 40.0;
     const DIAG_PAD: f32 = 4.0;
     let half_col_w = (card_w - KV_GAP) / 2.0;
     let runs = build_detail_runs(&r.details, card_w, DETAIL_SZ, half_col_w, DETAIL_SZ, LOG_TIME_W);

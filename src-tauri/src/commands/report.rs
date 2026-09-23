@@ -196,22 +196,6 @@ fn draw_rule(layer: &PdfLayerReference, color: Rgb, x0: f32, x1: f32, y0: f32, y
     layer.add_polygon(poly);
 }
 
-/// Прямоугольник только обводкой (без заливки) — рамки карточек/бейджей.
-fn draw_stroke_rect(layer: &PdfLayerReference, color: Rgb, thickness_pt: f32, x0: f32, y0: f32, x1: f32, y1: f32) {
-    layer.set_outline_color(Color::Rgb(color));
-    layer.set_outline_thickness(thickness_pt);
-    let line = Line {
-        points: vec![
-            (Point::new(Mm(x0), Mm(y0)), false),
-            (Point::new(Mm(x1), Mm(y0)), false),
-            (Point::new(Mm(x1), Mm(y1)), false),
-            (Point::new(Mm(x0), Mm(y1)), false),
-        ],
-        is_closed: true,
-    };
-    layer.add_line(line);
-}
-
 /// Обход прямоугольника со скруглёнными углами через кубические кривые
 /// Безье (printpdf 0.7 честно поддерживает bezier в Line/Polygon через
 /// пары точек с флагом "это ручка кривой" — см. line.rs::into_stream_op:
@@ -295,6 +279,10 @@ struct PdfPalette {
     na_fg: Rgb,
     na_bg: Rgb,
     na_border: Rgb,
+    warn_fg: Rgb,
+    warn_bg: Rgb,
+    warn_border: Rgb,
+    paper_soft: Rgb,
 }
 fn palette() -> PdfPalette {
     PdfPalette {
@@ -316,6 +304,10 @@ fn palette() -> PdfPalette {
         na_fg: Rgb::new(0.357, 0.392, 0.447, None),              // #5B6472
         na_bg: Rgb::new(0.945, 0.941, 0.925, None),              // #F1F0EC
         na_border: Rgb::new(0.882, 0.871, 0.839, None),          // #E1DED6
+        warn_fg: Rgb::new(0.604, 0.357, 0.0, None),              // #9A5B00
+        warn_bg: Rgb::new(1.0, 0.953, 0.863, None),              // #FFF3DC
+        warn_border: Rgb::new(0.953, 0.847, 0.627, None),        // #F3D8A0
+        paper_soft: Rgb::new(0.969, 0.965, 0.953, None),         // #F7F6F3
     }
 }
 
@@ -551,6 +543,54 @@ impl PdfWriter {
         self.y -= row_h;
     }
 
+    /// Одна строка журнала сбоев — зебра-фон (чередование с paper_soft, как
+    /// .log-entry:nth-child(even) в референсе), слева время моно-стилем,
+    /// справа сообщение + при наличии — пояснение (человеческий "hint" из
+    /// crash_logic.rs) более мелким тусклым текстом второй строкой. В
+    /// референсе только одна строка на событие — у нас реальные данные
+    /// всегда несут ещё и explain-текст, решили не терять его, а не
+    /// добиваться точного 1:1 совпадения структуры.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_log_item(&mut self, doc: &PdfDocumentReference, item: &LogItem, even: bool, detail_sz: f32, p: &PdfPalette, indent_mm: f32, time_w: f32, right_x: f32) {
+        let h = log_item_height(item, detail_sz);
+        self.ensure_space(doc, h);
+        let top = self.y;
+        if even {
+            draw_rule(&self.layer, p.paper_soft.clone(), PDF_MARGIN_L + indent_mm, right_x, top - h, top);
+        }
+        let text_x = PDF_MARGIN_L + indent_mm + time_w;
+        self.layer.set_fill_color(Color::Rgb(p.text_muted.clone()));
+        self.layer.use_text(item.time.clone(), detail_sz - 1.0, Mm(PDF_MARGIN_L + indent_mm + 2.0), Mm(top - line_h(detail_sz) + 1.0), &self.font_regular);
+        self.layer.set_fill_color(Color::Rgb(p.text.clone()));
+        let mut y = top - line_h(detail_sz) + 1.0;
+        for line in &item.message {
+            self.layer.use_text(line.clone(), detail_sz, Mm(text_x), Mm(y), &self.font_regular);
+            y -= line_h(detail_sz);
+        }
+        self.layer.set_fill_color(Color::Rgb(p.text_muted.clone()));
+        for line in &item.note {
+            self.layer.use_text(line.clone(), detail_sz - 1.0, Mm(text_x), Mm(y), &self.font_regular);
+            y -= line_h(detail_sz - 1.0);
+        }
+        self.y -= h;
+    }
+
+    /// Элемент плашки диагноза — заголовок (⚠/ℹ по item.warn) + пояснение,
+    /// как .ditem внутри .diagnosis в референсе (сама рамка/фон плашки
+    /// рисуется один раз на весь блок вызывающим кодом).
+    fn draw_diag_item(&mut self, doc: &PdfDocumentReference, item: &DiagItem, detail_sz: f32, p: &PdfPalette, indent_mm: f32) {
+        let icon = if item.warn { "⚠ " } else { "ℹ " };
+        let mut first = true;
+        for line in &item.title {
+            let text = if first { format!("{icon}{line}") } else { line.clone() };
+            self.draw_line(doc, &text, detail_sz + 1.0, true, &p.warn_fg, indent_mm);
+            first = false;
+        }
+        for line in &item.text {
+            self.draw_line(doc, line, detail_sz, false, &p.text, indent_mm);
+        }
+    }
+
     /// Одна уже перенесённая строка — с проверкой места на странице.
     fn draw_line(&mut self, doc: &PdfDocumentReference, line: &str, size_pt: f32, bold: bool, color: &Rgb, indent_mm: f32) {
         let lh = line_h(size_pt);
@@ -626,41 +666,165 @@ fn classify_detail(line: &str, card_w: f32, detail_sz: f32) -> DetailLine {
 
 /// Подряд идущие Kv-строки группируются в один блок и рисуются двухколоночной
 /// сеткой (по два элемента в ряд) — как .check-details в референсе.
-/// Остальные типы (Row/Text) рисуются по одной строке, как раньше.
+/// Row/Text рисуются по одной строке, Log/Diagnosis — см. LogItem/DiagItem
+/// ниже (журнал сбоев в crash.js — единственный тест с обоими форматами).
 enum DetailRun {
     KvGrid(Vec<(String, Vec<String>)>), // (метка, перенесённые строки значения)
     Row(String, String),
     Text(Vec<String>),
+    Log(Vec<LogItem>),
+    Diagnosis(Vec<DiagItem>),
 }
-fn group_detail_runs(lines: &[DetailLine], half_col_w: f32, value_sz: f32) -> Vec<DetailRun> {
+struct LogItem {
+    time: String,
+    message: Vec<String>,
+    note: Vec<String>,
+}
+struct DiagItem {
+    warn: bool,
+    title: Vec<String>,
+    text: Vec<String>,
+}
+
+/// Строка вида "2026-09-15 10:12:51 · сообщение" — журнал сбоев (crash.js)
+/// собирает такие строки для каждого события; timestamp всегда ISO-подобный
+/// с секундами, что легко проверить посимвольно без зависимости от regex
+/// (в проекте её нет — CLAUDE.md про минимальные зависимости в Rust-коде).
+fn parse_log_prefix(line: &str) -> Option<&str> {
+    let b = line.as_bytes();
+    if b.len() < 21 {
+        return None;
+    }
+    let is_digit = |i: usize| b.get(i).map(|c| c.is_ascii_digit()).unwrap_or(false);
+    let is = |i: usize, c: u8| b.get(i) == Some(&c);
+    let ok = (0..4).all(is_digit) && is(4, b'-') && (5..7).all(is_digit) && is(7, b'-') && (8..10).all(is_digit)
+        && is(10, b' ') && (11..13).all(is_digit) && is(13, b':') && (14..16).all(is_digit) && is(16, b':') && (17..19).all(is_digit);
+    if !ok {
+        return None;
+    }
+    line.get(19..).and_then(|rest| rest.strip_prefix(" · "))
+}
+/// "— Диагноз по шаблону сбоев —" (crash.js) — маркер начала блока
+/// диагноза; всё после него в подробностях этого теста — пары
+/// заголовок(+⚠/ℹ)/пояснение, а не обычные строки.
+const DIAGNOSIS_MARKER: &str = "— Диагноз по шаблону сбоев —";
+
+#[allow(clippy::too_many_arguments)]
+fn build_detail_runs(raw: &[String], card_w: f32, detail_sz: f32, half_col_w: f32, value_sz: f32, log_time_w: f32) -> Vec<DetailRun> {
+    let lines: Vec<&str> = raw.iter().map(|s| s.as_str()).filter(|s| !s.trim().is_empty()).collect();
     let mut runs = Vec::new();
     let mut kv_buf: Vec<(String, Vec<String>)> = Vec::new();
-    let flush = |runs: &mut Vec<DetailRun>, buf: &mut Vec<(String, Vec<String>)>| {
-        if !buf.is_empty() {
-            runs.push(DetailRun::KvGrid(std::mem::take(buf)));
+    let mut log_buf: Vec<LogItem> = Vec::new();
+    let mut diag_buf: Vec<DiagItem> = Vec::new();
+    macro_rules! flush_kv {
+        () => {
+            if !kv_buf.is_empty() {
+                runs.push(DetailRun::KvGrid(std::mem::take(&mut kv_buf)));
+            }
+        };
+    }
+    macro_rules! flush_log {
+        () => {
+            if !log_buf.is_empty() {
+                runs.push(DetailRun::Log(std::mem::take(&mut log_buf)));
+            }
+        };
+    }
+    macro_rules! flush_diag {
+        () => {
+            if !diag_buf.is_empty() {
+                runs.push(DetailRun::Diagnosis(std::mem::take(&mut diag_buf)));
+            }
+        };
+    }
+
+    let mut in_diagnosis = false;
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        if line.trim() == DIAGNOSIS_MARKER {
+            flush_kv!();
+            flush_log!();
+            in_diagnosis = true;
+            i += 1;
+            continue;
         }
-    };
-    for d in lines {
-        match d {
+        if in_diagnosis {
+            flush_kv!();
+            flush_log!();
+            let mut title = line.trim_start();
+            let mut warn = true;
+            for (prefix, is_warn) in [("⚠ ", true), ("ℹ ", false)] {
+                if let Some(rest) = title.strip_prefix(prefix) {
+                    title = rest;
+                    warn = is_warn;
+                    break;
+                }
+            }
+            let mut text_lines = Vec::new();
+            let mut consumed = 1;
+            if let Some(next) = lines.get(i + 1) {
+                if let Some(text) = next.strip_prefix("    ") {
+                    text_lines = wrap_line(text.trim_start(), max_chars_width(detail_sz, card_w - 8.0));
+                    consumed = 2;
+                }
+            }
+            diag_buf.push(DiagItem { warn, title: wrap_line(title, max_chars_width(detail_sz + 1.0, card_w - 8.0)), text: text_lines });
+            i += consumed;
+            continue;
+        }
+        if let Some(message) = parse_log_prefix(line) {
+            flush_kv!();
+            let mut note_lines = Vec::new();
+            let mut consumed = 1;
+            if let Some(next) = lines.get(i + 1) {
+                if let Some(note) = next.strip_prefix("    ") {
+                    note_lines = wrap_line(note.trim_start(), max_chars_width(detail_sz - 1.0, card_w - log_time_w - 4.0));
+                    consumed = 2;
+                }
+            }
+            log_buf.push(LogItem {
+                time: line[..19].to_string(),
+                message: wrap_line(message, max_chars_width(detail_sz, card_w - log_time_w - 4.0)),
+                note: note_lines,
+            });
+            i += consumed;
+            continue;
+        }
+        // flush_kv здесь НЕ вызывается заранее: если строка сама окажется
+        // Kv, она должна попасть в уже накопленный kv_buf, а не начать
+        // новый буфер из одного элемента (иначе подряд идущие "Метка:
+        // значение" никогда бы не собрались в общую сетку по 2 в ряд).
+        flush_log!();
+        match classify_detail(line, card_w, detail_sz) {
             DetailLine::Kv(label, value) => {
-                let value_lines = wrap_line(value, max_chars_width(value_sz, half_col_w));
-                kv_buf.push((label.clone(), value_lines));
+                let value_lines = wrap_line(&value, max_chars_width(value_sz, half_col_w));
+                kv_buf.push((label, value_lines));
             }
             DetailLine::Row(name, value) => {
-                flush(&mut runs, &mut kv_buf);
-                runs.push(DetailRun::Row(name.clone(), value.clone()));
+                flush_kv!();
+                runs.push(DetailRun::Row(name, value));
             }
             DetailLine::Text(wrapped) => {
-                flush(&mut runs, &mut kv_buf);
-                runs.push(DetailRun::Text(wrapped.clone()));
+                flush_kv!();
+                runs.push(DetailRun::Text(wrapped));
             }
         }
+        i += 1;
     }
-    flush(&mut runs, &mut kv_buf);
+    flush_kv!();
+    flush_log!();
+    flush_diag!();
     runs
 }
 fn kv_item_height(value_lines_len: usize, label_sz: f32, value_sz: f32) -> f32 {
     line_h(label_sz) + value_lines_len.max(1) as f32 * line_h(value_sz)
+}
+fn log_item_height(item: &LogItem, detail_sz: f32) -> f32 {
+    line_h(detail_sz) + item.note.len() as f32 * line_h(detail_sz - 1.0) + 2.0
+}
+fn diag_item_height(item: &DiagItem, detail_sz: f32) -> f32 {
+    item.title.len() as f32 * line_h(detail_sz + 1.0) + item.text.len() as f32 * line_h(detail_sz) + 3.0
 }
 
 fn draw_card(w: &mut PdfWriter, doc: &PdfDocumentReference, p: &PdfPalette, r: &TestResult) {
@@ -682,10 +846,26 @@ fn draw_card(w: &mut PdfWriter, doc: &PdfDocumentReference, p: &PdfPalette, r: &
         .unwrap_or_default();
     const KV_GAP: f32 = 6.0;
     const KV_LABEL_SZ: f32 = 8.0;
+    const LOG_TIME_W: f32 = 32.0;
+    const DIAG_PAD: f32 = 4.0;
     let half_col_w = (card_w - KV_GAP) / 2.0;
-    let detail_lines: Vec<DetailLine> = r.details.iter().filter(|l| !l.trim().is_empty()).map(|line| classify_detail(line, card_w, DETAIL_SZ)).collect();
-    let runs = group_detail_runs(&detail_lines, half_col_w, DETAIL_SZ);
+    let runs = build_detail_runs(&r.details, card_w, DETAIL_SZ, half_col_w, DETAIL_SZ, LOG_TIME_W);
     let has_body = !override_lines.is_empty() || !runs.is_empty();
+
+    let run_height = |run: &DetailRun| -> f32 {
+        match run {
+            DetailRun::Row(..) => ROW_H,
+            DetailRun::Text(lines) => lines.len() as f32 * line_h(DETAIL_SZ),
+            DetailRun::KvGrid(items) => items
+                .chunks(2)
+                .map(|pair| pair.iter().map(|(_, v)| kv_item_height(v.len(), KV_LABEL_SZ, DETAIL_SZ)).fold(0.0_f32, f32::max))
+                .sum(),
+            DetailRun::Log(items) => items.iter().map(|it| log_item_height(it, DETAIL_SZ)).sum::<f32>() + 2.0,
+            DetailRun::Diagnosis(items) => {
+                line_h(DETAIL_SZ + 1.0) + items.iter().map(|it| diag_item_height(it, DETAIL_SZ)).sum::<f32>() + DIAG_PAD * 2.0
+            }
+        }
+    };
 
     let mut measured = 5.0_f32; // верхний паддинг
     measured += line_h(TITLE_SZ);
@@ -694,16 +874,7 @@ fn draw_card(w: &mut PdfWriter, doc: &PdfDocumentReference, p: &PdfPalette, r: &
         measured += 3.0; // разделитель
         measured += override_lines.len() as f32 * line_h(DETAIL_SZ);
         for run in &runs {
-            measured += match run {
-                DetailRun::Row(..) => ROW_H,
-                DetailRun::Text(lines) => lines.len() as f32 * line_h(DETAIL_SZ),
-                DetailRun::KvGrid(items) => items
-                    .chunks(2)
-                    .map(|pair| {
-                        pair.iter().map(|(_, v)| kv_item_height(v.len(), KV_LABEL_SZ, DETAIL_SZ)).fold(0.0_f32, f32::max)
-                    })
-                    .sum(),
-            };
+            measured += run_height(run);
         }
     }
     measured += 5.0; // нижний паддинг
@@ -760,6 +931,35 @@ fn draw_card(w: &mut PdfWriter, doc: &PdfDocumentReference, p: &PdfPalette, r: &
                     for pair in items.chunks(2) {
                         w.draw_kv_pair(doc, &pair[0], pair.get(1), KV_LABEL_SZ, DETAIL_SZ, &p.text_faint, &p.text, CARD_INDENT, half_col_w, KV_GAP);
                     }
+                }
+                DetailRun::Log(items) => {
+                    // Рамка вокруг всего блока журнала — как .log в референсе;
+                    // высота уже известна из run_height(), считаем так же.
+                    let right_x = PDF_PAGE_W - PDF_MARGIN_R - CARD_RIGHT_PAD;
+                    let box_h = run_height(run);
+                    w.ensure_space(doc, box_h);
+                    let box_top = w.y;
+                    draw_rounded_stroke(&w.layer, p.line_soft.clone(), 0.5, PDF_MARGIN_L + CARD_INDENT, box_top - box_h, right_x, box_top, RADIUS_BOX_SM);
+                    w.y -= 1.0;
+                    for (i, item) in items.iter().enumerate() {
+                        w.draw_log_item(doc, item, i % 2 == 0, DETAIL_SZ, p, CARD_INDENT, LOG_TIME_W, right_x);
+                    }
+                    w.y -= 1.0;
+                }
+                DetailRun::Diagnosis(items) => {
+                    let right_x = PDF_PAGE_W - PDF_MARGIN_R - CARD_RIGHT_PAD;
+                    let box_h = run_height(run);
+                    w.ensure_space(doc, box_h);
+                    let box_top = w.y;
+                    let box_bottom = box_top - box_h;
+                    draw_rounded_fill(&w.layer, p.warn_bg.clone(), PDF_MARGIN_L + CARD_INDENT, box_bottom, right_x, box_top, RADIUS_BOX_SM);
+                    draw_rounded_stroke(&w.layer, p.warn_border.clone(), 0.5, PDF_MARGIN_L + CARD_INDENT, box_bottom, right_x, box_top, RADIUS_BOX_SM);
+                    w.y -= DIAG_PAD;
+                    w.draw_line(doc, "⚠ ДИАГНОЗ ПО ШАБЛОНУ СБОЕВ", DETAIL_SZ + 1.0, true, &p.warn_fg, CARD_INDENT + DIAG_PAD);
+                    for item in items {
+                        w.draw_diag_item(doc, item, DETAIL_SZ, p, CARD_INDENT + DIAG_PAD);
+                    }
+                    w.y = box_bottom;
                 }
             }
         }

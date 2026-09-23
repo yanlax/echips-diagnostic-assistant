@@ -1372,14 +1372,24 @@ function fetchCategory(kind){
       var SRC = { bugcheck:'событие WER', minidump:'minidump', 'kernel-power':'Kernel-Power' };
       var lines = [];
       var realCrashes = h.entries.filter(function(e){ return e.code!=='0x0'; }).length;
-      lines.push('Сбоев: '+realCrashes+' · внезапных отключений: '+(h.entries.length-realCrashes)+' · записей журнала до склейки: '+h.raw_records+' (сбой из нескольких источников считается один раз, окно 2 мин) · minidump-файлов: '+h.minidump_files);
+      // Отдельными строками "Метка: значение" (а не одной длинной через " · ") —
+      // на экране отчёта/в PDF это распознаётся эвристикой как kv-сетка
+      // (см. classify_detail в report.rs), как и одноимённые поля в
+      // присланном пользователем PDF-шаблоне отчёта.
+      lines.push('Сбоев: '+realCrashes);
+      lines.push('Внезапных отключений: '+(h.entries.length-realCrashes));
+      lines.push('Записей журнала до склейки: '+h.raw_records+' (сбой из нескольких источников считается один раз, окно 2 мин)');
+      lines.push('Minidump-файлов: '+h.minidump_files);
       if (!h.entries.length) lines.push('Сбоев и внезапных перезагрузок в журнале не найдено.');
       h.entries.forEach(function(e){
         lines.push(e.time+' · '+e.code+' '+e.name+' · '+e.sources.map(function(x){ return SRC[x]||x; }).join(' + ')+(e.records>1?' (записей: '+e.records+')':''));
         lines.push('    '+wording(e.hint)+(e.params && e.params.length ? ' · параметры: '+e.params.join(', ') : ''));
       });
       if (h.hw_counts.whea || h.hw_counts.whea_corrected || h.hw_counts.disk || h.hw_counts.tdr){
-        lines.push('Аппаратные события за период: WHEA критичные '+h.hw_counts.whea+' · WHEA исправленные '+h.hw_counts.whea_corrected+' · ошибки диска '+h.hw_counts.disk+' · сбросы видеодрайвера (TDR) '+h.hw_counts.tdr);
+        lines.push('WHEA критичные: '+h.hw_counts.whea);
+        lines.push('WHEA исправленные: '+h.hw_counts.whea_corrected);
+        lines.push('Ошибки диска: '+h.hw_counts.disk);
+        lines.push('Сбросы видеодрайвера (TDR): '+h.hw_counts.tdr);
         h.hw_events.slice(0,8).forEach(function(e){ lines.push('    '+e.time+' · '+e.provider+' #'+e.id+' — '+diskName(e.text)); });
       }
       var actions = [];

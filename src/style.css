@@ -120,6 +120,12 @@ input::placeholder{color:var(--mute)}
 .content{flex:1;min-width:0;display:flex;flex-direction:column;position:relative;
   background:radial-gradient(110% 80% at 100% 0%,rgba(255,138,0,.10),transparent 62%),var(--bg)}
 .screen{flex:1;min-height:0;display:flex;flex-direction:column;overflow-y:auto;padding:24px 26px 22px}
+.update-banner-slot:empty{display:none}
+.update-banner{display:flex;align-items:center;justify-content:space-between;gap:14px;
+  padding:10px 26px;background:var(--accent-soft);border-bottom:1px solid var(--accent-line);
+  font-family:var(--mono);font-size:11.5px;color:var(--text-2)}
+.update-banner-actions{display:flex;align-items:center;gap:14px;flex:0 0 auto}
+.update-banner-actions #update-dismiss-btn{font-size:14px;color:var(--mute)}
 .pane{display:flex;flex-direction:column;flex:1;min-height:0}
 .eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute)}
 h1.title{font-family:var(--grotesk);font-size:27px;font-weight:600;color:var(--text-hi);line-height:1.15;margin:7px 0 0}

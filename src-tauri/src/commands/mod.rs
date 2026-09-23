@@ -17,3 +17,4 @@ pub mod crash_logic;
 pub mod activation;
 pub mod hwmon;
 pub mod keyhook;
+pub mod update;

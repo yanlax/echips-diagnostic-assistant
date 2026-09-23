@@ -73,6 +73,8 @@ pub fn run() {
             commands::report::open_containing_folder,
             commands::keyhook::start_win_key_block,
             commands::keyhook::stop_win_key_block,
+            commands::update::check_for_update,
+            commands::update::download_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

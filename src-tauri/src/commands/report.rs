@@ -107,11 +107,15 @@ fn render_txt(report: &DiagnosticReport) -> String {
 /* ---------- PDF ----------
    Переверстано под референс-дизайн, присланный пользователем (карточки
    тестов вместо построчного текста) — светлая «бумага» с тёмной обложкой
-   сверху вместо прежнего полностью тёмного фона (v0.10.0). Шрифт PT Sans
-   (OFL, кириллица) вшит из src-tauri/assets/fonts. Ширина символов не
-   измеряется через метрики шрифта (printpdf 0.7 их наружу не отдаёт) —
-   перенос строк по эвристике "средний символ ~0.52 кегля", этого
-   достаточно для служебного отчёта и не считается точной вёрсткой.
+   сверху вместо прежнего полностью тёмного фона (v0.10.0). Два шрифта
+   (OFL, оба с кириллицей — вшиты из src-tauri/assets/fonts): PT Sans —
+   основной текст, JetBrains Mono — значения там, где референс задаёт
+   font-family:var(--font-mono) (.kv .v, .check-list .row .s, .log-entry
+   .t, серийник/диапазон времени в шапке). Ширина символов не измеряется
+   через метрики шрифта (printpdf 0.7 их наружу не отдаёт) — перенос
+   строк по эвристике "средний символ ~0.52 кегля у PT Sans / ~0.62 у
+   моноширинного JetBrains Mono" (max_chars_width/max_chars_width_mono),
+   этого достаточно для служебного отчёта и не считается точной вёрсткой.
 
    Углы карточек/бейджей/пилюль/чипов скруглены по-настоящему — через
    кубические кривые Безье, которые printpdf 0.7 честно поддерживает в
@@ -171,6 +175,13 @@ const RADIUS_BOX_SM: f32 = 2.4;
 
 const FONT_REGULAR: &[u8] = include_bytes!("../../assets/fonts/PTSans-Regular.ttf");
 const FONT_BOLD: &[u8] = include_bytes!("../../assets/fonts/PTSans-Bold.ttf");
+/// JetBrains Mono (OFL, полная поддержка кириллицы — проверено скриптом
+/// через fontTools перед добавлением, не наугад) — для значений там, где
+/// референс задаёт `font-family:var(--font-mono)`: .kv .v, .check-list
+/// .row .s, .log-entry .t, серийный номер/диапазон времени в шапке.
+/// Статический regular-инстанс релиза (не variable-font — printpdf/
+/// ttf_parser надёжнее работают со статикой, как и с PT Sans).
+const FONT_MONO: &[u8] = include_bytes!("../../assets/fonts/JetBrainsMono-Regular.ttf");
 /// Фирменный знак шапки — растеризован из logo/echips-mark-orange.svg,
 /// присланного пользователем отдельным пакетом (echips-report.zip):
 /// оранжевый шестиугольник для тёмного фона, как в .brand .hex референса.
@@ -388,6 +399,15 @@ fn max_chars_width(size_pt: f32, width_mm: f32) -> usize {
     let usable = width_mm.max(20.0);
     ((usable / avg_char_w_mm).floor() as usize).max(10)
 }
+/// То же самое, но для моноширинного JetBrains Mono — все символы одной
+/// ширины (~0.62 кегля), а не ~0.52 как в среднем у пропорционального
+/// PT Sans, иначе перенос значений в .kv/.check-list/журнале был бы
+/// то слишком щедрым, то слишком тесным.
+fn max_chars_width_mono(size_pt: f32, width_mm: f32) -> usize {
+    let char_w_mm = pt_to_mm(size_pt) * 0.62;
+    let usable = width_mm.max(20.0);
+    ((usable / char_w_mm).floor() as usize).max(8)
+}
 /// То же самое, но ширина считается от общего содержимого страницы с отступом
 /// `indent_mm` слева (используется для «полноширинных» блоков — шапка, итог).
 fn max_chars(size_pt: f32, indent_mm: f32) -> usize {
@@ -482,6 +502,7 @@ struct PdfWriter {
     y: f32,
     font_regular: IndirectFontRef,
     font_bold: IndirectFontRef,
+    font_mono: IndirectFontRef,
     /// Печатается внизу каждой страницы, кроме первой (там обложка).
     footer: String,
     footer_color: Rgb,
@@ -544,10 +565,11 @@ impl PdfWriter {
         let baseline = self.y;
         self.layer.set_fill_color(Color::Rgb(name_color.clone()));
         self.layer.use_text(name.to_string(), size_pt, Mm(PDF_MARGIN_L + indent_mm), Mm(baseline), &self.font_regular);
-        let value_w = pt_to_mm(size_pt) * 0.52 * value.chars().count() as f32;
+        // Значение — моно-шрифтом, как .check-list .row .s в референсе.
+        let value_w = pt_to_mm(size_pt) * 0.62 * value.chars().count() as f32;
         let value_x = (PDF_PAGE_W - PDF_MARGIN_R - right_pad_mm - value_w).max(PDF_MARGIN_L + indent_mm);
         self.layer.set_fill_color(Color::Rgb(value_color.clone()));
-        self.layer.use_text(value.to_string(), size_pt, Mm(value_x), Mm(baseline), &self.font_regular);
+        self.layer.use_text(value.to_string(), size_pt, Mm(value_x), Mm(baseline), &self.font_mono);
         let sep_y = baseline - row_h + 1.3;
         draw_rule(&self.layer, line_color.clone(), PDF_MARGIN_L + indent_mm, PDF_PAGE_W - PDF_MARGIN_R - right_pad_mm, sep_y, sep_y + 0.15);
         self.y -= row_h;
@@ -585,9 +607,10 @@ impl PdfWriter {
             self.layer.set_fill_color(Color::Rgb(label_color.clone()));
             self.layer.use_text(item.0.clone(), label_sz, Mm(x), Mm(y), &self.font_regular);
             y -= line_h(label_sz);
+            // Значение — моно-шрифтом, как .kv .v в референсе.
             self.layer.set_fill_color(Color::Rgb(value_color.clone()));
             for line in &item.1 {
-                self.layer.use_text(line.clone(), value_sz, Mm(x), Mm(y), &self.font_regular);
+                self.layer.use_text(line.clone(), value_sz, Mm(x), Mm(y), &self.font_mono);
                 y -= line_h(value_sz);
             }
         }
@@ -610,8 +633,9 @@ impl PdfWriter {
             draw_rule(&self.layer, p.paper_soft.clone(), PDF_MARGIN_L + indent_mm, right_x, top - h, top);
         }
         let text_x = PDF_MARGIN_L + indent_mm + time_w;
+        // Время — моно-шрифтом, как .log-entry .t в референсе.
         self.layer.set_fill_color(Color::Rgb(p.text_muted.clone()));
-        self.layer.use_text(item.time.clone(), detail_sz - 1.0, Mm(PDF_MARGIN_L + indent_mm + 2.0), Mm(top - line_h(detail_sz) + 1.0), &self.font_regular);
+        self.layer.use_text(item.time.clone(), detail_sz - 1.0, Mm(PDF_MARGIN_L + indent_mm + 2.0), Mm(top - line_h(detail_sz) + 1.0), &self.font_mono);
         self.layer.set_fill_color(Color::Rgb(p.text.clone()));
         let mut y = top - line_h(detail_sz) + 1.0;
         for line in &item.message {
@@ -700,15 +724,18 @@ fn classify_detail(line: &str, card_w: f32, detail_sz: f32) -> DetailLine {
             return DetailLine::Kv(label.to_string(), value.to_string());
         }
     }
-    if line.matches(" — ").count() == 1 {
-        if let Some((name, value)) = line.split_once(" — ") {
-            let value = value.trim();
-            if !name.is_empty() && !value.is_empty() && value.chars().count() <= 20 {
-                let value_w = pt_to_mm(detail_sz) * 0.52 * value.chars().count() as f32;
-                let name_max = max_chars_width(detail_sz, (card_w - value_w - 6.0).max(20.0));
-                if name.chars().count() <= name_max {
-                    return DetailLine::Row(name.to_string(), value.to_string());
-                }
+    // По ПОСЛЕДНЕМУ тире, а не по первому/единственному: у части реальных
+    // названий устройств само тире уже встроено (например "AMD USB 3.10
+    // — 1.10 (Майкрософт) — работает" от list_usb_devices) — единственный
+    // способ отличить настоящий разделитель "имя — статус" от тире внутри
+    // названия — искать его с конца, статус всегда короткий хвост строки.
+    if let Some((name, value)) = line.rsplit_once(" — ") {
+        let value = value.trim();
+        if !name.is_empty() && !value.is_empty() && value.chars().count() <= 20 {
+            let value_w = pt_to_mm(detail_sz) * 0.62 * value.chars().count() as f32; // моно-шрифт, см. draw_row
+            let name_max = max_chars_width(detail_sz, (card_w - value_w - 6.0).max(20.0));
+            if name.chars().count() <= name_max {
+                return DetailLine::Row(name.to_string(), value.to_string());
             }
         }
     }
@@ -849,7 +876,8 @@ fn build_detail_runs(raw: &[String], card_w: f32, detail_sz: f32, half_col_w: f3
         flush_log!();
         match classify_detail(line, card_w, detail_sz) {
             DetailLine::Kv(label, value) => {
-                let value_lines = wrap_line(&value, max_chars_width(value_sz, half_col_w));
+                // Моно-шрифт (draw_kv_pair) — перенос считаем по его ширине символа.
+                let value_lines = wrap_line(&value, max_chars_width_mono(value_sz, half_col_w));
                 kv_buf.push((label, value_lines));
             }
             DetailLine::Row(name, value) => {
@@ -1038,6 +1066,9 @@ fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
     let font_bold = doc
         .add_external_font(FONT_BOLD)
         .map_err(|e| format!("Не удалось встроить шрифт: {e}"))?;
+    let font_mono = doc
+        .add_external_font(FONT_MONO)
+        .map_err(|e| format!("Не удалось встроить шрифт: {e}"))?;
     let layer = doc.get_page(page1).get_layer(layer1);
     let p = palette();
 
@@ -1046,6 +1077,7 @@ fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
         y: PDF_PAGE_H - PDF_MARGIN_TOP,
         font_regular,
         font_bold,
+        font_mono,
         footer: format!("Echips Hardware Check · {}", report.device_serial),
         footer_color: p.text_muted.clone(),
         page_no: 0,
@@ -1131,10 +1163,15 @@ fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
         w.layer.set_fill_color(Color::Rgb(p.cover_text_muted.clone()));
         w.layer.use_text(label.to_string(), 8.0, Mm(x), Mm(w.y), &w.font_regular);
         w.layer.set_fill_color(Color::Rgb(p.cover_text.clone()));
-        let value_lines = wrap_line(value, max_chars_width(9.5, meta_col_w - 6.0));
+        // Серийный номер и диапазон времени — моно-шрифтом, как
+        // .cover-meta .item .v.mono в референсе (у модели устройства и
+        // длительности класса .mono в разметке нет).
+        let mono = i == 1 || i == 2;
+        let font = if mono { &w.font_mono } else { &w.font_regular };
+        let value_lines = if mono { wrap_line(value, max_chars_width_mono(9.0, meta_col_w - 6.0)) } else { wrap_line(value, max_chars_width(9.5, meta_col_w - 6.0)) };
         let mut vy = w.y - 5.0;
         for line in value_lines.iter().take(2) {
-            w.layer.use_text(line.clone(), 9.5, Mm(x), Mm(vy), &w.font_regular);
+            w.layer.use_text(line.clone(), if mono { 9.0 } else { 9.5 }, Mm(x), Mm(vy), font);
             vy -= line_h(9.5);
         }
     }

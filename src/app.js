@@ -73,7 +73,7 @@ var KEYROWS = [
   ['Tab','Q','W','E','R','T','Y','U','I','O','P','[',']','\\'],
   ['Caps','A','S','D','F','G','H','J','K','L',';',"'",'Enter'],
   ['Shift','Z','X','C','V','B','N','M',',','.','/','Shift'],
-  ['Ctrl','Fn','Win','Alt','Space','Alt','←','↑','↓','→']
+  ['Ctrl','Win','Alt','Space','Alt','←','↑','↓','→']
 ];
 var WIDE = { Bksp:2, Tab:1.5, Caps:1.8, Enter:2.2, Shift:2.4, Space:6, Del:1.2 };
 var TONES = ['1 кГц синус','Левый / правый','Echo-тест микрофона'];
@@ -1591,8 +1591,10 @@ function screenDash(){
 
 /* Соответствие KeyboardEvent.code позициям клавиш в раскладке KEYROWS. */
 /* Цифровой блок (id клавиш 'n:<code>') и мультимедиа-клавиши для Fn-комбинаций ('m:<code>').
-   Сама клавиша Fn у большинства ноутбуков обрабатывается прошивкой и системе не видна —
-   реально проверяются её комбинации (Fn+F-клавиши дают громкость, воспроизведение и т. п.). */
+   Самой клавиши Fn в KEYROWS сознательно нет: у большинства ноутбуков она обрабатывается
+   прошивкой/EC и системе не видна вообще — никакое нажатие никогда не засчиталось бы, и
+   техник каждый раз путал это с неисправностью. Проверяются её реальные комбинации
+   (Fn+F-клавиши дают громкость, воспроизведение и т. п.) — см. MEDIA ниже. */
 var NUMPAD = [
   ['NumLock','Num',1,1],['NumpadDivide','/',1,2],['NumpadMultiply','*',1,3],['NumpadSubtract','−',1,4],
   ['Numpad7','7',2,1],['Numpad8','8',2,2],['Numpad9','9',2,3],['NumpadAdd','+',2,4,2,1],
@@ -1610,8 +1612,11 @@ var CODEMAP = (function(){
   KEYROWS.forEach(function(row,ri){
     row.forEach(function(label,ki){
       var id = ri+':'+ki, codes;
-      if (label==='Shift') codes = [ki===0 ? 'ShiftLeft' : 'ShiftRight'];
-      else if (label==='Alt') codes = [ki===3 ? 'AltLeft' : 'AltRight'];
+      // Индекс левой/правой клавиши в ряду определяем через indexOf, а не
+      // жёстко зашитой колонкой — после удаления Fn из раскладки позиция
+      // сдвинулась, а завязка на конкретный номер колонки была бы хрупкой.
+      if (label==='Shift') codes = [ki===row.indexOf('Shift') ? 'ShiftLeft' : 'ShiftRight'];
+      else if (label==='Alt') codes = [ki===row.indexOf('Alt') ? 'AltLeft' : 'AltRight'];
       else if (named[label]) codes = named[label];
       else if (/^F\d+$/.test(label)) codes = [label];
       else if (/^\d$/.test(label)) codes = ['Digit'+label];
@@ -1722,7 +1727,7 @@ function fieldKeyboard(){
     '<span>нажато '+pressed+' из '+total+' · rollover '+(pressed>3?'n-key ok':'—')+'</span></div>'+
     '<div class="kbboth">'+main+num+'</div>'+media+
     '<div class="kbnote">'+(st.length ? st.join(' · ')+' · ' : '')+'на клавише ×N — число нажатий (видно повторные нажатия); жёлтая рамка — дребезг (два срабатывания быстрее 25 мс); красная — клавиша нажата дольше 3 с (залипание). '+
-    'Автоповтор при удержании: '+rep+' клавиш. Сама клавиша Fn системе не видна — проверяйте её комбинации (ряд выше) или отметьте кликом.'+(S.lastUnknown?' Не найдена в раскладке: '+esc(S.lastUnknown)+'.':'')+
+    'Автоповтор при удержании: '+rep+' клавиш.'+(S.lastUnknown?' Не найдена в раскладке: '+esc(S.lastUnknown)+'.':'')+
     ' <button class="btn-link" onclick="echips.kbReset()">Сбросить счётчики</button></div></div>';
 }
 function paintFill(){

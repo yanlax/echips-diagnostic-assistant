@@ -68,6 +68,11 @@ pub struct HardwareSummary {
     #[serde(default)]
     pub board: String,
     #[serde(default)]
+    pub board_serial: String,
+    /// UUID системы из SMBIOS (Win32_ComputerSystemProduct) — меняется при замене платы.
+    #[serde(default)]
+    pub system_uuid: String,
+    #[serde(default)]
     pub bios_version: String,
     #[serde(default)]
     pub bios_date: String,
@@ -123,6 +128,7 @@ pub fn get_hardware_summary() -> Result<HardwareSummary, String> {
             })
             $bb = Get-CimInstance Win32_BaseBoard | Select-Object -First 1
             $bios = Get-CimInstance Win32_BIOS | Select-Object -First 1
+            $csp = Get-CimInstance Win32_ComputerSystemProduct | Select-Object -First 1
             $chassis = @((Get-CimInstance Win32_SystemEnclosure | Select-Object -First 1).ChassisTypes)
             $laptopTypes = 8, 9, 10, 11, 12, 14, 18, 21, 30, 31, 32
             $isLaptop = $false
@@ -141,6 +147,8 @@ pub fn get_hardware_summary() -> Result<HardwareSummary, String> {
                 disks = $disks
                 gpus = $gpus
                 board = (([string]$bb.Manufacturer) + ' ' + ([string]$bb.Product)).Trim()
+                board_serial = ([string]$bb.SerialNumber).Trim()
+                system_uuid = ([string]$csp.UUID).Trim()
                 bios_version = [string]$bios.SMBIOSBIOSVersion
                 bios_date = if ($bios.ReleaseDate) { $bios.ReleaseDate.ToString('yyyy-MM-dd') } else { '' }
                 is_laptop = $isLaptop

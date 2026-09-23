@@ -1398,6 +1398,8 @@ function sysReport(hw){
     e.diskGb ? (biggest ? near(biggest.size_gb, e.diskGb) : false) : (hw.disks.some(function(d){ return d.health && d.health!=='Healthy'; }) ? false : null), e.diskGb ? e.diskGb+' ГБ' : '');
   hw.gpus.forEach(function(g){ chk('Видео', g.name+(g.vram_mb?' · '+g.vram_mb+' МБ':'')+(g.driver_version?' · драйвер '+g.driver_version:''), null); });
   chk('Плата', hw.board || '—', null);
+  chk('Серийник платы', hw.board_serial || '—', null);
+  chk('UUID', hw.system_uuid || '—', null);
   chk('BIOS', (hw.bios_version||'—')+(hw.bios_date?' от '+hw.bios_date:''),
     e.biosContains ? (hw.bios_version||'').toLowerCase().indexOf(String(e.biosContains).toLowerCase())>=0 : null, e.biosContains);
   chk('Тип корпуса', hw.is_laptop ? 'ноутбук' : 'настольный ПК / другое', null);

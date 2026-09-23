@@ -91,7 +91,7 @@ fn valid_key(key: &str) -> bool {
 }
 
 /// Шаги устранения. Возвращает текст результата или ошибку от Windows.
-/// step: "activate" | "install_oem_key" | "restart_service" | "sync_time" | "install_key"
+/// step: "activate" | "install_oem_key" | "restart_service" | "sync_time" | "install_key" | "settings_troubleshoot"
 #[tauri::command(async)]
 pub fn run_activation_step(step: String, key: Option<String>) -> Result<String, String> {
     #[cfg(target_os = "windows")]
@@ -119,6 +119,37 @@ pub fn run_activation_step(step: String, key: Option<String>) -> Result<String, 
             "#
             ),
             "restart_service" => "try { Stop-Service -Name sppsvc -Force -ErrorAction SilentlyContinue; Start-Service -Name sppsvc -ErrorAction Stop; 'Служба лицензирования перезапущена' } catch { throw $_.Exception.Message }".to_string(),
+            // То же, что делает техник руками: Параметры → Активация → кнопка
+            // «Устранение неполадок» (штатное средство самой Windows, которое
+            // умеет больше, чем WMI-шаги выше — например, привязку цифровой
+            // лицензии после замены платы). Программного API у него нет, поэтому
+            // открываем страницу и нажимаем кнопку через UI Automation
+            // (InvokePattern) — по имени, на русском и английском интерфейсе.
+            // Ждём до 20 с появления окна и кнопки; сам результат устранения
+            // проверяет вызывающий код (опрос get_activation_status).
+            "settings_troubleshoot" => r#"
+                try {
+                    Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+                    Start-Process 'ms-settings:activation'
+                    $root = [System.Windows.Automation.AutomationElement]::RootElement
+                    $frameCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ClassNameProperty, 'ApplicationFrameWindow')
+                    $btn = $null
+                    $deadline = (Get-Date).AddSeconds(20)
+                    while (-not $btn -and (Get-Date) -lt $deadline) {
+                        Start-Sleep -Milliseconds 800
+                        foreach ($w in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $frameCond)) {
+                            if ($w.Current.Name -notmatch 'Параметры|Settings') { continue }
+                            foreach ($e in $w.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)) {
+                                if ($e.Current.Name -match 'Устранени[ея] неполадок|Устранить|Troubleshoot' -and $e.Current.ControlType.ProgrammaticName -match 'Button|Hyperlink') { $btn = $e; break }
+                            }
+                            if ($btn) { break }
+                        }
+                    }
+                    if (-not $btn) { throw 'Кнопка устранения неполадок не найдена в Параметрах (Windows уже активирована, либо другой язык/сборка интерфейса)' }
+                    $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+                    'Нажата кнопка «' + $btn.Current.Name + '» в Параметрах'
+                } catch { throw $_.Exception.Message }
+            "#.to_string(),
             "sync_time" => "try { Set-Service -Name w32time -StartupType Automatic -ErrorAction SilentlyContinue; Start-Service -Name w32time -ErrorAction SilentlyContinue; $null = & w32tm /resync /force 2>&1; 'Синхронизация времени запрошена' } catch { throw $_.Exception.Message }".to_string(),
             "install_key" => {
                 let k = key.unwrap_or_default().trim().to_uppercase();

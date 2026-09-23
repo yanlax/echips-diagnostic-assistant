@@ -781,9 +781,11 @@ var A = {
     S.running = true;
     var lines = S.runLines.concat(['— Активация не пройдена, пробую штатные шаги устранения —']);
     S.runLines = lines; render();
-    var LABELS = { sync_time:'Синхронизация времени', restart_service:'Перезапуск службы лицензирования', activate:'Онлайн-активация', install_oem_key:'Установка OEM-ключа из BIOS' };
+    var LABELS = { sync_time:'Синхронизация времени', restart_service:'Перезапуск службы лицензирования', activate:'Онлайн-активация', install_oem_key:'Установка OEM-ключа из BIOS', settings_troubleshoot:'Кнопка «Устранение неполадок» в Параметрах Windows' };
     var steps = ['sync_time', 'restart_service', 'activate'];
     if (S.actRaw && S.actRaw.oem_key_present) steps.push('install_oem_key');
+    // Последним — то же, что техник делает руками в Параметрах → Активация.
+    steps.push('settings_troubleshoot');
     function addLine(t){ lines = lines.concat([t]); S.runLines = lines; render(); }
     function runStep(i){
       if (S.cat!=='winact'){ return; }
@@ -792,11 +794,28 @@ var A = {
       addLine(LABELS[step] + '…');
       invoke('run_activation_step', { step: step, key: null }).then(function(r){
         addLine('    ' + r);
+        if (step==='settings_troubleshoot') return pollAfterTroubleshoot(i);
         afterStep(i);
       }).catch(function(err){
         addLine('    не выполнено: ' + (typeof err==='string' ? err : 'ошибка'));
         afterStep(i);
       });
+    }
+    // Средство Windows отрабатывает не мгновенно — ждём активации до ~90 с.
+    function pollAfterTroubleshoot(i){
+      var tries = 0;
+      (function tick(){
+        if (S.cat!=='winact'){ return; }
+        invoke('get_activation_status').then(function(a){
+          S.actRaw = a;
+          if (a.found && a.license_status===1){ addLine('    Windows активирована'); return finish(); }
+          if (++tries >= 18){ addLine('    за 90 с активация не подтвердилась'); return afterStep(i); }
+          setTimeout(tick, 5000);
+        }).catch(function(){
+          if (++tries >= 18) return afterStep(i);
+          setTimeout(tick, 5000);
+        });
+      })();
     }
     function afterStep(i){
       invoke('get_activation_status').then(function(a){

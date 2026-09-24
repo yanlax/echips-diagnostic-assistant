@@ -94,10 +94,13 @@ pub async fn download_update(window: Window, url: String, file_name: String) -> 
     let dest_dir = downloads_dir();
     std::fs::create_dir_all(&dest_dir).map_err(|e| format!("Не удалось создать папку загрузок: {e}"))?;
     let dest_path = dest_dir.join(&file_name);
+    // Качаем во временный .part и переименовываем в конце — недокачанный exe не остаётся под настоящим именем.
+    let part_path = dest_dir.join(format!("{file_name}.part"));
 
     let resp = reqwest::get(&url).await.map_err(|e| format!("Не удалось начать загрузку: {e}"))?;
+    let resp = resp.error_for_status().map_err(|e| format!("Сервер отклонил загрузку: {e}"))?;
     let total = resp.content_length().unwrap_or(0);
-    let mut file = std::fs::File::create(&dest_path).map_err(|e| format!("Не удалось создать файл: {e}"))?;
+    let mut file = std::fs::File::create(&part_path).map_err(|e| format!("Не удалось создать файл {}: {e}", part_path.display()))?;
     let mut downloaded: u64 = 0;
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
@@ -106,5 +109,7 @@ pub async fn download_update(window: Window, url: String, file_name: String) -> 
         downloaded += chunk.len() as u64;
         let _ = window.emit("app-update-progress", UpdateProgress { downloaded, total });
     }
+    drop(file);
+    std::fs::rename(&part_path, &dest_path).map_err(|e| format!("Не удалось сохранить {}: {e}", dest_path.display()))?;
     Ok(dest_path.to_string_lossy().to_string())
 }

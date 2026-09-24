@@ -46,7 +46,10 @@
         }
       }).then(function (fn) { unlisten = fn; });
 
-      window.__TAURI__.core.invoke("download_update", { url: info.download_url, fileName: info.file_name })
+      // Имя с версией: если программа запущена из «Загрузок» под тем же именем,
+      // Windows не даёт перезаписать запущенный exe — скачивание падало.
+      var newName = info.file_name.replace(/\.exe$/i, "") + "-" + info.version + ".exe";
+      window.__TAURI__.core.invoke("download_update", { url: info.download_url, fileName: newName })
         .then(function (savedPath) {
           if (unlisten) unlisten();
           textEl.textContent = "Скачано — открываю папку…";
@@ -55,9 +58,9 @@
         .then(function () {
           setTimeout(function () { host.innerHTML = ""; }, 1500);
         })
-        .catch(function () {
+        .catch(function (err) {
           if (unlisten) unlisten();
-          textEl.textContent = "Не удалось скачать обновление";
+          textEl.textContent = "Не удалось скачать обновление" + (typeof err === "string" ? ": " + err : "");
           downloadBtn.style.pointerEvents = "";
         });
     });

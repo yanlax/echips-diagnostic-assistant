@@ -753,6 +753,9 @@ var A = {
 
   /* ---- тест памяти ---- */
   /* Номер приёмки (левое меню): только цифры, до 6. Меняется путь отчёта → новая отправка. */
+  /* Этап ремонта: «До ремонта» / «После ремонта» (повторный клик снимает выбор) — пишется в отчёт и в имя файла,
+     вкладка «История» по нему сама находит пару для сравнения. */
+  setStage:function(v){ S.repairStage = S.repairStage===v ? '' : v; renderStageBtns(); },
   setIntake:function(v){ S.intake = String(v||'').replace(/\D/g,'').slice(0,6); var el=document.getElementById('intake-input'); if(el && el.value!==S.intake) el.value=S.intake; },
   profKey:function(v){ (S.profSave = S.profSave || {}).key = v; },
   profSave:function(){
@@ -791,6 +794,16 @@ var A = {
     var paths = H.sel.slice().sort();
     Promise.all(paths.map(function(p){ return invoke('fetch_report', { path:p }); })).then(function(envs){
       H.cmp = { a:{ path:paths[0], env:envs[0] }, b:{ path:paths[1], env:envs[1] } }; H.view = null;
+    }).catch(function(e){ H.err = typeof e==='string' ? e : 'Не удалось получить отчёты'; }).then(function(){ H.busy = false; render(); });
+  },
+  /* Одна кнопка: сравнить самый свежий отчёт «до ремонта» с самым свежим «после» (та же приёмка/ремонт) */
+  histComparePair:function(){
+    var H = S.hist, q = (H.q||'').toLowerCase().trim();
+    var list = (H.list||[]).filter(function(x){ return !q || (x.device+' '+x.engineer+' '+x.date).toLowerCase().indexOf(q)>=0; });
+    var pr = histFindPair(list); if (!pr) return;
+    H.busy = true; H.err = ''; render();
+    Promise.all([pr.before.path, pr.after.path].map(function(p){ return invoke('fetch_report', { path:p }); })).then(function(envs){
+      H.cmp = { a:{ path:pr.before.path, env:envs[0] }, b:{ path:pr.after.path, env:envs[1] } }; H.view = null;
     }).catch(function(e){ H.err = typeof e==='string' ? e : 'Не удалось получить отчёты'; }).then(function(){ H.busy = false; render(); });
   },
   histBack:function(){ S.hist.view = null; S.hist.cmp = null; render(); },
@@ -1431,6 +1444,7 @@ var A = {
       device_model: deviceLabel(),
       device_serial: deviceSn(),
       intake: S.intake || '',
+      repair_stage: S.repairStage || '',
       run_mode: S.auto && S.auto.on ? (S.autoMode==='express' ? 'экспресс' : 'полный') : (S.autoMode ? (S.autoMode==='express' ? 'экспресс' : 'полный') : ''),
       engineer: S.engineer ? S.engineer.name : '',
       summary_comment: S.reportSummary || '',
@@ -1899,7 +1913,11 @@ function fetchCategory(kind){
 }
 
 /* ---------- сайдбар ---------- */
+function renderStageBtns(){
+  ['before','after'].forEach(function(k){ var b=document.getElementById('stage-'+k); if (b) b.classList.toggle('on', S.repairStage===k); });
+}
 function renderNav(){
+  renderStageBtns();
   var active = { start:'start', drivers:'start', mb:'start', techadmin:'start', dash:'dash', test:'dash', sensors:'sensors', stress:'stress', report:'report', repdetail:'report', history:'history' }[S.screen];
   var c = counts();
   var items = [
@@ -2958,6 +2976,20 @@ function gpuFromSnap(sn){
 function gpuHottest(sn){ var t = gpuFromSnap(sn).map(function(g){ return g.temp; }).filter(function(v){ return v!=null; }); return t.length ? Math.max.apply(null, t) : null; }
 /* ---------- История отчётов (админ) ---------- */
 var HIST_ST = { pass:'OK', fail:'ОШИБКА', na:'н/п', idle:'—' };
+function histStage(ref){ var m = String(ref.file||'').match(/_(before|after)\.json$/); return m ? m[1] : ''; }
+function histStageBadge(ref){ var st = histStage(ref); return st ? ' <span class="stagebadge '+st+'">'+(st==='before'?'до':'после')+'</span>' : ''; }
+/* Пара «до / после» в текущем списке: самый свежий «до» и самый свежий «после» с тем же номером приёмки (или серийником) */
+function histFindPair(list){
+  var bef = list.filter(function(x){ return histStage(x)==='before'; }), aft = list.filter(function(x){ return histStage(x)==='after'; });
+  for (var i=0;i<bef.length;i++){
+    var b = histLabel(bef[i]);
+    for (var j=0;j<aft.length;j++){
+      var a = histLabel(aft[j]);
+      if ((b.intake && b.intake===a.intake) || (!b.intake && !a.intake && b.serial===a.serial)) return { before:bef[i], after:aft[j], intake:b.intake||a.intake, serial:b.serial };
+    }
+  }
+  return null;
+}
 function histLabel(ref){
   var m = String(ref.device||'').match(/^(\d{1,6})_(.+)$/);
   return { intake: m ? m[1] : '', serial: m ? m[2] : ref.device };
@@ -2990,14 +3022,16 @@ function screenHistory(){
     var A_ = H.cmp.a.env, B_ = H.cmp.b.env, ra = A_.report||{}, rb = B_.report||{}, byId = {};
     (ra.results||[]).forEach(function(x){ byId[x.id] = { a:x }; });
     (rb.results||[]).forEach(function(x){ (byId[x.id] = byId[x.id] || {}).b = x; });
-    var rows = Object.keys(byId).map(function(id){ var e = byId[id]; return { title:(e.b||e.a).title, a:e.a, b:e.b, changed:(e.a&&e.a.status)!==(e.b&&e.b.status) }; });
+// «не проверено» (idle) и отсутствие теста изменением не считаем: экспресс и полный прогон дают разный набор
+    var rows = Object.keys(byId).map(function(id){ var e = byId[id], sa = e.a && e.a.status, sb = e.b && e.b.status;
+      return { title:(e.b||e.a).title, a:e.a, b:e.b, changed: !!sa && !!sb && sa!=='idle' && sb!=='idle' && sa!==sb }; });
     var changed = rows.filter(function(x){ return x.changed; });
     var head = [];
     ['device_model','device_serial','intake','engineer','run_mode'].forEach(function(k){ if ((ra[k]||'')!==(rb[k]||'')) head.push(k+': «'+(ra[k]||'—')+'» → «'+(rb[k]||'—')+'»'); });
     body = '<div class="headactions" style="margin-bottom:12px"><button class="btn btn-ghost" onclick="echips.histBack()">← к списку</button></div>'+
       '<div class="cmpgrid"><div>'+histHeader(A_)+'</div><div>'+histHeader(B_)+'</div></div>'+
       (head.length ? '<div class="kbnote" style="margin-top:10px">Отличия в заголовке: '+head.map(esc).join(' · ')+'</div>' : '')+
-      '<div class="kbnote" style="margin-top:10px">Изменилось тестов: '+changed.length+' из '+rows.length+'</div>'+
+      '<div class="kbnote" style="margin-top:10px">Изменилось тестов: '+changed.length+' из '+rows.length+' (тесты «не проверено» в одном из отчётов не сравниваются)</div>'+
       '<div class="smtable" style="margin-top:8px"><div class="smh nv"><span>Тест</span><span>Старый → новый</span></div>'+
       rows.filter(function(x){ return x.changed || (x.a&&x.a.status==='fail') || (x.b&&x.b.status==='fail'); }).map(function(x){
         var sa = x.a ? HIST_ST[x.a.status] : '—', sb = x.b ? HIST_ST[x.b.status] : '—';
@@ -3008,7 +3042,8 @@ function screenHistory(){
     var q = (H.q||'').toLowerCase().trim(), list = (H.list||[]).filter(function(x){ return !q || (x.device+' '+x.engineer+' '+x.date).toLowerCase().indexOf(q)>=0; });
     body = '<div class="runrow" style="margin-bottom:10px"><input class="search-input" style="max-width:360px" placeholder="поиск: серийник, приёмка, инженер, дата" value="'+esc(H.q||'')+'" oninput="echips.histQ(this.value)">'+
       '<button class="btn btn-ghost" onclick="echips.histLoad(true)" '+(H.loading?'disabled':'')+'>Обновить</button>'+
-      '<button class="btn btn-primary" onclick="echips.histCompare()" '+(H.sel.length===2?'':'disabled')+'>Сравнить выбранные ('+H.sel.length+'/2)</button></div>'+
+      '<button class="btn btn-primary" onclick="echips.histCompare()" '+(H.sel.length===2?'':'disabled')+'>Сравнить выбранные ('+H.sel.length+'/2)</button>'+
+      (function(){ var pr = histFindPair(list); return pr ? '<button class="btn btn-primary" onclick="echips.histComparePair()">Сравнить до / после'+(pr.intake?' · '+esc(pr.intake):'')+'</button>' : ''; })()+'</div>'+
       (H.err ? '<div class="kbnote" style="color:var(--err);margin-bottom:8px">'+esc(H.err)+'</div>' : '')+
       (H.loading ? '<div class="kbnote">загрузка списка отчётов…</div>' :
       '<div class="kbnote" style="margin-bottom:8px">Отчётов: '+list.length+(list.length>200 ? ' (показаны первые 200 — уточните поиск)' : '')+'</div>'+
@@ -3016,7 +3051,7 @@ function screenHistory(){
       (H.shown = list.slice(0,200)).map(function(x,i){
         var d = histLabel(x), on = H.sel.indexOf(x.path)>=0, tm = /^\d{6}/.test(x.file) ? x.file.slice(0,2)+':'+x.file.slice(2,4) : '';
         return '<div class="smr histrow"><span><input type="checkbox" '+(on?'checked ':'')+'onclick="echips.histPick('+i+')"></span>'+
-          '<span class="mono">'+esc(x.date)+' '+tm+'</span><span>'+esc(x.engineer)+'</span><span class="mono">'+esc(d.intake||'—')+'</span><span class="mono">'+esc(d.serial)+'</span>'+
+          '<span class="mono">'+esc(x.date)+' '+tm+'</span><span>'+esc(x.engineer)+'</span><span class="mono">'+esc(d.intake||'—')+'</span><span class="mono">'+esc(d.serial)+histStageBadge(x)+'</span>'+
           '<span><button class="btn-link" onclick="echips.histOpen('+i+')">открыть</button></span></div>';
       }).join('')+'</div>');
   }

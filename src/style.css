@@ -660,3 +660,10 @@ h1.title{font-family:var(--grotesk);font-size:27px;font-weight:600;color:var(--t
 
 .histrow{grid-template-columns:28px 130px 1fr 80px 1.4fr 80px!important}
 .cmpgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+
+.stagebtns{display:flex;gap:6px;margin-top:8px}
+.stagebtns button{flex:1;padding:6px 4px;border-radius:7px;border:1px solid var(--line-input);background:var(--glass-solid);color:var(--dim);font-family:var(--mono);font-size:10px;cursor:pointer}
+.stagebtns button:hover{color:var(--text);border-color:var(--accent-line)}
+.stagebtns button.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-hi)}
+.stagebadge{font-family:var(--mono);font-size:10px;padding:1px 6px;border-radius:6px;border:1px solid var(--line-strong)}
+.stagebadge.before{color:var(--cool)}.stagebadge.after{color:var(--ok)}

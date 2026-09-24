@@ -45,6 +45,9 @@ pub struct DiagnosticReport {
     /// Режим автопрогона: «полный» / «экспресс» (пусто — ручная проверка).
     #[serde(default)]
     pub run_mode: String,
+    /// Этап ремонта: "before" (до ремонта) / "after" (после ремонта) / пусто.
+    #[serde(default)]
+    pub repair_stage: String,
     pub engineer: String,
     pub started_at: String,
     pub finished_at: String,
@@ -73,6 +76,11 @@ fn render_txt(report: &DiagnosticReport) -> String {
     out.push_str(&format!("Серийный номер: {}\n", report.device_serial));
     if !report.intake.trim().is_empty() {
         out.push_str(&format!("Номер приёмки / ремонта: {}\n", report.intake.trim()));
+    }
+    match report.repair_stage.as_str() {
+        "before" => out.push_str("Этап ремонта: ДО ремонта\n"),
+        "after" => out.push_str("Этап ремонта: ПОСЛЕ ремонта\n"),
+        _ => {}
     }
     if !report.run_mode.trim().is_empty() {
         out.push_str(&format!("Режим автопрогона: {}\n", report.run_mode.trim()));
@@ -1236,10 +1244,15 @@ pub(crate) fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
     let meta_col_w = PDF_CONTENT_W / 4.0;
     let time_range = format_time_range(report);
     let duration = format_duration(report);
+    let stage_label = match report.repair_stage.as_str() {
+        "before" => " · ДО РЕМОНТА",
+        "after" => " · ПОСЛЕ РЕМОНТА",
+        _ => "",
+    };
     let device_label = if report.intake.trim().is_empty() {
-        "УСТРОЙСТВО".to_string()
+        format!("УСТРОЙСТВО{stage_label}")
     } else {
-        format!("УСТРОЙСТВО · ПРИЁМКА/РЕМОНТ № {}", report.intake.trim())
+        format!("УСТРОЙСТВО · ПРИЁМКА/РЕМОНТ № {}{stage_label}", report.intake.trim())
     };
     let meta: [(&str, String); 4] = [
         (device_label.as_str(), report.device_model.clone()),

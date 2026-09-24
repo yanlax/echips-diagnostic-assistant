@@ -128,7 +128,13 @@ async fn post(client: &reqwest::Client, envelope: &Value) -> Result<(), String> 
     let device_dir = if intake.is_empty() { serial.clone() } else { format!("{intake}_{serial}") };
     let date = started.format("%Y-%m-%d").to_string();
     let time = started.format("%H%M%S").to_string();
-    let base = format!("{engineer}/{date}/{device_dir}/{time}");
+    // Этап ремонта («до» / «после») попадает в имя файла: вкладка «История» по нему находит пару.
+    let stage = match report["repair_stage"].as_str().unwrap_or("") {
+        "before" => "_before",
+        "after" => "_after",
+        _ => "",
+    };
+    let base = format!("{engineer}/{date}/{device_dir}/{time}{stage}");
     // Копия для просмотра «все отчёты по ноутбуку»: _по_ноутбукам/<серийник>/ — история
     // всех инженеров и дат в одной папке.
     let by_device = format!(

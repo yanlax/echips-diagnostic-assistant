@@ -32,7 +32,7 @@
         <div class="mark logo"><img src="logo.png" alt="Echips"></div>
         <div>
           <div class="h">Echips Hardware<br>Check</div>
-          <div class="s">v0.42.0 · ОТК / сервис</div>
+          <div class="s">v0.43.0 · ОТК / сервис</div>
         </div>
       </div>
 
@@ -43,6 +43,7 @@
       <div class="techbox intakebox">
         <div class="k">Номер приёмки / ремонта</div>
         <input type="text" id="intake-input" class="intake-input" inputmode="numeric" maxlength="6" placeholder="до 6 цифр" autocomplete="off" oninput="echips.setIntake(this.value)">
+        <div class="stagebtns"><button type="button" id="stage-before" onclick="echips.setStage('before')">До ремонта</button><button type="button" id="stage-after" onclick="echips.setStage('after')">После ремонта</button></div>
       </div>
 
       <div class="techbox" id="techbox">

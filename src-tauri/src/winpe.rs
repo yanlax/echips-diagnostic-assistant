@@ -227,3 +227,44 @@ pub fn prepare() {
         ));
     }
 }
+
+/// Страница загрузилась (ставит on_page_load в lib.rs) — сторожевой поток тогда молчит.
+pub static PAGE_LOADED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Сторожевой поток: если за 20 с страница так и не загрузилась (в WinPE процесс приложения
+/// зависал без окна и без ошибок), пишет в лог, что происходит — процессы msedgewebview2/приложения
+/// и содержимое папки данных WebView2 и файла журнала Chromium. Так причина видна без ручной отладки.
+pub fn start_watchdog() {
+    #[cfg(target_os = "windows")]
+    {
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_secs(20));
+            if PAGE_LOADED.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
+            log("сторож: за 20 с страница так и не загрузилась");
+            use std::os::windows::process::CommandExt;
+            if let Ok(out) = std::process::Command::new("tasklist").args(["/fo", "csv", "/nh"]).creation_flags(0x0800_0000).output() {
+                let text = String::from_utf8_lossy(&out.stdout);
+                let mine: Vec<&str> = text
+                    .lines()
+                    .filter(|l| {
+                        let low = l.to_lowercase();
+                        low.contains("msedgewebview2") || low.contains("echips")
+                    })
+                    .collect();
+                log(&format!("сторож: процессы ({}): {}", mine.len(), mine.join(" | ")));
+            }
+            if let Some(dir) = std::env::var_os("WEBVIEW2_USER_DATA_FOLDER") {
+                let names: Vec<String> = std::fs::read_dir(&dir)
+                    .map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect())
+                    .unwrap_or_default();
+                log(&format!("сторож: папка данных WebView2 {:?}: {:?}", dir, names));
+            }
+            if let Some(t) = std::env::var_os("TEMP") {
+                let p = std::path::PathBuf::from(t).join("echips-webview2.log");
+                log(&format!("сторож: журнал Chromium {} — {}", p.display(), if p.exists() { "есть" } else { "не создан (браузерный процесс не стартовал)" }));
+            }
+        });
+    }
+}

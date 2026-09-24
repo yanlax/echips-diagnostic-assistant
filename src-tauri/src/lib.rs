@@ -11,6 +11,7 @@ pub fn run() {
     }));
     let built = tauri::Builder::default()
         .on_page_load(|_webview, payload| {
+            winpe::PAGE_LOADED.store(true, std::sync::atomic::Ordering::Relaxed);
             winpe::log(&format!("страница: {:?} {}", payload.event(), payload.url()));
         })
         .plugin(tauri_plugin_shell::init())
@@ -106,6 +107,7 @@ pub fn run() {
         }
     };
     winpe::log("окно создано, приложение запущено");
+    winpe::start_watchdog();
     app.run(|_app, event| {
             // Жизненный цикл в лог: если процесс закрывается сам, здесь будет видно кто и с каким кодом.
             match &event {

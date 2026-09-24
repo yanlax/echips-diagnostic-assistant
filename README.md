@@ -436,6 +436,8 @@ Chromium — `%TEMP%\echips-webview2.log` (почему не стартует б
 (в WinPE это и так так). Не проверено на реальном WinPE; чего в PE нет физически
 (Проводник, Windows Update, часть драйверов) — соответствующие проверки покажут ошибку.
 
+Свой образ WinPE со всем необходимым собирается скриптом из `winpe/` (см. `winpe/README.md`).
+
 ## Сборка
 
 Собирается только на Windows (или через CI) — код использует
@@ -447,6 +449,11 @@ GitHub Actions (`.github/workflows/build.yml`, ручной запуск чер�
 "Run workflow" или пуш тега `v*`).
 
 ## Версия
+
+0.30.0 — диагностика WinPE: перехват нативных исключений (код + DLL) и сторожевой
+поток (20 с без страницы → процессы msedgewebview2, папка данных WebView2, наличие журнала
+Chromium) в `echips-startup.log`; скрипт сборки собственного образа WinPE
+(`winpe/build-winpe.ps1`, `winpe/startnet.cmd`, `winpe/README.md`).
 
 0.29.0 — диагностика WinPE: лог загрузки страницы и событий приложения
 (`echips-startup.log`), журнал Chromium (`%TEMP%\echips-webview2.log`) — по

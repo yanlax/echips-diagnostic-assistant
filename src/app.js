@@ -1461,7 +1461,7 @@ var A = {
     S.mb = { step:'reading', techId:'', techName: S.engineer ? S.engineer.name : '', pin:'', pinErr:'', ticket:'', serial:'', uuid:'', formErr:'', before:null, writeError:null };
     render();
     invoke('read_board_identity').then(function(id){
-      S.mb.before = id; S.mb.step='form'; render();
+      S.mb.before = id; S.mb.step='form'; render(); A.mbLoadSaved();
     }).catch(function(err){
       S.mb.pinErr = typeof err==='string'?err:'Не удалось прочитать SN/UUID платы';
       S.mb.step='readerror'; render();
@@ -1480,6 +1480,25 @@ var A = {
   },
   /* Одна кнопка после записи: сверка SN системы/платы, UUID, MAC и OEM-ключа — результат идёт в отчёт как тест «Идентификаторы» */
   mbVerify:function(){ A.go('test','ident'); A.run(); },
+  /* Сохранение текущих SN/UUID в файл (папка открывается) и подстановка их из сохранённых файлов после замены платы */
+  mbLoadSaved:function(){
+    invoke('mb_list_identities').then(function(l){ S.mb.saved = l || []; render(); }).catch(function(){ S.mb.saved = []; });
+  },
+  mbSaveIdentity:function(){
+    var m = S.mb; if (!m.before) return;
+    m.idErr = ''; m.idMsg = '';
+    invoke('mb_save_identity', { data:{ saved_at:new Date().toISOString(), serial:String(m.before.serial_number||'').trim(), uuid:String(m.before.uuid||'').trim(),
+      model:S.device ? String(S.device.model||'').trim() : '', manufacturer:S.device ? String(S.device.manufacturer||'').trim() : '', bios_version:S.device ? String(S.device.bios_version||'').trim() : '',
+      engineer:S.engineer ? S.engineer.name : '', ticket:String(m.ticket||'').trim() } }).then(function(path){
+      m.idMsg = 'Сохранено: '+path; render(); A.mbLoadSaved();
+      invoke('open_containing_folder', { path:path }).catch(function(){});
+    }).catch(function(e){ m.idErr = typeof e==='string' ? e : 'Не удалось сохранить значения'; render(); });
+  },
+  mbUseSaved:function(i){
+    var m = S.mb, x = (m.saved||[])[i]; if (!x) return;
+    m.serial = x.serial || ''; m.uuid = x.uuid || ''; m.formErr = ''; m.idMsg = 'Подставлено из файла: '+(x.serial||'—')+(x.uuid?' · '+x.uuid:''); render();
+  },
+  mbOpenFolder:function(i){ var x = (S.mb.saved||[])[i]; if (x && x.path) invoke('open_containing_folder', { path:x.path }).catch(function(){}); },
   mbBack:function(){ S.mb.step='form'; render(); },
   mbWrite:function(){
     S.mb.step='writing'; render();
@@ -3742,7 +3761,15 @@ function screenMb(){
     body =
       '<div class="card"><div class="k">Текущие значения</div>'+
       '<div class="s" style="margin-top:8px">SN '+esc(m.before.serial_number)+'</div>'+
-      '<div class="s">UUID '+esc(m.before.uuid)+'</div></div>'+
+      '<div class="s">UUID '+esc(m.before.uuid)+'</div>'+
+      '<div class="runrow" style="margin-top:10px"><button class="btn btn-ghost" onclick="echips.mbSaveIdentity()">Сохранить значения в файл</button>'+
+      '<span class="n">перед заменой платы: файл сохранится, папка откроется; после замены значения можно подставить из файла</span></div>'+
+      (m.idMsg ? '<div class="kbnote" style="margin-top:8px;color:var(--ok)">'+esc(m.idMsg)+'</div>' : '')+
+      (m.idErr ? '<div class="kbnote" style="margin-top:8px;color:var(--err)">'+esc(m.idErr)+'</div>' : '')+'</div>'+
+      ((m.saved||[]).length ? '<div class="card" style="margin-top:12px"><div class="k">Сохранённые значения — подставить в форму</div><div class="smtable" style="margin-top:8px">'+m.saved.slice(0,8).map(function(x,i){
+        return '<div class="smr" style="grid-template-columns:1.2fr 1.6fr 120px 70px 90px"><span class="mono">'+esc(x.serial||'—')+'</span><span class="mono">'+esc(x.uuid||'—')+'</span><span class="mono">'+esc(String(x.saved_at||'').slice(0,16).replace('T',' '))+'</span>'+
+          '<button class="btn-link" onclick="echips.mbUseSaved('+i+')">подставить</button><button class="btn-link" onclick="echips.mbOpenFolder('+i+')">в папке</button></div>';
+      }).join('')+'</div></div>' : '')+
       '<div class="formgrid" style="margin-top:16px">'+
       '<div class="formfield"><label>Номер наряда</label><input value="'+esc(m.ticket)+'" oninput="echips.mbField(\'ticket\',this.value)" placeholder="Гарантийный случай / наряд"></div>'+
       '<div class="formfield"><label>Новый серийный номер</label><input value="'+esc(m.serial)+'" oninput="echips.mbField(\'serial\',this.value)" placeholder="4–40 символов; пусто — не менять"></div>'+

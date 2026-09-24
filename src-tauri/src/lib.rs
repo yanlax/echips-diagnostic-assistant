@@ -72,6 +72,8 @@ pub fn run() {
             commands::motherboard::write_smbios_identity,
             commands::motherboard::mb_last_save,
             commands::motherboard::mb_last_load,
+            commands::motherboard::mb_save_identity,
+            commands::motherboard::mb_list_identities,
             commands::motherboard::read_audit_log,
             commands::report::save_report_txt,
             commands::report::save_report_json,

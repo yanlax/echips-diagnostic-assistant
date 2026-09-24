@@ -9,6 +9,7 @@ use crate::powershell::run_ps;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Write};
+use tauri::Manager;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct BoardIdentity {
@@ -501,6 +502,78 @@ pub fn mb_last_load() -> Option<MbLast> {
         }
     }
     Some(m)
+}
+
+/// Сохранённые значения SN/UUID платы: перед заменой инженер сохраняет их в файл, после замены подставляет обратно
+/// из файла (вкладка «Замена платы»). Файлы лежат в `<папка данных приложения>\board_identity`.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct SavedIdentity {
+    #[serde(default)]
+    pub saved_at: String,
+    /// серийный номер (SMBIOS System/Baseboard)
+    #[serde(default)]
+    pub serial: String,
+    #[serde(default)]
+    pub uuid: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub manufacturer: String,
+    #[serde(default)]
+    pub bios_version: String,
+    #[serde(default)]
+    pub engineer: String,
+    #[serde(default)]
+    pub ticket: String,
+    /// путь к файлу (заполняется при чтении списка / после сохранения)
+    #[serde(default)]
+    pub path: String,
+}
+
+fn identity_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app.path().app_data_dir().map_err(|e| format!("Не удалось определить папку данных приложения: {e}"))?.join("board_identity");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Не удалось создать папку: {e}"))?;
+    Ok(dir)
+}
+
+/// Сохраняет значения в JSON-файл `<серийник>_<дата_время>.json`; возвращает полный путь (для открытия папки).
+#[tauri::command(async)]
+pub fn mb_save_identity(app: tauri::AppHandle, data: SavedIdentity) -> Result<String, String> {
+    if data.serial.trim().is_empty() && data.uuid.trim().is_empty() {
+        return Err("Нечего сохранять: серийный номер и UUID пусты".to_string());
+    }
+    let dir = identity_dir(&app)?;
+    let safe: String = data.serial.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '_' }).take(40).collect();
+    let name = format!("{}_{}.json", if safe.is_empty() { "board".to_string() } else { safe }, chrono::Local::now().format("%Y%m%d_%H%M%S"));
+    let path = dir.join(name);
+    let mut d = data;
+    if d.saved_at.is_empty() {
+        d.saved_at = chrono::Local::now().to_rfc3339();
+    }
+    d.path = String::new();
+    let text = serde_json::to_string_pretty(&d).map_err(|e| e.to_string())?;
+    std::fs::write(&path, text).map_err(|e| format!("Не удалось записать файл: {e}"))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// Список сохранённых файлов, новые сверху (до 30).
+#[tauri::command(async)]
+pub fn mb_list_identities(app: tauri::AppHandle) -> Result<Vec<SavedIdentity>, String> {
+    let dir = identity_dir(&app)?;
+    let mut out: Vec<SavedIdentity> = std::fs::read_dir(&dir)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map_or(false, |x| x == "json"))
+        .filter_map(|e| {
+            let text = std::fs::read_to_string(e.path()).ok()?;
+            let mut v: SavedIdentity = serde_json::from_str(&text).ok()?;
+            v.path = e.path().to_string_lossy().to_string();
+            Some(v)
+        })
+        .collect();
+    out.sort_by(|a, b| b.saved_at.cmp(&a.saved_at));
+    out.truncate(30);
+    Ok(out)
 }
 
 #[tauri::command(async)]

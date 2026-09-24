@@ -785,7 +785,7 @@ var A = {
   },
   /* ---- история отчётов (админ): список из echips-reports, просмотр, сравнение двух ---- */
   histLoad:function(force){
-    var H = S.hist = S.hist || { list:null, loading:false, err:'', q:'', sel:[], view:null, cmp:null, busy:false };
+    var H = S.hist = S.hist || { list:null, loading:false, err:'', q:'', sel:[], view:null, cmp:null, busy:false, sum:{}, sumBusy:false, fModel:'', fMode:'', fErr:false };
     if (H.loading || (H.list && !force)) return;
     H.loading = true; H.err = ''; render();
     invoke('list_reports').then(function(l){ H.list = l; }).catch(function(e){ H.err = typeof e==='string' ? e : 'Не удалось получить список отчётов'; H.list = []; })
@@ -820,6 +820,38 @@ var A = {
     Promise.all([pr.before.path, pr.after.path].map(function(p){ return invoke('fetch_report', { path:p }); })).then(function(envs){
       H.cmp = { a:{ path:pr.before.path, env:envs[0] }, b:{ path:pr.after.path, env:envs[1] } }; H.view = null;
     }).catch(function(e){ H.err = typeof e==='string' ? e : 'Не удалось получить отчёты'; }).then(function(){ H.busy = false; render(); });
+  },
+  histFilter:function(k, v){ S.hist[k] = v; render(); },
+  /* Сводки (модель, режим, пройдено/ошибок) читаются из самих отчётов — по 6 запросов параллельно, первые 60 строк списка */
+  histLoadSums:function(){
+    var H = S.hist; if (H.sumBusy) return;
+    var q = (H.q||'').toLowerCase().trim(), list = histFiltered(H).slice(0,60).filter(function(x){ return !H.sum[x.path]; });
+    if (!list.length) return;
+    H.sumBusy = true; render();
+    var i = 0;
+    function next(){
+      if (i>=list.length){ H.sumBusy = false; render(); return; }
+      var batch = list.slice(i, i+6); i += 6;
+      Promise.all(batch.map(function(x){
+        return invoke('fetch_report', { path:x.path }).then(function(env){
+          var r = env.report||{}, c = histSummary(r);
+          H.sum[x.path] = { model:r.device_model||'', mode:r.run_mode||'', pass:c.pass, fail:c.fail, na:c.na };
+        }).catch(function(){ H.sum[x.path] = { model:'', mode:'', pass:0, fail:0, na:0, err:true }; });
+      })).then(function(){ render(); next(); });
+    }
+    next();
+  },
+  histExport:function(){
+    var H = S.hist, rows = histFiltered(H);
+    function q(v){ v = String(v==null?'':v); return /[",;\n]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v; }
+    var head = ['Дата','Время','Инженер','Приёмка/ремонт','Серийный номер','Этап','Модель','Режим','Пройдено','Ошибок','Не применимо','Файл'];
+    var lines = [head.join(';')].concat(rows.map(function(x){
+      var d = histLabel(x), m = H.sum[x.path] || {}, st = histStage(x);
+      return [x.date, /^\d{6}/.test(x.file) ? x.file.slice(0,2)+':'+x.file.slice(2,4)+':'+x.file.slice(4,6) : '', x.engineer, d.intake, d.serial, st==='before'?'до':st==='after'?'после':'', m.model, m.mode, m.pass, m.fail, m.na, x.path].map(q).join(';');
+    }));
+    invoke('save_csv', { name:'history', content:lines.join('\r\n') }).then(function(path){
+      H.err = ''; H.msg = 'Список сохранён: '+path; render(); invoke('open_containing_folder', { path:path }).catch(function(){});
+    }).catch(function(e){ H.err = typeof e==='string' ? e : 'Не удалось сохранить список'; render(); });
   },
   histBack:function(){ S.hist.view = null; S.hist.cmp = null; render(); },
   batLiveToggle:function(){
@@ -3042,6 +3074,17 @@ var HIST_ST = { pass:'OK', fail:'ОШИБКА', na:'н/п', idle:'—' };
 function histStage(ref){ var m = String(ref.file||'').match(/_(before|after)\.json$/); return m ? m[1] : ''; }
 function histStageBadge(ref){ var st = histStage(ref); return st ? ' <span class="stagebadge '+st+'">'+(st==='before'?'до':'после')+'</span>' : ''; }
 /* Пара «до / после» в текущем списке: самый свежий «до» и самый свежий «после» с тем же номером приёмки (или серийником) */
+function histFiltered(H){
+  var q = (H.q||'').toLowerCase().trim();
+  return (H.list||[]).filter(function(x){
+    if (q && (x.device+' '+x.engineer+' '+x.date).toLowerCase().indexOf(q)<0) return false;
+    var m = H.sum && H.sum[x.path];
+    if (H.fModel && !(m && m.model===H.fModel)) return false;
+    if (H.fMode && !(m && (m.mode||'—')===H.fMode)) return false;
+    if (H.fErr && !(m && m.fail>0)) return false;
+    return true;
+  });
+}
 function histFindPair(list){
   var bef = list.filter(function(x){ return histStage(x)==='before'; }), aft = list.filter(function(x){ return histStage(x)==='after'; });
   for (var i=0;i<bef.length;i++){
@@ -3096,7 +3139,7 @@ function histHeader(env){
     (r.summary_comment ? '<div class="s" style="margin-top:6px">Комментарий: '+esc(r.summary_comment)+'</div>' : '')+'</div>';
 }
 function screenHistory(){
-  var H = S.hist || { list:null, loading:false, err:'', q:'', sel:[], view:null, cmp:null, busy:false };
+  var H = S.hist || { list:null, loading:false, err:'', q:'', sel:[], view:null, cmp:null, busy:false, sum:{}, sumBusy:false, fModel:'', fMode:'', fErr:false };
   var body;
   if (H.busy){
     body = hexSpinner('ЗАГРУЗКА ОТЧЁТА');
@@ -3134,19 +3177,29 @@ function screenHistory(){
         return '<div class="smr nv"><span>'+esc(x.title)+(x.changed?' <b style="color:var(--accent)">●</b>':'')+'</span><span class="mono">'+sa+' → '+sb+(note?' · '+esc(note):'')+'</span></div>';
       }).join('')+'</div>';
   } else {
-    var q = (H.q||'').toLowerCase().trim(), list = (H.list||[]).filter(function(x){ return !q || (x.device+' '+x.engineer+' '+x.date).toLowerCase().indexOf(q)>=0; });
+    var list = histFiltered(H);
+    var models = {}, modes = {};
+    Object.keys(H.sum||{}).forEach(function(p){ var m = H.sum[p]; if (m.model) models[m.model] = 1; modes[m.mode||'—'] = 1; });
+    function sel(k, items, ph){ return '<select class="search-input" style="max-width:180px" onchange="echips.histFilter(\''+k+'\', this.value)"><option value="">'+ph+'</option>'+Object.keys(items).map(function(v){ return '<option value="'+esc(v)+'"'+(H[k]===v?' selected':'')+'>'+esc(v)+'</option>'; }).join('')+'</select>'; }
     body = '<div class="runrow" style="margin-bottom:10px"><input class="search-input" style="max-width:360px" placeholder="поиск: серийник, приёмка, инженер, дата" value="'+esc(H.q||'')+'" oninput="echips.histQ(this.value)">'+
       '<button class="btn btn-ghost" onclick="echips.histLoad(true)" '+(H.loading?'disabled':'')+'>Обновить</button>'+
       '<button class="btn btn-primary" onclick="echips.histCompare()" '+(H.sel.length===2?'':'disabled')+'>Сравнить выбранные ('+H.sel.length+'/2)</button>'+
       (function(){ var pr = histFindPair(list); return pr ? '<button class="btn btn-primary" onclick="echips.histComparePair()">Сравнить до / после'+(pr.intake?' · '+esc(pr.intake):'')+'</button>' : ''; })()+'</div>'+
+      '<div class="runrow" style="margin-bottom:10px">'+sel('fModel', models, 'все модели')+sel('fMode', modes, 'все режимы')+
+      '<label class="kbnote"><input type="checkbox" '+(H.fErr?'checked ':'')+'onclick="echips.histFilter(\'fErr\', this.checked)"> только с ошибками</label>'+
+      '<button class="btn btn-ghost" onclick="echips.histLoadSums()" '+(H.sumBusy?'disabled':'')+'>'+(H.sumBusy?'Загрузка сводок…':'Загрузить сводки (первые 60)')+'</button>'+
+      '<button class="btn btn-ghost" onclick="echips.histExport()">Сохранить список в CSV</button></div>'+
+      ((H.fModel||H.fMode||H.fErr) && Object.keys(H.sum||{}).length<(H.list||[]).length ? '<div class="kbnote" style="margin-bottom:8px">Фильтры по модели, режиму и ошибкам работают только для отчётов с загруженной сводкой.</div>' : '')+
       (H.err ? '<div class="kbnote" style="color:var(--err);margin-bottom:8px">'+esc(H.err)+'</div>' : '')+
+      (H.msg ? '<div class="kbnote" style="color:var(--ok);margin-bottom:8px">'+esc(H.msg)+'</div>' : '')+
       (H.loading ? '<div class="kbnote">загрузка списка отчётов…</div>' :
       '<div class="kbnote" style="margin-bottom:8px">Отчётов: '+list.length+(list.length>200 ? ' (показаны первые 200 — уточните поиск)' : '')+'</div>'+
-      '<div class="smtable"><div class="smh histrow"><span></span><span>Дата</span><span>Инженер</span><span>Приёмка</span><span>Серийный номер</span><span></span></div>'+
+      '<div class="smtable"><div class="smh histrow"><span></span><span>Дата</span><span>Инженер</span><span>Приёмка</span><span>Серийный номер</span><span>Итог</span><span></span></div>'+
       (H.shown = list.slice(0,200)).map(function(x,i){
         var d = histLabel(x), on = H.sel.indexOf(x.path)>=0, tm = /^\d{6}/.test(x.file) ? x.file.slice(0,2)+':'+x.file.slice(2,4) : '';
         return '<div class="smr histrow"><span><input type="checkbox" '+(on?'checked ':'')+'onclick="echips.histPick('+i+')"></span>'+
           '<span class="mono">'+esc(x.date)+' '+tm+'</span><span>'+esc(x.engineer)+'</span><span class="mono">'+esc(d.intake||'—')+'</span><span class="mono">'+esc(d.serial)+histStageBadge(x)+'</span>'+
+          '<span class="mono">'+(function(){ var m = H.sum[x.path]; return m ? (m.err ? '—' : '<b style="color:var(--ok)">✓'+m.pass+'</b> '+(m.fail?'<b style="color:var(--err)">✗'+m.fail+'</b> ':'')+'<span style="opacity:.6">'+esc(m.mode||'')+'</span>') : ''; })()+'</span>'+
           '<span><button class="btn-link" onclick="echips.histOpen('+i+')">открыть</button></span></div>';
       }).join('')+'</div>');
   }

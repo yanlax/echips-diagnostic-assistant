@@ -1487,6 +1487,18 @@ pub fn save_report_json(app: tauri::AppHandle, report: DiagnosticReport) -> Resu
     Ok(path.to_string_lossy().to_string())
 }
 
+/// Сохраняет текст (CSV списка отчётов из «Истории») в папку отчётов; BOM в начале — чтобы Excel открыл кириллицу.
+#[tauri::command(async)]
+pub fn save_csv(app: tauri::AppHandle, name: String, content: String) -> Result<String, String> {
+    let dir = reports_dir(&app)?;
+    let filename = format!("{}_{}.csv", safe_filename_part(&name), chrono::Local::now().format("%Y%m%d_%H%M%S"));
+    let path = dir.join(&filename);
+    let mut bytes = vec![0xEF, 0xBB, 0xBF];
+    bytes.extend_from_slice(content.as_bytes());
+    fs::write(&path, bytes).map_err(|e| format!("Не удалось записать файл: {e}"))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
 #[tauri::command(async)]
 pub fn save_report_pdf(app: tauri::AppHandle, report: DiagnosticReport) -> Result<String, String> {
     let dir = reports_dir(&app)?;

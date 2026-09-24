@@ -658,7 +658,7 @@ h1.title{font-family:var(--grotesk);font-size:27px;font-weight:600;color:var(--t
 .admin-row.pending .res{color:var(--faint);font-style:italic}
 .admin-empty{padding:20px 14px;color:var(--faint);font-family:var(--mono);font-size:11px;text-align:center}
 
-.histrow{grid-template-columns:28px 130px 1fr 80px 1.4fr 80px!important}
+.histrow{grid-template-columns:28px 120px 1fr 70px 1.4fr 1.1fr 70px!important}
 .cmpgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 
 .stagebtns{display:flex;gap:6px;margin-top:8px}

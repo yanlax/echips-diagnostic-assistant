@@ -103,6 +103,12 @@ var STATUS = {
 // Каталог драйверов — та же публичная ссылка, что в echips-driver-assistant.
 var MANIFEST_PUBLIC_URL = "https://disk.360.yandex.ru/d/79yQHBN93UDZGg";
 
+/* «Замена платы» ВРЕМЕННО ВЫРЕЗАНА (по просьбе пользователя): заводской комплект утилит записи SN/UUID
+   устарел для BIOS новых ноутбуков («System doesn't support», заводской скрипт тоже не пишет). Код,
+   экраны и Rust-команды остались — вернуть функцию: FEATURE_MB = true (и обновить утилиты в
+   src-tauri/assets/smbios, когда завод пришлёт новые). */
+var FEATURE_MB = false;
+
 var S = {
   screen:'start', cat:'usb', results:{}, comments:{},
   keys:{}, fill:0, padDots:[], padCount:0, padMax:0, padMoves:0,
@@ -261,6 +267,7 @@ function stopAudio(){
 var A = {
   go:function(screen,id){
     if(screen==='techadmin' && !isAdmin()) screen='start'; // экран только для администратора (см. isAdmin)
+    if(screen==='mb' && !FEATURE_MB) screen='start';
     stopSensorPoll(); stopCamera(); stopAudio();
     if (S.rm.timer){ clearInterval(S.rm.timer); S.rm.timer=null; }
     if (S.kbT){ clearInterval(S.kbT); S.kbT=null; }
@@ -1727,7 +1734,7 @@ function screenStart(){
     { tag:'AUTO', title:'Автопрогон', desc:'Последовательная проверка по профилю модели: сверка железа, пороги батареи, автоматические вердикты.', meta:'профиль: '+profile().name+' · '+(profile().tests||[]).length+' тестов', badge:'НОВОЕ', hot:true, act:'echips.autoStart()' },
     { tag:'DIA', title:'Диагностика оборудования', desc:CATS.length+' категорий тестов, датчики (где доступны), стресс-тест и отчёт.', meta:CATS.length+' категорий · TXT / JSON', badge:'РУЧНОЙ', hot:false, go:'dash' },
     { tag:'MB', title:'Замена платы', desc:'Гарантийный случай: чтение и запись SN/UUID заводской утилитой (AMI/Insyde), аудит-лог.', meta:'проверка чтением обратно', badge:'ГОТОВО', hot:false, go:'mb' }
-  ];
+  ].filter(function(m){ return FEATURE_MB || m.go!=='mb'; });
   var detected = S.device
     ? deviceLabel() + (S.device.bios_version ? ' · BIOS ' + esc(S.device.bios_version) : '') + (S.device.os_version ? ' · ' + esc(S.device.os_version) : '')
     : (S.deviceError ? 'Не удалось определить устройство: ' + esc(S.deviceError) : 'определяется…');
@@ -1735,7 +1742,7 @@ function screenStart(){
     markerBanner()+
     '<div class="eyebrow">Режим работы</div>'+
     '<h1 class="title">Что делаем с ноутбуком</h1>'+
-    '<p class="lede" style="margin:7px 0 24px">Выберите режим — драйверы, полная проверка оборудования или гарантийная замена платы.</p>'+
+    '<p class="lede" style="margin:7px 0 24px">Выберите режим — драйверы, автопрогон или полная проверка оборудования.</p>'+
     '<div class="modes">'+ modes.map(function(m){
       return '<div class="mode'+(m.hot?' is-new':'')+'" onclick="'+(m.act || "echips.go('"+m.go+"')")+'">'+
         '<div class="row"><div class="ic">'+m.tag+'</div><span class="badge'+(m.hot?' hot':'')+'">'+m.badge+'</span></div>'+

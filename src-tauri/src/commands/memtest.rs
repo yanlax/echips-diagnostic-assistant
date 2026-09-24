@@ -90,14 +90,19 @@ fn free_mb() -> Option<u64> {
 
 fn run(window: Window, size_mb: u64, passes: u32) -> Result<MemResult, String> {
     let passes = passes.clamp(1, 20);
-    let mut want = size_mb.clamp(64, 16 * 1024);
+    // size_mb == 0 — проверять всю свободную память (как memtest-утилиты): берём
+    // свободное за вычетом запаса под систему и интерфейс, иначе начнётся подкачка.
+    let mut want = if size_mb == 0 { u64::MAX } else { size_mb.clamp(64, 1024 * 1024) };
     let mut capped = false;
     if let Some(free) = free_mb() {
-        let cap = (free as f64 * 0.75) as u64;
-        if cap >= 64 && want > cap {
+        let reserve = (free / 10).max(768).min(free / 2);
+        let cap = free.saturating_sub(reserve).max(64);
+        if want > cap {
             want = cap;
-            capped = true;
+            capped = size_mb != 0;
         }
+    } else if size_mb == 0 {
+        want = 1024;
     }
     let len = (want * 1024 * 1024 / 8) as usize;
     let mut mem: Vec<u64> = Vec::new();

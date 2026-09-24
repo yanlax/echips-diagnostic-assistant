@@ -1,7 +1,8 @@
 // Отправка отчётов администратору: после автопрогона и при ручном экспорте
 // приложение кладёт JSON прямо в приватный репозиторий отчётов
 // (yanlax/echips-reports) через GitHub Contents API, по структуре
-// <инженер>/<дата диагностики>/<время начала>_<серийник>.json и рядом .pdf;
+// <инженер>/<дата диагностики>/[<приёмка>_]<серийник>/<время начала>.json и .pdf
+// (плюс копия в _по_ноутбукам/<серийник>/ для истории по устройству);
 // отчёт одного прогона обновляется в тех же файлах (без дубликатов).
 //
 // Токен вшивается в exe при сборке из секрета GitHub Actions
@@ -121,8 +122,19 @@ async fn post(client: &reqwest::Client, envelope: &Value) -> Result<(), String> 
         .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
         .map(|t| t.with_timezone(&chrono::Local))
         .unwrap_or_else(chrono::Local::now);
-    // Структура: <инженер>/<дата диагностики>/<время начала>_<серийник>.{json,pdf}
-    let base = format!("{}/{}/{}_{}", engineer, started.format("%Y-%m-%d"), started.format("%H%M%S"), serial);
+    // Структура: <инженер>/<дата диагностики>/[<приёмка>_]<серийник>/<время начала>.{json,pdf}.
+    // Приёмка — только цифры (до 6), иначе не используется.
+    let intake: String = report["intake"].as_str().unwrap_or("").chars().filter(|c| c.is_ascii_digit()).take(6).collect();
+    let device_dir = if intake.is_empty() { serial.clone() } else { format!("{intake}_{serial}") };
+    let date = started.format("%Y-%m-%d").to_string();
+    let time = started.format("%H%M%S").to_string();
+    let base = format!("{engineer}/{date}/{device_dir}/{time}");
+    // Копия для просмотра «все отчёты по ноутбуку»: _по_ноутбукам/<серийник>/ — история
+    // всех инженеров и дат в одной папке.
+    let by_device = format!(
+        "_по_ноутбукам/{serial}/{date}_{time}_{engineer}{}",
+        if intake.is_empty() { String::new() } else { format!("_приёмка{intake}") }
+    );
     let message = format!(
         "Отчёт: {} / {} ({})",
         safe(report["device_model"].as_str().unwrap_or("")),
@@ -132,6 +144,7 @@ async fn post(client: &reqwest::Client, envelope: &Value) -> Result<(), String> 
 
     let pretty = serde_json::to_string_pretty(envelope).map_err(|e| e.to_string())?;
     put_file(client, &format!("{base}.json"), pretty.as_bytes(), &message).await?;
+    put_file(client, &format!("{by_device}.json"), pretty.as_bytes(), &message).await?;
 
     // PDF — тот же, что «Экспорт PDF» (тема «Графит»). Ошибка самой сборки PDF
     // (не сети) не должна вечно держать отчёт в очереди — тогда остаётся
@@ -139,6 +152,7 @@ async fn post(client: &reqwest::Client, envelope: &Value) -> Result<(), String> 
     if let Ok(rep) = serde_json::from_value::<super::report::DiagnosticReport>(report.clone()) {
         if let Ok(pdf) = super::report::render_pdf(&rep) {
             put_file(client, &format!("{base}.pdf"), &pdf, &message).await?;
+            put_file(client, &format!("{by_device}.pdf"), &pdf, &message).await?;
         }
     }
     Ok(())

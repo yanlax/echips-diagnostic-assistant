@@ -115,6 +115,7 @@ var FEATURE_MB = false;
 var FEATURE_PIN = false;
 
 var S = {
+  batLive: { on:false, data:null, t:null },
   screen:'start', cat:'usb', results:{}, comments:{},
   keys:{}, fill:0, padDots:[], padCount:0, padMax:0, padMoves:0,
   running:false, runLines:[], runError:null,
@@ -327,7 +328,15 @@ var A = {
     document.body.appendChild(o);
     try {
       var w = getCurrentWindow();
-      w.isFullscreen().then(function(f){ S.fsBefore = f; return f ? null : w.setFullscreen(true); }).catch(function(){});
+      // Из развёрнутого окна (maximize) fullscreen на безрамочном окне оставляет снизу полосу
+      // на месте панели задач — поэтому сначала снимаем maximize, потом включаем fullscreen.
+      w.isFullscreen().then(function(f){
+        S.fsBefore = f; if (f) return null;
+        return w.isMaximized().then(function(mx){
+          S.maxBefore = mx;
+          return (mx ? w.unmaximize() : null);
+        }).then(function(){ return w.setFullscreen(true); });
+      }).then(function(){ setTimeout(function(){ window.dispatchEvent(new Event('resize')); }, 150); }).catch(function(){});
     } catch(e){}
     paintFill();
     clearTimeout(S.fillHintT);
@@ -336,7 +345,12 @@ var A = {
   fillClose:function(){
     var o = document.getElementById('fill-overlay');
     if (o) o.parentNode.removeChild(o);
-    try { if (!S.fsBefore) getCurrentWindow().setFullscreen(false).catch(function(){}); } catch(e){}
+    try {
+      if (!S.fsBefore){
+        var w = getCurrentWindow();
+        w.setFullscreen(false).then(function(){ if (S.maxBefore) return w.maximize(); }).catch(function(){});
+      }
+    } catch(e){}
     render();
   },
   setFill:function(i){ S.fill=i; render(); },
@@ -575,7 +589,7 @@ var A = {
     }).catch(function(err){ S.dw.err = typeof err==='string'?err:'Не удалось получить список томов'; render(); A.autoApply(null); });
   },
   memAuto:function(){
-    S.mem.size = profile().memTestMb || 4096; S.mem.passes = profile().memPasses || 4; S.mem.res=null; S.mem.err=null;
+    S.mem.size = 0; S.mem.passes = profile().memPasses || 2; S.mem.res=null; S.mem.err=null;
     A.memStart();
   },
   sensorsAuto:function(){
@@ -686,7 +700,22 @@ var A = {
   dwStop:function(){ invoke('stop_disk_write_test').catch(function(){}); },
 
   /* ---- тест памяти ---- */
-  memSize:function(v){ if(!S.mem.running){ S.mem.size=v; render(); } },
+  /* Номер приёмки (левое меню): только цифры, до 6. Меняется путь отчёта → новая отправка. */
+  setIntake:function(v){ S.intake = String(v||'').replace(/\D/g,'').slice(0,6); var el=document.getElementById('intake-input'); if(el && el.value!==S.intake) el.value=S.intake; },
+  batLiveToggle:function(){
+    var B = S.batLive;
+    B.on = !B.on; clearTimeout(B.t);
+    if (B.on){
+      (function tick(){
+        if (!B.on || S.screen!=='test' || S.cat!=='bat'){ B.on=false; return; }
+        invoke('get_battery_live').then(function(d){ B.data=d; }).catch(function(){ B.data=null; }).then(function(){
+          var el=document.getElementById('bat-live'); if (el) el.innerHTML = batLiveHtml();
+          if (B.on) B.t = setTimeout(tick, 2000);
+        });
+      })();
+    }
+    render();
+  },
   memPasses:function(v){ if(!S.mem.running){ S.mem.passes=v; render(); } },
   memStart:function(){
     if (S.mem.running) return;
@@ -703,11 +732,11 @@ var A = {
     invoke('run_memory_test', { sizeMb:m.size, passes:m.passes }).then(function(r){
       fin(); m.res=r; render();
       var totalMb = S.hw && S.hw.ram_total_gb ? Math.round(S.hw.ram_total_gb*1024) : null;
-      recordDetail('mem', { lines:['Проверено '+r.tested_mb+' МБ'+(totalMb?' из '+totalMb+' МБ установленной ОЗУ':'')+', проходов '+r.passes+', время '+r.elapsed_secs+' с'+(r.capped?' (объём урезан до 75% свободной ОЗУ — остальное занято системой и другими процессами)':'')+(r.stopped?' (остановлено)':''),'Ошибок: '+r.errors].concat(r.first_errors) });
+      recordDetail('mem', { lines:['Проверено '+r.tested_mb+' МБ'+(totalMb?' из '+totalMb+' МБ установленной ОЗУ':'')+', проходов '+r.passes+', время '+r.elapsed_secs+' с'+' (проверяется вся свободная ОЗУ — остальное занято системой и другими процессами)'+(r.stopped?' (остановлено)':''),'Ошибок: '+r.errors].concat(r.first_errors) });
       if (S.auto.on && S.cat==='mem'){
         A.autoApply(r.stopped ? null
           : r.errors>0 ? { status:'fail', note:'Ошибок памяти: '+r.errors+' на '+r.tested_mb+' МБ — модуль или слот неисправны' }
-          : { status:'pass', note:'Ошибок нет: проверено '+r.tested_mb+' МБ'+(totalMb?' из '+totalMb+' МБ':'')+' за '+r.elapsed_secs+' с'+(r.capped?' (объём урезан до 75% свободной)':'') });
+          : { status:'pass', note:'Ошибок нет: проверено '+r.tested_mb+' МБ'+(totalMb?' из '+totalMb+' МБ':'')+' за '+r.elapsed_secs+' с'+'' });
       }
     }).catch(function(err){
       fin(); m.err = typeof err==='string'?err:'Ошибка теста памяти'; render();
@@ -1006,7 +1035,16 @@ var A = {
         var sn = await snapOk();
         if (!sn){ log('Датчики не отвечают — нужен драйвер PawnIO (вкладка «Датчики»).'); return finish({ status:'na', note:'Датчики недоступны (драйвер PawnIO не установлен или не запущен)' }); }
         var fans = fanList(sn);
-        if (!fans.length){ log('Вентиляторы датчиками не обнаружены.'); return finish({ status:'na', note:'Вентиляторы не обнаружены датчиками (у части ноутбуков контроллер EC не поддерживается)' }); }
+        if (!fans.length){
+          // Различаем «драйвер датчиков работает, но тахометра нет» и «датчиков нет совсем»:
+          // в первом случае вентилятор у ноутбука может быть, просто контроллер EC не отдаёт обороты.
+          var temps = sn.sensors.filter(function(x){ return x.type==='Temperature'; }).length;
+          var why = temps
+            ? 'Датчики работают (температур: '+temps+'), но тахометра вентилятора нет: контроллер EC этой модели не отдаёт обороты (это не значит, что вентилятора нет).'
+            : 'Датчики температуры и оборотов не найдены.';
+          log(why); log('Оценить охлаждение можно по температуре под нагрузкой (вкладка «Стресс-тест») и на слух.');
+          return finish({ status:'na', note: temps ? 'Обороты вентилятора недоступны: EC не отдаёт тахометр (температуры читаются, оценивайте по стресс-тесту)' : 'Датчики оборотов и температур не найдены' });
+        }
         log('Найдено вентиляторов: '+fans.length);
         fans.forEach(function(x){ log('  • '+x.name+' ('+x.hw+'): '+x.rpm.toFixed(0)+' об/мин'+(x.control ? ', управляется ('+x.control.pct.toFixed(0)+'%)' : ', без ручного управления')); });
         var cpuT = cpuTempFromSnap(sn), problems = [], notes = [];
@@ -1270,6 +1308,7 @@ var A = {
     return {
       device_model: deviceLabel(),
       device_serial: deviceSn(),
+      intake: S.intake || '',
       engineer: S.engineer ? S.engineer.name : '',
       summary_comment: S.reportSummary || '',
       started_at: S.startedAt || new Date().toISOString(),
@@ -1728,6 +1767,7 @@ function renderNav(){
 
   document.getElementById('devbox-name').textContent = S.device ? deviceLabel() : (S.deviceError ? 'ошибка определения' : 'определяется…');
   document.getElementById('devbox-sn').textContent = S.device ? ('SN ' + (S.device.serial_number || '—')) : '';
+  var ii=document.getElementById('intake-input'); if (ii && document.activeElement!==ii && ii.value!==(S.intake||'')) ii.value=S.intake||'';
   document.getElementById('techbox-name').textContent = S.engineer ? S.engineer.name : '—';
   document.getElementById('techbox-add').style.display = isAdmin() ? '' : 'none';
 }
@@ -2050,10 +2090,32 @@ function fieldRunner(){
     '<div class="log">'+body+'</div>'+
     (S.verdict && S.verdict.status ? '<div class="kbnote" style="margin-top:8px">Автооценка: '+({pass:'пройден',fail:'не пройден',na:'не применимо'}[S.verdict.status])+' — '+esc(S.verdict.note)+'</div>' : '')+
     (c.fetch==='winact' ? winactPanel() : '')+
+    (c.fetch==='bat' ? batLivePanel() : '')+
     (S.runActions.length && !S.auto.on ? '<div class="recbox"><span class="kbnote">Рекомендуемые проверки по итогам анализа:</span>'+ S.runActions.map(function(id){
         var t = CATS.filter(function(x){ return x.id===id; })[0]; if (!t) return '';
         return '<button class="btn btn-ghost" onclick="echips.openCat(\''+id+'\')">'+esc(t.name)+'</button>';
       }).join('')+'</div>' : '')+'</div>';
+}
+/* Режим «в реальном времени» для аккумулятора (вне автопрогона): раз в 2 с читаем
+   напряжение, мощность заряда/разряда и процент. Автопрогон по-прежнему проверяет только здоровье. */
+function batLiveHtml(){
+  var d = S.batLive.data;
+  if (!d) return '<div class="idle"><span class="t">--</span><span>'+(S.batLive.on?'опрос…':'нажмите «Смотреть в реальном времени»')+'</span></div>';
+  if (!d.present) return '<div class="idle"><span class="t">--</span><span>Батарея не обнаружена</span></div>';
+  function v(x, f){ return x==null ? '—' : f(x); }
+  var chg = d.charge_rate_mw>0, dis = d.discharge_rate_mw>0;
+  var rate = chg ? '+'+(d.charge_rate_mw/1000).toFixed(1)+' Вт (заряд)' : dis ? '−'+(d.discharge_rate_mw/1000).toFixed(1)+' Вт (разряд)' : (d.charge_rate_mw==null ? '—' : '0 Вт');
+  return '<div class="stats4">'+
+    '<div class="stat4"><div class="k">заряд</div><div class="v">'+v(d.charge_percent,function(x){return x+'%';})+'</div></div>'+
+    '<div class="stat4"><div class="k">напряжение</div><div class="v">'+v(d.voltage_mv,function(x){return (x/1000).toFixed(2)+' В';})+'</div></div>'+
+    '<div class="stat4"><div class="k">мощность</div><div class="v">'+rate+'</div></div>'+
+    '<div class="stat4"><div class="k">остаток</div><div class="v">'+v(d.remaining_mwh,function(x){return (x/1000).toFixed(1)+' Вт·ч';})+'</div></div></div>'+
+    '<div class="kbnote" style="margin-top:8px">'+(d.power_online==null?'':(d.power_online?'Питание от сети. ':'Работа от батареи. '))+(d.voltage_mv==null?'Этот ноутбук не отдаёт напряжение и мощность через WMI.':'')+'</div>';
+}
+function batLivePanel(){
+  var B = S.batLive;
+  return '<div class="actpanel"><div class="runrow"><button class="btn btn-ghost" onclick="echips.batLiveToggle()">'+(B.on?'Остановить наблюдение':'Смотреть в реальном времени')+'</button>'+
+    '<span class="n">обновление раз в 2 с; в отчёт не попадает</span></div><div id="bat-live" style="margin-top:10px">'+batLiveHtml()+'</div></div>';
 }
 function winactPanel(){
   var a = S.actRaw, act = S.act;
@@ -2463,17 +2525,13 @@ function fieldDiskWrite(){
 }
 function fieldMem(){
   var m = S.mem, r = m.res;
-  var sizes = [[512,'512 МБ'],[1024,'1 ГБ'],[2048,'2 ГБ'],[4096,'4 ГБ']];
   var out = '<div class="runwrap">'+
-    '<div class="control"><div class="k">Объём проверяемой памяти</div><div class="opts">'+ sizes.map(function(x){
-      return '<button class="opt mono'+(m.size===x[0]?' on':'')+'" onclick="echips.memSize('+x[0]+')" '+(m.running?'disabled':'')+'>'+x[1]+'</button>';
-    }).join('') +'</div></div>'+
-    '<div class="control" style="margin-top:12px"><div class="k">Проходов</div><div class="opts">'+ [1,2,4].map(function(n){
+    '<div class="control"><div class="k">Проходов</div><div class="opts">'+ [1,2,4].map(function(n){
       return '<button class="opt mono'+(m.passes===n?' on':'')+'" onclick="echips.memPasses('+n+')" '+(m.running?'disabled':'')+'>'+n+'</button>';
     }).join('') +'</div></div>'+
     '<div class="runrow" style="margin-top:14px"><button class="btn btn-primary" onclick="echips.memStart()" '+(m.running?'disabled':'')+'>'+(m.running?'Идёт проверка…':r?'Повторить':'Запустить')+'</button>'+
     (m.running?'<button class="btn btn-ghost" onclick="echips.memStop()">Остановить</button>':'')+
-    '<span class="n">объём ограничивается 75% свободной памяти; окно остаётся отзывчивым</span></div>';
+    '<span class="n">проверяется вся свободная память (запас ~10% остаётся системе); окно остаётся отзывчивым</span></div>';
   if (m.running || r){
     var elF = (Date.now()-m.t0)/1000, etaF = m.running && m.pct>1 ? elF/m.pct*(100-m.pct) : null;
     out += '<div class="bar" style="margin-top:14px"><div class="fill" id="mem-fill" style="width:'+(r?100:m.pct)+'%"></div></div>'+
@@ -2486,7 +2544,7 @@ function fieldMem(){
       '<div class="stat4"><div class="k">проходов</div><div class="v">'+r.passes+'</div></div>'+
       '<div class="stat4"><div class="k">ошибок</div><div class="v '+(r.errors?'err':'ok')+'">'+r.errors+'</div></div>'+
       '<div class="stat4"><div class="k">время</div><div class="v">'+r.elapsed_secs+' с</div></div></div>'+
-      '<div class="kbnote" style="margin-top:8px">'+(r.stopped?'Остановлено пользователем. ':'')+(r.capped?'Объём урезан до 75% свободной памяти. ':'')+
+      '<div class="kbnote" style="margin-top:8px">'+(r.stopped?'Остановлено пользователем. ':'')+
       (r.errors ? 'Обнаружены ошибки памяти — модуль или слот неисправны.' : 'Ошибок не найдено. Это быстрая проверка из-под Windows: для полной уверенности используйте длительный тест.')+'</div>'+
       (r.first_errors.length ? '<div class="log" style="margin-top:8px">'+r.first_errors.map(function(t,i){ return '<div><span class="t">'+String(i+1).padStart(2,'0')+'</span><span>'+esc(t)+'</span></div>'; }).join('')+'</div>' : '');
   }

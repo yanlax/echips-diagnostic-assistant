@@ -85,6 +85,65 @@ pub fn get_battery_info() -> Result<BatteryInfo, String> {
     }
 }
 
+/// Мгновенные показания батареи для режима «в реальном времени» (root\wmi BatteryStatus):
+/// напряжение, мощность заряда/разряда, остаток энергии. Не все ноутбуки отдают эти поля —
+/// тогда они `null`, интерфейс показывает «—».
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct BatteryLive {
+    #[serde(default)]
+    pub present: bool,
+    #[serde(default)]
+    pub charge_percent: Option<u32>,
+    #[serde(default)]
+    pub voltage_mv: Option<i64>,
+    #[serde(default)]
+    pub charge_rate_mw: Option<i64>,
+    #[serde(default)]
+    pub discharge_rate_mw: Option<i64>,
+    #[serde(default)]
+    pub remaining_mwh: Option<i64>,
+    #[serde(default)]
+    pub charging: Option<bool>,
+    #[serde(default)]
+    pub discharging: Option<bool>,
+    #[serde(default)]
+    pub power_online: Option<bool>,
+}
+
+#[tauri::command(async)]
+pub fn get_battery_live() -> Result<BatteryLive, String> {
+    #[cfg(target_os = "windows")]
+    {
+        // Значения WMI — UInt32/Int32: приводим к [int64] (тот же подводный камень, что и
+        // с LicenseStatusReason в activation.rs).
+        let script = r#"
+            $b = Get-CimInstance Win32_Battery | Select-Object -First 1
+            if ($null -eq $b) {
+                [PSCustomObject]@{ present = $false } | ConvertTo-Json -Compress
+            } else {
+                $s = Get-CimInstance -Namespace root\wmi -ClassName BatteryStatus -ErrorAction SilentlyContinue | Select-Object -First 1
+                $o = [PSCustomObject]@{ present = $true; charge_percent = $b.EstimatedChargeRemaining }
+                if ($null -ne $s) {
+                    $o | Add-Member voltage_mv ([int64]$s.Voltage)
+                    $o | Add-Member charge_rate_mw ([int64]$s.ChargeRate)
+                    $o | Add-Member discharge_rate_mw ([int64]$s.DischargeRate)
+                    $o | Add-Member remaining_mwh ([int64]$s.RemainingCapacity)
+                    $o | Add-Member charging ([bool]$s.Charging)
+                    $o | Add-Member discharging ([bool]$s.Discharging)
+                    $o | Add-Member power_online ([bool]$s.PowerOnline)
+                }
+                $o | ConvertTo-Json -Compress
+            }
+        "#;
+        run_ps_json(script)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Диагностика батареи доступна только в Windows-сборке".to_string())
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn read_battery_report() -> Result<(Option<u64>, Option<u64>, Option<u32>), String> {
     let dir = std::env::temp_dir();

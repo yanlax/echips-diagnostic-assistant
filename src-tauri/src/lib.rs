@@ -46,6 +46,7 @@ pub fn run() {
             commands::system::get_problem_devices,
             commands::system::list_problem_devices,
             commands::battery::get_battery_info,
+            commands::battery::get_battery_live,
             commands::hardware::list_usb_devices,
             commands::hardware::list_bluetooth_devices,
             commands::hardware::list_wifi_adapters,

@@ -1308,7 +1308,7 @@ var A = {
      после успешного входа (сайдбар, отчёт), а не запрашивается заранее. */
   lockDigit:function(d){
     var L = S.lock;
-    if(L.pin.length>=8) return;
+    if(L.pin.length>=12) return; // генератор допускает PIN до 12 цифр
     L.err=''; L.pin += d; renderLock();
   },
   lockBackspace:function(){ S.lock.pin = S.lock.pin.slice(0,-1); S.lock.err=''; renderLock(); },
@@ -1364,7 +1364,7 @@ var A = {
   },
   techadminInit:function(){
     // список мог обновиться на GitHub после запуска — берём свежий
-    invoke('fetch_techs').then(function(list){ S.lock.techs = list || []; render(); }).catch(function(){});
+    invoke('fetch_techs').then(function(res){ S.lock.techs = res.techs || []; render(); }).catch(function(){});
     invoke('techs_token_status').then(function(v){ S.techadmin.hasToken=!!v; render(); }).catch(function(){ S.techadmin.hasToken=false; render(); });
   },
   techadminSaveToken:function(){
@@ -3283,10 +3283,11 @@ function padPoint(e, move){
    каждом запуске. Экран поверх всего приложения (#lock-overlay в
    index.html, вне #screen — render() его не трогает). */
 function lockInit(){
-  S.lock = { phase:'boot', techs:null, err:'', pin:'', shake:false };
+  S.lock = { phase:'boot', techs:null, err:'', pin:'', shake:false, note:'' };
   renderLock();
-  invoke('fetch_techs').then(function(list){
-    S.lock.techs = list || [];
+  invoke('fetch_techs').then(function(res){
+    S.lock.techs = res.techs || [];
+    S.lock.note = res.source==='cache' ? (res.note || 'Список из локального кэша') : '';
     S.lock.phase = 'pin';
     renderLock();
   }).catch(function(err){
@@ -3363,7 +3364,8 @@ function renderLock(){
     body =
       '<div class="lock-dots'+(L.shake?' shake':'')+'" style="margin-top:8px">'+dotsHtml(L.pin.length)+'</div>'+
       '<div class="lock-keypad">'+keypadHtml()+'</div>'+
-      (L.err?'<div class="lock-err">'+esc(L.err)+'</div>':'');
+      (L.err?'<div class="lock-err">'+esc(L.err)+'</div>':'')+
+      (L.note?'<div class="lock-err" style="color:#F0C24B;max-width:300px;margin-top:10px">'+esc(L.note)+' <button type="button" class="btn-link" onclick="echips.lockRetry()">Обновить</button></div>':'');
   }
   host.innerHTML = '<div class="lock-card">'+
     '<div class="lock-logo"><img src="logo.png" alt="Echips"></div>'+

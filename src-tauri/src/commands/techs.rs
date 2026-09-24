@@ -50,39 +50,73 @@ fn cache_path() -> std::path::PathBuf {
         .join("techs_cache.json")
 }
 
-/// Сеть недоступна на сервисной станции — не редкость (мастерская без
-/// интернета), поэтому при неудаче используем последний успешно
-/// загруженный список из локального кэша, а не блокируем вход целиком.
-#[tauri::command(async)]
-pub async fn fetch_techs() -> Result<Vec<Tech>, String> {
-    let client = reqwest::Client::new();
-    // raw.githubusercontent.com кэширует файл ~5 минут — только что добавленный
-    // инженер не был виден при следующем запуске. Уникальный параметр в URL
-    // обходит этот кэш и всегда отдаёт свежую версию.
-    let url = format!("{TECHS_URL}?nocache={}", chrono::Utc::now().timestamp_millis());
-    let fetched = client
-        .get(&url)
+/// Список + откуда он взят — экран входа показывает предупреждение, если это
+/// кэш (иначе «новый инженер не виден, а почему — непонятно»).
+#[derive(Debug, Serialize, Clone)]
+pub struct TechList {
+    pub techs: Vec<Tech>,
+    /// "api" | "raw" | "cache"
+    pub source: String,
+    pub note: String,
+}
+
+async fn get_list(client: &reqwest::Client, url: &str, accept: &str) -> Option<(Vec<Tech>, String)> {
+    let resp = client
+        .get(url)
         .header("Cache-Control", "no-cache")
         .header("User-Agent", "echips-diagnostic-app")
+        .header("Accept", accept)
         .send()
         .await
-        .ok()
-        .filter(|r| r.status().is_success());
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let text = resp.text().await.ok()?;
+    let list = serde_json::from_str::<Vec<Tech>>(&text).ok()?;
+    Some((list, text))
+}
 
-    if let Some(resp) = fetched {
-        if let Ok(text) = resp.text().await {
-            if let Ok(list) = serde_json::from_str::<Vec<Tech>>(&text) {
-                if let Some(parent) = cache_path().parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                let _ = std::fs::write(cache_path(), &text);
-                return Ok(list);
-            }
+/// Порядок источников: 1) GitHub API — тот же хост, через который приложение
+/// само записывает список, всегда свежая версия (без токена лимит 60
+/// запросов/час на IP); 2) raw.githubusercontent.com с уникальным параметром
+/// (обход его 5-минутного кэша; в части сетей этот хост недоступен, а
+/// api.github.com работает); 3) локальный кэш последнего успешного чтения.
+/// У каждого запроса таймаут — раньше при недоступном хосте загрузка висела.
+#[tauri::command(async)]
+pub async fn fetch_techs() -> Result<TechList, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(12))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let stamp = chrono::Utc::now().timestamp_millis();
+
+    let fresh = match get_list(
+        &client,
+        &format!("{API_URL}?ref=main&t={stamp}"),
+        "application/vnd.github.raw+json",
+    )
+    .await
+    {
+        Some(r) => Some((r, "api")),
+        None => get_list(&client, &format!("{TECHS_URL}?nocache={stamp}"), "*/*").await.map(|r| (r, "raw")),
+    };
+
+    if let Some(((list, text), source)) = fresh {
+        if let Some(parent) = cache_path().parent() {
+            let _ = std::fs::create_dir_all(parent);
         }
+        let _ = std::fs::write(cache_path(), &text);
+        return Ok(TechList { techs: list, source: source.to_string(), note: String::new() });
     }
 
     match std::fs::read_to_string(cache_path()) {
         Ok(text) => serde_json::from_str::<Vec<Tech>>(&text)
+            .map(|list| TechList {
+                techs: list,
+                source: "cache".to_string(),
+                note: "Нет связи с GitHub — использован сохранённый список; недавно добавленных инженеров в нём может не быть.".to_string(),
+            })
             .map_err(|e| format!("Сохранённый список инженеров повреждён: {e}")),
         Err(_) => Err(
             "Нет сети и нет ранее сохранённого списка инженеров. Подключите станцию к интернету хотя бы один раз."

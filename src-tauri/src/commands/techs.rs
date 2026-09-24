@@ -56,8 +56,13 @@ fn cache_path() -> std::path::PathBuf {
 #[tauri::command(async)]
 pub async fn fetch_techs() -> Result<Vec<Tech>, String> {
     let client = reqwest::Client::new();
+    // raw.githubusercontent.com кэширует файл ~5 минут — только что добавленный
+    // инженер не был виден при следующем запуске. Уникальный параметр в URL
+    // обходит этот кэш и всегда отдаёт свежую версию.
+    let url = format!("{TECHS_URL}?nocache={}", chrono::Utc::now().timestamp_millis());
     let fetched = client
-        .get(TECHS_URL)
+        .get(&url)
+        .header("Cache-Control", "no-cache")
         .header("User-Agent", "echips-diagnostic-app")
         .send()
         .await

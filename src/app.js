@@ -1343,6 +1343,8 @@ var A = {
       .then(function(){ t.busy=false; render(); });
   },
   techadminInit:function(){
+    // список мог обновиться на GitHub после запуска — берём свежий
+    invoke('fetch_techs').then(function(list){ S.lock.techs = list || []; render(); }).catch(function(){});
     invoke('techs_token_status').then(function(v){ S.techadmin.hasToken=!!v; render(); }).catch(function(){ S.techadmin.hasToken=false; render(); });
   },
   techadminSaveToken:function(){

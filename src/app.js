@@ -48,6 +48,8 @@ var CATS = [
   { id:'pad', tag:'PAD', name:'Тачпад', method:'Точки касания, мультитач, базовые жесты', impl:'интерактивно', kind:'touchpad', interactive:true },
   { id:'fp', tag:'FP', name:'Отпечаток', method:'Сенсор виден системе (WinBio) — регистрация вручную', impl:'частично', kind:'runner', fetch:'fp' },
   { id:'bat', tag:'BAT', name:'Аккумулятор', method:'Design vs Full charge capacity, циклы, износ (powercfg)', impl:'реальные данные', kind:'runner', fetch:'bat' },
+  { id:'headset', tag:'HDP', name:'Наушники', method:'Гнездо 3,5 мм: тон в наушники (левый/правый канал); не подключены — не применимо', impl:'интерактивно', kind:'headset', interactive:true },
+  { id:'touch', tag:'TCH', name:'Сенсорный экран', method:'Точки касания и мультитач; экрана нет — не применимо', impl:'интерактивно', kind:'touch', interactive:true },
   { id:'snd', tag:'SND', name:'Звук', method:'Тестовый сигнал (Web Audio) и echo-тест через микрофон', impl:'реально', kind:'audio', interactive:true },
   { id:'diskread', group:'disk', sub:'Чтение', tag:'RD', name:'Диск: чтение', method:'Замер скорости чтения по всему диску, медленные блоки и ошибки чтения', impl:'реальная нагрузка', kind:'diskread' },
   { id:'surface', group:'disk', sub:'Поверхность', tag:'SURF', name:'Диск: поверхность', method:'Чтение диска блоками с замером времени каждого блока и графиком скорости в реальном времени (как Victoria)', impl:'реальная нагрузка', kind:'surface' },
@@ -321,6 +323,7 @@ var A = {
     stopCamera(); stopAudio();
     A.go(c.kind==='sensors'?'sensors':c.kind==='stress'?'stress':'test', id);
     if (c.kind==='camera') A.camStart();
+    if (c.kind==='headset' || c.kind==='touch') A.inputProbe(c);
     if (S.auto.on){
       if (c.kind==='runner') A.run();
       else if (c.kind==='diskread') A.drAuto();
@@ -432,8 +435,26 @@ var A = {
   repOpen:function(id){ S.repId = id; A.go('repdetail'); },
 
   /* ---- автопрогон по профилю модели ---- */
-  autoStart:function(){
-    var ids = (profile().tests||[]).filter(function(id){ return CATS.some(function(c){ return c.id===id; }); });
+  /* Наушники / сенсорный экран: устройства определяет get_input_devices; в автопрогоне нет устройства → «не применимо». */
+  inputProbe:function(c){
+    S.tch = { dots:[], count:0, max:0, moves:0, active:{}, touched:false };
+    S.inp = null;
+    invoke('get_input_devices').then(function(d){
+      S.inp = d; render();
+      if (S.auto.on && S.cat===c.id){
+        if (c.kind==='headset' && !d.headset) A.autoApply({ status:'na', note:'Наушники не подключены к гнезду — не применимо' });
+        if (c.kind==='touch' && !d.touch) A.autoApply({ status:'na', note:'Сенсорный экран не обнаружен — не применимо' });
+      }
+    }).catch(function(){
+      S.inp = { touch:false, headset:false, headset_name:'', error:true }; render();
+      if (S.auto.on && S.cat===c.id) A.autoApply({ status:'na', note:'Не удалось определить устройство ('+(c.kind==='touch'?'сенсорный экран':'наушники')+') — не применимо' });
+    });
+  },
+  autoStart:function(mode){
+    // mode: 'express' — короткий набор проверок для входного контроля (P.expressTests), иначе полный
+    S.autoMode = mode==='express' ? 'express' : 'full';
+    var listSrc = S.autoMode==='express' ? (profile().expressTests || profile().tests) : profile().tests;
+    var ids = (listSrc||[]).filter(function(id){ return CATS.some(function(c){ return c.id===id; }); });
     if (!ids.length) return;
     // Сначала тесты, требующие участия инженера (клавиатура, экран, тачпад,
     // яркость, камера, звук, флешка), затем полностью автоматические —
@@ -441,7 +462,7 @@ var A = {
     ids = ids.filter(function(id){ return isInteractive(id); }).concat(ids.filter(function(id){ return !isInteractive(id); }));
     S.results={}; S.comments={}; S.keys={}; S.snapshot=false; S.reportSummary='';
     S.startedAt = new Date().toISOString(); S.sentHash = null;
-    S.auto = { on:true, ids:ids, idx:-1, stopped:false, waiting:false, msg:'', cls:'', timer:null };
+    S.auto = { on:true, ids:ids, idx:-1, stopped:false, waiting:false, msg:'', cls:'', timer:null, mode:S.autoMode };
     A.autoNext();
   },
   autoOff:function(){
@@ -618,7 +639,7 @@ var A = {
     }).catch(function(err){ S.dw.err = typeof err==='string'?err:'Не удалось получить список томов'; render(); A.autoApply(null); });
   },
   memAuto:function(){
-    S.mem.size = 0; S.mem.passes = profile().memPasses || 2; S.mem.res=null; S.mem.err=null;
+    S.mem.size = 0; S.mem.passes = S.autoMode==='express' ? 1 : (profile().memPasses || 2); S.mem.res=null; S.mem.err=null;
     A.memStart();
   },
   sensorsAuto:function(){
@@ -1085,6 +1106,10 @@ var A = {
           log(why);
           // Тахометра нет — в автопрогоне оцениваем охлаждение косвенно: 60 с нагрузки на CPU,
           // температура и падение частоты (то же правило, что у стресс-теста).
+          if (temps && S.auto.on && S.auto.ids.indexOf('stress')>=0){
+            log('Охлаждение оценено стресс-тестом автопрогона (нагрузка 2 мин) — см. результат теста «Стресс-тест».');
+            return finish({ status:'na', note:'Обороты не читаются (EC не отдаёт тахометр); охлаждение оценено стресс-тестом автопрогона' });
+          }
           if (temps && S.auto.on && !S.st.running && !f.abort){
             log('Прогрев CPU 60 с: оцениваем охлаждение по температуре под нагрузкой…');
             var warm = await new Promise(function(resolve){
@@ -1375,6 +1400,7 @@ var A = {
       device_model: deviceLabel(),
       device_serial: deviceSn(),
       intake: S.intake || '',
+      run_mode: S.auto && S.auto.on ? (S.autoMode==='express' ? 'экспресс' : 'полный') : (S.autoMode ? (S.autoMode==='express' ? 'экспресс' : 'полный') : ''),
       engineer: S.engineer ? S.engineer.name : '',
       summary_comment: S.reportSummary || '',
       started_at: S.startedAt || new Date().toISOString(),
@@ -1865,7 +1891,8 @@ function renderNav(){
 function screenStart(){
   var modes = [
     { tag:'DRV', title:'Установка драйверов', desc:'Определение модели, выбор пакетов и установка с точкой восстановления.', meta:'та же логика, что в Driver Assistant', badge:'ГОТОВО', hot:false, go:'drivers' },
-    { tag:'AUTO', title:'Автопрогон', desc:'Последовательная проверка по профилю модели: сверка железа, пороги батареи, автоматические вердикты.', meta:'профиль: '+profile().name+' · '+(profile().tests||[]).length+' тестов', badge:'НОВОЕ', hot:true, act:'echips.autoStart()' },
+    { tag:'AUTO', title:'Автопрогон · полный', desc:'Последовательная проверка по профилю модели: сверка железа, диски, память, стресс-тест 2 мин, автоматические вердикты.', meta:'профиль: '+profile().name+' · '+(profile().tests||[]).length+' тестов', badge:'ПОЛНЫЙ', hot:true, act:'echips.autoStart()' },
+    { tag:'FAST', title:'Автопрогон · экспресс', desc:'Короткий входной контроль (около 5 минут): система, диск и SMART, сеть, аккумулятор, клавиатура, матрица, камера, звук, память.', meta:'профиль: '+profile().name+' · '+(profile().expressTests||profile().tests||[]).length+' тестов', badge:'ЭКСПРЕСС', hot:false, act:'echips.autoStart(\'express\')' },
     { tag:'DIA', title:'Диагностика оборудования', desc:CATS.length+' категорий тестов, датчики (где доступны), стресс-тест и отчёт.', meta:CATS.length+' категорий · TXT / JSON', badge:'РУЧНОЙ', hot:false, go:'dash' },
     { tag:'MB', title:'Замена платы', desc:'Гарантийный случай: чтение и запись SN/UUID заводской утилитой (AMI/Insyde), аудит-лог.', meta:'проверка чтением обратно', badge:'ГОТОВО', hot:false, go:'mb' }
   ].filter(function(m){ return FEATURE_MB || m.go!=='mb'; });
@@ -1892,7 +1919,7 @@ function screenDash(){
     '<div class="head"><div><div class="eyebrow">Диагностика оборудования</div><h1 class="title">Категории тестов</h1></div>'+
     '<div class="headactions">'+
       '<button class="btn btn-ghost" onclick="echips.reset()">Сбросить</button>'+
-      '<button class="btn btn-primary" onclick="echips.autoStart()">Автопрогон</button>'+
+      '<button class="btn btn-primary" onclick="echips.autoStart()">Автопрогон · полный</button>'+'<button class="btn btn-ghost" onclick="echips.autoStart(\'express\')">Экспресс</button>'+
       '<button class="btn btn-primary" onclick="echips.go(\'report\')">К отчёту</button>'+
     '</div></div>'+
     '<div class="progrow"><div class="bar"><div class="fill" style="width:'+(c.checked/CATS.length*100).toFixed(0)+'%"></div></div>'+
@@ -2342,6 +2369,45 @@ function fieldAudio(){
     '<div class="spectrum">'+bars+'</div><div class="kbnote">'+note+'</div></div>';
 }
 
+function fieldHeadset(){
+  var d = S.inp, bars = spectrumBars();
+  var st = !d ? 'определяется…' : d.headset ? 'Наушники подключены: '+esc(d.headset_name||'гнездо 3,5 мм') : 'Наушники не обнаружены — подключите их к гнезду 3,5 мм (в автопрогоне тест будет «не применим»)';
+  var note = S.tone===null ? 'выберите сигнал: звук должен идти в наушники, левый и правый канал по очереди'
+    : S.tone===1 ? 'левый / правый канал: убедитесь, что слышны оба' : 'тон 1 кГц в наушники';
+  return '<div class="audiowrap"><div class="kbnote" style="margin-bottom:10px">'+st+'</div><div class="tones">'+
+    [0,1].map(function(i){ return '<button class="tone'+(S.tone===i?' on':'')+'" onclick="echips.tone('+i+')">'+TONES[i]+'</button>'; }).join('')+'</div>'+
+    '<div class="spectrum">'+bars+'</div><div class="kbnote">'+note+'</div></div>';
+}
+function fieldTouch(){
+  var d = S.inp, t = S.tch || { dots:[], count:0, max:0, moves:0 };
+  var st = !d ? 'определяется…' : d.touch ? 'Сенсорный экран обнаружен — коснитесь поля пальцами (в т. ч. несколькими сразу)' : 'Сенсорный экран не обнаружен (в автопрогоне тест «не применим»)';
+  return '<div class="kbnote" style="margin-bottom:8px">'+st+' · мышь и тачпад не считаются</div>'+
+    '<div class="padwrap"><div class="pad" id="touch-area">'+(t.dots.length?'':'<div class="ph">коснитесь экрана — точки касания и мультитач</div>')+
+    t.dots.map(function(x){ return '<div class="tp" style="left:'+x.x+'%;top:'+x.y+'%"></div>'; }).join('')+'</div>'+
+    '<div class="side"><div class="stat"><div class="k">касаний</div><div class="v" id="tch-count">'+t.count+'</div></div>'+
+    '<div class="stat"><div class="k">макс. одновременно</div><div class="v" id="tch-max">'+t.max+'</div></div>'+
+    '<div class="stat"><div class="k">событий move</div><div class="v" id="tch-moves">'+t.moves+'</div></div></div></div>';
+}
+/* Касания сенсорного экрана: DOM обновляем напрямую (полная перерисовка посреди касания рвёт pointer-события). */
+function bindTouchArea(){
+  var ta = document.getElementById('touch-area'); if (!ta || ta._bound) return; ta._bound = true;
+  function upd(){ var t=S.tch; ['count','max','moves'].forEach(function(k){ var el=document.getElementById('tch-'+k); if (el) el.textContent = t[k]; }); }
+  function dot(e){
+    var r = ta.getBoundingClientRect(), t = S.tch, x = ((e.clientX-r.left)/r.width*100).toFixed(1), y = ((e.clientY-r.top)/r.height*100).toFixed(1);
+    t.dots.push({ x:x, y:y }); if (t.dots.length>140) t.dots.shift();
+    var ph = ta.querySelector('.ph'); if (ph) ph.remove();
+    var d = document.createElement('div'); d.className = 'tp'; d.style.left = x+'%'; d.style.top = y+'%'; ta.appendChild(d);
+    while (ta.querySelectorAll('.tp').length>140) ta.querySelector('.tp').remove();
+  }
+  ta.addEventListener('pointerdown', function(e){
+    if (e.pointerType==='mouse') return;
+    var t = S.tch; t.active[e.pointerId] = true; t.count++; t.touched = true;
+    t.max = Math.max(t.max, Object.keys(t.active).length); dot(e); upd();
+  });
+  ta.addEventListener('pointermove', function(e){ if (e.pointerType!=='mouse' && S.tch.active[e.pointerId]){ S.tch.moves++; dot(e); upd(); } });
+  ['pointerup','pointercancel','pointerleave'].forEach(function(n){ ta.addEventListener(n, function(e){ delete S.tch.active[e.pointerId]; }); });
+}
+
 /* ---------- SMART ---------- */
 var SMART_LABEL = { good:'Хорошее', caution:'Тревога', bad:'Плохое', unknown:'Нет данных' };
 function smartReasons(d){
@@ -2708,6 +2774,8 @@ function screenTest(){
   else if(c.kind==='touchpad') field = fieldTouchpad();
   else if(c.kind==='camera') field = fieldCamera();
   else if(c.kind==='audio') field = fieldAudio();
+  else if(c.kind==='headset') field = fieldHeadset();
+  else if(c.kind==='touch') field = fieldTouch();
   else if(c.kind==='diskread') field = fieldDiskRead();
   else if(c.kind==='diskwrite') field = fieldDiskWrite();
   else if(c.kind==='fans') field = fieldFans();
@@ -2912,7 +2980,8 @@ var ST_PRESETS = {
   quick:{ label:'Быстрый · 1 мин', cpu:true, fpu:true, cache:false, memory:false, disk:false, gpu:false, dur:60 },
   std:{ label:'Стандарт · 10 мин', cpu:true, fpu:true, cache:true, memory:true, disk:false, gpu:false, dur:600 },
   heat:{ label:'Прогрев до остановки', cpu:true, fpu:true, cache:true, memory:false, disk:false, gpu:false, dur:0 },
-  full:{ label:'Всё сразу · 30 мин', cpu:true, fpu:true, cache:true, memory:true, disk:true, gpu:true, dur:1800 }
+  full:{ label:'Всё сразу · 30 мин', cpu:true, fpu:true, cache:true, memory:true, disk:true, gpu:true, dur:1800 },
+  runin:{ label:'Прогон 4 часа', cpu:true, fpu:true, cache:true, memory:true, disk:false, gpu:true, dur:14400 }
 };
 var ST_KINDS = [
   ['cpu','CPU','целочисленная нагрузка на все ядра'], ['fpu','FPU','плавающая точка (AVX/FMA — самая горячая)'],
@@ -3511,6 +3580,7 @@ function render(){
     if(inp){ inp.focus(); try{ inp.setSelectionRange(sel,sel); }catch(e){} }
   }
   if (S.screen==='test' && cat().kind==='surface') paintSurface();
+  if (S.screen==='test' && cat().kind==='touch') bindTouchArea();
   if (S.screen==='stress') paintStress();
   var pad = document.getElementById('pad');
   if(pad){
@@ -3530,7 +3600,7 @@ function padPoint(e, move){
 /* ---------- аудио-спектр: перерисовка на кадр, пока играет тон ---------- */
 (function audioLoop(){
   requestAnimationFrame(audioLoop);
-  if (S.tone!==null && S.screen==='test' && cat().kind==='audio'){
+  if (S.tone!==null && S.screen==='test' && (cat().kind==='audio' || cat().kind==='headset')){
     // Обновляем только спектр: полная перерисовка каждый кадр ломала клики по кнопкам.
     var sp = document.querySelector('.spectrum');
     if (sp) sp.innerHTML = spectrumBars();

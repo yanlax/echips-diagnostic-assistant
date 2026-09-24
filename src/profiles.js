@@ -13,6 +13,7 @@
 //   smartCautionIsFail  «Тревога» SMART (переназначенные секторы и т. п.) считать неисправностью
 //   surfaceScanGb     сколько первых ГБ диска сканировать поверхность в автопрогоне
 //   surfaceSlowPct    допустимая доля медленных (150–500 мс) блоков при сканировании, %
+//   expressTests      состав экспресс-режима автопрогона (id категорий)
 //   stressStressors   виды нагрузки стресс-теста, если добавить "stress" в tests: cpu, fpu, cache, memory, disk, gpu
 //   throttleMinPct    худшая скорость нагрузки, % от базовой, ниже которой стресс-тест не пройден
 //   throttleMaxSharePct  допустимая доля времени (%) со скоростью ниже 80% от базовой
@@ -39,8 +40,10 @@
 window.ECHIPS_PROFILES = {
   default: {
     name: "Стандартный",
-    tests: ["sys", "winact", "drv", "disk", "smart", "crash", "usb", "bt", "wifi", "lan", "kb", "lcd", "bright", "cam", "pad", "fp", "bat", "snd",
-            "diskread", "surface", "diskwrite", "mem", "sens", "fans"],
+    tests: ["sys", "winact", "drv", "disk", "smart", "crash", "usb", "bt", "wifi", "lan", "kb", "lcd", "bright", "cam", "pad", "fp", "bat", "snd", "headset", "touch",
+            "diskread", "surface", "diskwrite", "mem", "sens", "stress", "fans"],
+    // Экспресс-режим автопрогона: короткий входной контроль (~5 мин) — без длинных дисковых тестов и стресс-теста
+    expressTests: ["sys", "winact", "drv", "disk", "smart", "crash", "usb", "bt", "wifi", "lan", "kb", "lcd", "cam", "bat", "snd", "mem"],
     stopAtFail: false,
     batteryMinHealth: 80,
     wifiMinSignal: null,
@@ -48,8 +51,8 @@ window.ECHIPS_PROFILES = {
     smartCautionIsFail: true,
     surfaceScanGb: 20,
     surfaceSlowPct: 1,
-    stressStressors: ["cpu", "fpu"],
-    stressSecs: 60,
+    stressStressors: ["cpu", "fpu", "gpu"],
+    stressSecs: 120,
     throttleMinPct: 60,
     throttleMaxSharePct: 20,
     memPasses: 2,

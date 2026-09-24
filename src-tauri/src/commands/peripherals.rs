@@ -151,6 +151,47 @@ pub struct BrightnessInfo {
     pub max: u32,
 }
 
+/// Наличие сенсорного экрана и подключённых наушников (гнездо 3,5 мм) — для тестов «Сенсорный экран»
+/// и «Наушники»: если устройства нет, тест в автопрогоне «не применим».
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct InputDevices {
+    #[serde(default)]
+    pub touch: bool,
+    #[serde(default)]
+    pub headset: bool,
+    #[serde(default)]
+    pub headset_name: String,
+}
+
+#[tauri::command(async)]
+pub fn get_input_devices() -> Result<InputDevices, String> {
+    #[cfg(target_os = "windows")]
+    {
+        // SM_DIGITIZER (94): бит 0x1 — встроенный сенсор, 0x80 — готов к работе. Кроме того смотрим
+        // PnP-устройство «touch screen / сенсорный экран». Наушники: аудио-конечная точка с именем
+        // Headphones/Headset/Наушники/Гарнитура в состоянии OK (при вынутом штекере точка неактивна).
+        let script = r#"
+            if (-not ('EchipsW.N' -as [type])) {
+                Add-Type -Namespace EchipsW -Name N -MemberDefinition '[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern int GetSystemMetrics(int n);' -ErrorAction SilentlyContinue
+            }
+            $dig = 0
+            try { $dig = [EchipsW.N]::GetSystemMetrics(94) } catch { }
+            $touch = ((($dig -band 0x1) -ne 0) -and (($dig -band 0x80) -ne 0))
+            if (-not $touch) {
+                $t = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'OK' -and $_.FriendlyName -match 'touch screen|сенсорный экран' } | Select-Object -First 1
+                if ($t) { $touch = $true }
+            }
+            $h = Get-PnpDevice -Class AudioEndpoint -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'OK' -and $_.FriendlyName -match 'Headphone|Headset|Наушник|Гарнитур' } | Select-Object -First 1
+            [PSCustomObject]@{ touch = [bool]$touch; headset = ($null -ne $h); headset_name = if ($h) { [string]$h.FriendlyName } else { '' } } | ConvertTo-Json -Compress
+        "#;
+        run_ps_json::<InputDevices>(script)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Доступно только в Windows-сборке".to_string())
+    }
+}
+
 #[tauri::command(async)]
 pub fn get_brightness() -> Result<BrightnessInfo, String> {
     #[cfg(target_os = "windows")]

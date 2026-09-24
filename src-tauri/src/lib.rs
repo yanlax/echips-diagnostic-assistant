@@ -29,6 +29,7 @@ pub fn run() {
             commands::peripherals::list_lan_adapters,
             commands::peripherals::scan_wifi_detailed,
             commands::peripherals::list_monitors,
+            commands::peripherals::get_input_devices,
             commands::peripherals::get_brightness,
             commands::peripherals::set_brightness,
             commands::peripherals::list_removable_drives,

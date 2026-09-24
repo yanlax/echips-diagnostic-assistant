@@ -42,6 +42,9 @@ pub struct DiagnosticReport {
     /// Номер приёмки (цифры, до 6) — поле в левом меню; пусто, если не задан.
     #[serde(default)]
     pub intake: String,
+    /// Режим автопрогона: «полный» / «экспресс» (пусто — ручная проверка).
+    #[serde(default)]
+    pub run_mode: String,
     pub engineer: String,
     pub started_at: String,
     pub finished_at: String,
@@ -70,6 +73,9 @@ fn render_txt(report: &DiagnosticReport) -> String {
     out.push_str(&format!("Серийный номер: {}\n", report.device_serial));
     if !report.intake.trim().is_empty() {
         out.push_str(&format!("Номер приёмки / ремонта: {}\n", report.intake.trim()));
+    }
+    if !report.run_mode.trim().is_empty() {
+        out.push_str(&format!("Режим автопрогона: {}\n", report.run_mode.trim()));
     }
     out.push_str(&format!("Инженер: {}\n", report.engineer));
     out.push_str(&format!("Начало: {}\n", report.started_at));

@@ -361,29 +361,9 @@ pub fn shutdown() {
 //  Лог времени вызовов
 // ------------------------------------------------------------------
 
-fn perf_log(mode: &str, script: &str, took: Duration, ok: bool) {
-    let base = std::env::var("LOCALAPPDATA").unwrap_or_default();
-    if base.is_empty() {
-        return;
-    }
-    let dir = std::path::PathBuf::from(base).join("Echips").join("HardwareCheck");
-    let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join("perf.log");
-    if std::fs::metadata(&path).map(|m| m.len() > 512 * 1024).unwrap_or(false) {
-        let _ = std::fs::rename(&path, dir.join("perf.old.log"));
-    }
-    // ключи продуктов и подобное в лог не попадают
-    if script.contains("ProductKey") {
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-            let _ = writeln!(f, "{:>6} мс · {} · {} · <скрипт с ключом продукта скрыт>", took.as_millis(), mode, if ok { "ok" } else { "ERR" });
-        }
-        return;
-    }
-    let head: String = script.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(70).collect();
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-        let _ = writeln!(f, "{:>6} мс · {} · {} · {}", took.as_millis(), mode, if ok { "ok" } else { "ERR" }, head);
-    }
-}
+/// Запись perf.log ОТКЛЮЧЕНА по просьбе пользователя (лог времени вызовов больше не нужен, файлы на
+/// диске не создаются). Вызов perf_log(...) оставлен — чтобы вернуть лог, достаточно вернуть тело.
+fn perf_log(_mode: &str, _script: &str, _took: Duration, _ok: bool) {}
 
 // ------------------------------------------------------------------
 //  Публичный интерфейс

@@ -108,28 +108,11 @@ mod win {
     /// детали срабатывания. См. заметку в начале файла: без этого третья
     /// попытка починить блокировку Win была бы такой же догадкой вслепую,
     /// как первые две.
-    fn log(line: &str) {
-        let base = match std::env::var("LOCALAPPDATA") {
-            Ok(v) if !v.is_empty() => v,
-            _ => return,
-        };
-        let dir = std::path::PathBuf::from(base).join("Echips").join("HardwareCheck");
-        if std::fs::create_dir_all(&dir).is_err() {
-            return;
-        }
-        let path = dir.join("keyhook.log");
-        if std::fs::metadata(&path).map(|m| m.len() > 512 * 1024).unwrap_or(false) {
-            let _ = std::fs::rename(&path, dir.join("keyhook.old.log"));
-        }
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-            use std::io::Write;
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0);
-            let _ = writeln!(f, "{now} · {line}");
-        }
-    }
+    /// Запись keyhook.log ОТКЛЮЧЕНА по просьбе пользователя (диагностика блокировки Win
+    /// завершена — по логу подтверждено, что она работает; создавать файлы на диске больше не нужно).
+    /// Вызовы log(...) оставлены как есть — чтобы вернуть лог, достаточно вернуть тело функции
+    /// (см. историю git: коммит «Блокировка Win подтверждена рабочей…»).
+    fn log(_line: &str) {}
 
     /// «Съедаемые» коды клавиш: сама Win + медиа-клавиши F-ряда, которые
     /// на многих ноутбуках всплывают системным OSD (громкость/медиа/

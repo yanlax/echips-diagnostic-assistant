@@ -31,7 +31,7 @@ Echips Hardware Check — внутренний инструмент инжене
 
 ## Утилиты записи SMBIOS (заводской комплект)
 - Назначение: запись серийного номера/UUID платы при замене (вкладка «Замена
-  платы»): `AMIDEWINx64.exe` (2020 г., Aptio V) `DMIEDITx64.EXE` (AMI DMI Editor, 2020 г.) и драйверы `amifldrv64.sys`/`amigendrv64.sys`
+  платы»): `AMIDEWINx64.exe` (2020 г., Aptio V) и драйверы `amifldrv64.sys`/`amigendrv64.sys`
   (American Megatrends, платы AMI), `H2OSDE-Wx64.exe` (Insyde Software, платы
   Insyde). Лежат в `src-tauri/assets/smbios`, вшиты в exe без изменений и
   распаковываются в `%LOCALAPPDATA%\Echips\HardwareCheck\smbios` при первой

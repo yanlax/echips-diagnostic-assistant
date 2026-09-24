@@ -145,7 +145,6 @@ mod flash {
     const AMIDEWIN: &[u8] = include_bytes!("../../assets/smbios/AMIDEWINx64.exe");
     const H2OSDE: &[u8] = include_bytes!("../../assets/smbios/H2OSDE-Wx64.exe");
     const AMIFLDRV64: &[u8] = include_bytes!("../../assets/smbios/amifldrv64.sys");
-    const DMIEDIT: &[u8] = include_bytes!("../../assets/smbios/DMIEDITx64.EXE");
     const AMIGENDRV64: &[u8] = include_bytes!("../../assets/smbios/amigendrv64.sys");
 
     #[derive(Clone, Copy, PartialEq)]
@@ -224,12 +223,11 @@ mod flash {
         pub fn new() -> Result<Tool, String> {
             let dir = app_data_dir().join("smbios");
             std::fs::create_dir_all(&dir).map_err(|e| format!("Не удалось создать папку утилит: {e}"))?;
-            let files: [(&str, &[u8]); 5] = [
+            let files: [(&str, &[u8]); 4] = [
                 ("AMIDEWINx64.exe", AMIDEWIN),
                 ("H2OSDE-Wx64.exe", H2OSDE),
                 ("amifldrv64.sys", AMIFLDRV64),
                 ("amigendrv64.sys", AMIGENDRV64),
-                ("DMIEDITx64.EXE", DMIEDIT),
             ];
             for (name, bytes) in files {
                 let path = dir.join(name);
@@ -320,10 +318,11 @@ mod flash {
             }
         }
 
-        /// Запись UUID с проверкой чтением обратно. AMI: как показал реальный тест, заводской
-        /// DMIEDITx64.EXE пишет UUID, а AMIDEWINx64 — нет, поэтому пробуем по очереди (каждая
-        /// попытка сверяется чтением через AMIDEWIN): DMIEDIT с UUID без дефисов (как в заводском
-        /// test.bat), DMIEDIT с дефисами, AMIDEWIN без дефисов. Insyde — как раньше (`-SU`).
+        /// Запись UUID с проверкой чтением обратно. AMI: справка AMIDEWIN/DMIEDIT — «/SU [16 Bytes]»,
+        /// «Error: The size of UUID is too long»: UUID передаётся как 32 hex-символа БЕЗ дефисов (так же
+        /// делает заводской test.bat), с дефисами (36 символов) утилита отказывает. DMIEDITx64.EXE при
+        /// запуске с аргументами просто открывает своё окно — из программы его не используем.
+        /// Insyde — как раньше (`-SU`).
         pub fn write_uuid_verified(&self, uuid: &str) -> Result<(), String> {
             let norm = |t: &str| t.to_lowercase().replace('-', "");
             let want = norm(uuid);
@@ -344,8 +343,7 @@ mod flash {
                 }
                 Vendor::Ami => {
                     let plain = uuid.replace('-', "");
-                    let attempts: [(&str, &str); 3] =
-                        [("DMIEDITx64.EXE", plain.as_str()), ("DMIEDITx64.EXE", uuid), ("AMIDEWINx64.exe", plain.as_str())];
+                    let attempts: [(&str, &str); 1] = [("AMIDEWINx64.exe", plain.as_str())];
                     let mut log: Vec<String> = Vec::new();
                     for (exe, val) in attempts {
                         match run_status(&self.dir, exe, &[flag.as_str(), val], 40) {

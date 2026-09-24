@@ -51,10 +51,18 @@ src-tauri/
                                      echips-driver-assistant (каскад поиска,
                                      скачивание с Яндекс.Диска, pnputil,
                                      точка восстановления)
-      motherboard.rs                чтение SN/UUID платы + аудит-лог со
-                                     SHA-256 хэш-цепочкой + ЗАГЛУШКА записи
-                                     (см. ниже, это важно)
-      report.rs                     сохранение отчёта в .txt и .json
+      motherboard.rs                чтение и запись SN/UUID платы (заводские
+                                     утилиты AMI/Insyde, модуль flash) +
+                                     аудит-лог со SHA-256 хэш-цепочкой
+      report.rs                     сохранение отчёта в .txt, .json и .pdf
+                                     (тема «Графит»)
+      techs.rs                      инженеры: список из data/techs.json,
+                                     управление через GitHub API, токен DPAPI
+      upload.rs                     отправка отчётов (JSON+PDF) в echips-reports
+      update.rs                     автообновление (GitHub Releases)
+      keyhook.rs                    низкоуровневый хук клавиатуры (Win, PrtScr,
+                                     медиа, F5/F11/F12) с ретрансляцией
+      winpe.rs                      запуск в WinPE: переносимый WebView2, среда
       smart.rs / smart_parse.rs     get_smart_report — SMART SATA (WMI) и NVMe (IOCTL), разбор с юнит-тестами
       crash_logic.rs                справочник кодов, склейка сбоев, диагноз (юнит-тесты)
       activation.rs                 get_activation_status, run_activation_step
@@ -64,6 +72,8 @@ src-tauri/
       peripherals.rs                LAN, USB-накопитель (запись/чтение), яркость, мониторы, сигнал Wi-Fi
       summary.rs                    get_hardware_summary — сводка железа (как CPU-Z)
 
+src-tauri/assets/smbios/        Amidewin.exe, H2OSDE-Wx64.exe, драйверы AMI (вшиты)
+data/techs.json                 инженеры и хэши PIN (читается приложением)
 src-tauri/icons/                иконки приложения (из echips-driver-assistant),
                                   лежат в git — в CI не генерируются
 src/logo.png, src/fonts/        логотип и локальные шрифты (Space Grotesk,

@@ -454,6 +454,55 @@ pub fn write_smbios_identity(
     }
 }
 
+/// Последняя запись SN/UUID хранится на диске: после перезагрузки тест «Идентификаторы» сверяет систему с ней.
+/// `boot_time` — время последней загрузки Windows: если запись сделана ПОСЛЕ неё, WMI ещё показывает старые
+/// значения SMBIOS и расхождение — не ошибка, а «нужна перезагрузка».
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, Default)]
+pub struct MbLast {
+    #[serde(default)]
+    pub serial: String,
+    #[serde(default)]
+    pub uuid: String,
+    /// RFC3339, когда записано
+    #[serde(default)]
+    pub written_at: String,
+    /// RFC3339, последняя загрузка Windows (заполняется при чтении)
+    #[serde(default)]
+    pub boot_time: String,
+}
+
+fn mb_last_path() -> std::path::PathBuf {
+    app_data_dir().join("mb_last.json")
+}
+
+#[tauri::command(async)]
+pub fn mb_last_save(serial: String, uuid: String) -> Result<(), String> {
+    // раздельная запись: пустое поле не затирает ранее записанное значение
+    let mut cur = std::fs::read_to_string(mb_last_path()).ok().and_then(|t| serde_json::from_str::<MbLast>(&t).ok()).unwrap_or_default();
+    if !serial.trim().is_empty() {
+        cur.serial = serial.trim().to_string();
+    }
+    if !uuid.trim().is_empty() {
+        cur.uuid = uuid.trim().to_string();
+    }
+    cur.written_at = chrono::Local::now().to_rfc3339();
+    let _ = std::fs::create_dir_all(app_data_dir());
+    let text = serde_json::to_string_pretty(&cur).map_err(|e| e.to_string())?;
+    std::fs::write(mb_last_path(), text).map_err(|e| format!("Не удалось сохранить: {e}"))
+}
+
+#[tauri::command(async)]
+pub fn mb_last_load() -> Option<MbLast> {
+    let mut m = std::fs::read_to_string(mb_last_path()).ok().and_then(|t| serde_json::from_str::<MbLast>(&t).ok())?;
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(t) = crate::powershell::run_ps("(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString('o')") {
+            m.boot_time = t.trim().to_string();
+        }
+    }
+    Some(m)
+}
+
 #[tauri::command(async)]
 pub fn read_audit_log() -> Result<Vec<AuditEntry>, String> {
     let path = audit_log_path();

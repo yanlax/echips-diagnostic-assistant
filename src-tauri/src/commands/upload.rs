@@ -134,7 +134,13 @@ async fn post(client: &reqwest::Client, envelope: &Value) -> Result<(), String> 
         "after" => "_after",
         _ => "",
     };
-    let base = format!("{engineer}/{date}/{device_dir}/{time}{stage}");
+    // Режим автопрогона в имени файла: вкладка «История» подбирает пару «до/после» одного режима.
+    let mode = match report["run_mode"].as_str().unwrap_or("") {
+        "полный" => "_full",
+        "экспресс" => "_express",
+        _ => "",
+    };
+    let base = format!("{engineer}/{date}/{device_dir}/{time}{stage}{mode}");
     // Копия для просмотра «все отчёты по ноутбуку»: _по_ноутбукам/<серийник>/ — история
     // всех инженеров и дат в одной папке.
     let by_device = format!(

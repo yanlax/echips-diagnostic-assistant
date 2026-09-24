@@ -70,6 +70,8 @@ pub fn run() {
             commands::drivers::open_log_folder,
             commands::motherboard::read_board_identity,
             commands::motherboard::write_smbios_identity,
+            commands::motherboard::mb_last_save,
+            commands::motherboard::mb_last_load,
             commands::motherboard::read_audit_log,
             commands::report::save_report_txt,
             commands::report::save_report_json,

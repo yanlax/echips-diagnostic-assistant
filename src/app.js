@@ -1492,6 +1492,7 @@ var A = {
       newUuid: S.mb.uuid
     }).then(function(){
       S.mbLast = { serial:S.mb.serial, uuid:S.mb.uuid, at:Date.now() };
+      invoke('mb_last_save', { serial:S.mb.serial||'', uuid:S.mb.uuid||'' }).catch(function(){});
       S.mb.step='done'; render();
     }).catch(function(err){
       // Запись не удалась (утилита не подтвердила, BIOS не поддерживается,
@@ -1693,8 +1694,9 @@ function sysReport(hw){
   var slotSeen = {};
   hw.ram_modules.forEach(function(m){
     var n = (slotSeen[m.slot] = (slotSeen[m.slot]||0) + 1);
-    var dupSuffix = n>1 ? ' (#'+n+')' : '';
-    lines.push('    '+m.slot+dupSuffix+': '+m.capacity_gb+' ГБ'+(m.speed_mhz?' · '+m.speed_mhz+' МГц':'')+(m.manufacturer?' · '+m.manufacturer:'')+(m.part_number?' · '+m.part_number:''));
+    var dupCount = hw.ram_modules.filter(function(x){ return x.slot===m.slot; }).length;
+    var slotLabel = dupCount>1 ? 'Модуль '+n+' (BIOS называет слот «'+m.slot+'»)' : m.slot;
+    lines.push('    '+slotLabel+': '+m.capacity_gb+' ГБ'+(m.speed_mhz?' · '+m.speed_mhz+' МГц':'')+(m.manufacturer?' · '+m.manufacturer:'')+(m.part_number?' · '+m.part_number:''));
   });
   var biggest = hw.disks.reduce(function(a,d){ return d.size_gb>(a?a.size_gb:0) ? d : a; }, null);
   chk('Диск', hw.disks.length ? hw.disks.map(function(d){ return d.model+' '+d.size_gb+' ГБ'+(d.media?' '+d.media:'')+(d.health&&d.health!=='Healthy'?' ['+d.health+']':''); }).join('; ') : 'не найден',
@@ -1776,8 +1778,13 @@ function fetchCategory(kind){
     });
   }
   if (kind==='ident'){
-    return Promise.all([invoke('get_system_info'), invoke('get_hardware_summary'), invoke('list_lan_adapters').catch(function(){ return []; }), invoke('get_activation_status').catch(function(){ return null; })]).then(function(r){
-      var si = r[0]||{}, hw = r[1]||{}, lan = r[2]||[], act = r[3], exp = S.mbLast || null;
+    return Promise.all([invoke('get_system_info'), invoke('get_hardware_summary'), invoke('list_lan_adapters').catch(function(){ return []; }), invoke('get_activation_status').catch(function(){ return null; }), invoke('mb_last_load').catch(function(){ return null; })]).then(function(r){
+      var si = r[0]||{}, hw = r[1]||{}, lan = r[2]||[], act = r[3], last = r[4];
+      // ожидаемые значения — последняя запись SN/UUID (хранится на диске и переживает перезагрузку)
+      var exp = last ? { serial:last.serial||'', uuid:last.uuid||'' } : (S.mbLast || null);
+      if (exp && !exp.serial && !exp.uuid) exp = null;
+      // запись позже последней загрузки Windows → WMI ещё показывает старое: расхождение = «перезагрузите ПК», не ошибка
+      var needReboot = !!(last && last.written_at && last.boot_time && new Date(last.written_at) > new Date(last.boot_time));
       var lines = [], bad = [], notes = [];
       function idBad(v){ v = String(v||'').trim(); return !v || isPlaceholder(v) || /^(system serial number|not applicable|0+|—)$/i.test(v); }
       function normU(u){ return String(u||'').toLowerCase().replace(/[^0-9a-f]/g,''); }
@@ -1792,8 +1799,11 @@ function fetchCategory(kind){
       lines.push(lan.length ? '• MAC (Ethernet): '+lan.map(function(a){ return (a.mac||'—')+' — '+(a.description||a.name||''); }).join('; ') : '• MAC (Ethernet): адаптера нет');
       lines.push('• Ключ Windows (OEM) в BIOS: '+(act ? (act.oem_key_present ? 'есть (…'+act.oem_key_tail+')' : 'нет') : 'не удалось прочитать'));
       notes.forEach(function(n){ lines.push('⚠ '+n); });
-      if (exp && bad.length) lines.push('ℹ Если значения ещё старые — перезагрузите ПК: Windows обновляет данные SMBIOS после перезагрузки.');
-      return { lines:lines, verdict: bad.length
+      if (exp && bad.length && needReboot) lines.push('ℹ Запись сделана после последней загрузки Windows — SMBIOS обновится после перезагрузки. Перезагрузите ПК и повторите проверку.');
+      else if (exp && bad.length) lines.push('ℹ Запись была раньше последней загрузки Windows, а значения не совпадают — запись не применилась, повторите её.');
+      return { lines:lines, verdict: bad.length && needReboot
+        ? { status:'na', note:'Значения ещё не обновились (запись после последней загрузки Windows) — перезагрузите ПК и повторите проверку: '+bad.join(', ') }
+        : bad.length
         ? { status:'fail', note:'Не совпадает или не задано: '+bad.join(', ') }
         : { status:'pass', note:'SN, плата и UUID в порядке'+(exp?' и совпадают с записанными':'')+(notes.length?' · ⚠ '+notes.join('; '):'') } };
     });
@@ -3101,8 +3111,9 @@ function gpuFromSnap(sn){
 function gpuHottest(sn){ var t = gpuFromSnap(sn).map(function(g){ return g.temp; }).filter(function(v){ return v!=null; }); return t.length ? Math.max.apply(null, t) : null; }
 /* ---------- История отчётов (админ) ---------- */
 var HIST_ST = { pass:'OK', fail:'ОШИБКА', na:'н/п', idle:'—' };
-function histStage(ref){ var m = String(ref.file||'').match(/_(before|after)\.json$/); return m ? m[1] : ''; }
-function histStageBadge(ref){ var st = histStage(ref); return st ? ' <span class="stagebadge '+st+'">'+(st==='before'?'до':'после')+'</span>' : ''; }
+function histStage(ref){ var m = String(ref.file||'').match(/_(before|after)(?:_(?:full|express))?\.json$/); return m ? m[1] : ''; }
+function histMode(ref){ var m = String(ref.file||'').match(/_(full|express)\.json$/); return m ? m[1] : ''; }
+function histStageBadge(ref){ var st = histStage(ref), md = histMode(ref); return (st ? ' <span class="stagebadge '+st+'">'+(st==='before'?'до':'после')+'</span>' : '')+(md ? ' <span class="stagebadge">'+(md==='express'?'экспресс':'полный')+'</span>' : ''); }
 /* Пара «до / после» в текущем списке: самый свежий «до» и самый свежий «после» с тем же номером приёмки (или серийником) */
 function histFiltered(H){
   var q = (H.q||'').toLowerCase().trim();
@@ -3117,11 +3128,18 @@ function histFiltered(H){
 }
 function histFindPair(list){
   var bef = list.filter(function(x){ return histStage(x)==='before'; }), aft = list.filter(function(x){ return histStage(x)==='after'; });
-  for (var i=0;i<bef.length;i++){
-    var b = histLabel(bef[i]);
-    for (var j=0;j<aft.length;j++){
-      var a = histLabel(aft[j]);
-      if ((b.intake && b.intake===a.intake) || (!b.intake && !a.intake && b.serial===a.serial)) return { before:bef[i], after:aft[j], intake:b.intake||a.intake, serial:b.serial };
+  // пара с одинаковым номером приёмки (или серийником); сначала ищем пару ОДНОГО режима (полный/экспресс), потом любую
+  for (var pass=0; pass<2; pass++){
+    for (var i=0;i<bef.length;i++){
+      var b = histLabel(bef[i]);
+      for (var j=0;j<aft.length;j++){
+        var a = histLabel(aft[j]);
+        var same = (b.intake && b.intake===a.intake) || (!b.intake && !a.intake && b.serial===a.serial);
+        if (!same) continue;
+        var mb = histMode(bef[i]), ma = histMode(aft[j]);
+        if (pass===0 && mb && ma && mb!==ma) continue;
+        return { before:bef[i], after:aft[j], intake:b.intake||a.intake, serial:b.serial, modeDiff: !!(mb && ma && mb!==ma) };
+      }
     }
   }
   return null;
@@ -3191,6 +3209,7 @@ function screenHistory(){
     ['device_model','device_serial','intake','engineer','run_mode'].forEach(function(k){ if ((ra[k]||'')!==(rb[k]||'')) head.push(k+': «'+(ra[k]||'—')+'» → «'+(rb[k]||'—')+'»'); });
     body = '<div class="headactions" style="margin-bottom:12px"><button class="btn btn-ghost" onclick="echips.histBack()">← к списку</button></div>'+
       '<div class="cmpgrid"><div>'+histHeader(A_)+'</div><div>'+histHeader(B_)+'</div></div>'+
+      ((ra.run_mode||'') && (rb.run_mode||'') && ra.run_mode!==rb.run_mode ? '<div class="hintbox">Сравниваются отчёты разных режимов («'+esc(ra.run_mode)+'» и «'+esc(rb.run_mode)+'»): часть тестов есть только в полном режиме и не сравнивается. Для точного сравнения запустите «после ремонта» в том же режиме, что и «до».</div>' : '')+
       (head.length ? '<div class="kbnote" style="margin-top:10px">Отличия в заголовке: '+head.map(esc).join(' · ')+'</div>' : '')+
       '<div class="kbnote" style="margin-top:10px">Изменилось тестов: '+changed.length+' из '+rows.length+' (тесты «не проверено» в одном из отчётов не сравниваются)</div>'+
       (function(){

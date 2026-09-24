@@ -226,6 +226,13 @@ function isAdmin(){ return !!(S.engineer && S.engineer.role==='admin'); }
   });
 })();
 
+/* Версия приложения в верхней полосе (из Cargo/tauri.conf, синхронно с релизом). */
+try {
+  window.__TAURI__.app.getVersion().then(function(v){
+    var e = document.getElementById('app-ver'); if (e) e.textContent = 'v'+v;
+  }).catch(function(){});
+} catch(e){}
+
 /* ---------- загрузка данных устройства при старте ---------- */
 function loadDevice(){
   invoke('get_system_info').then(function(info){

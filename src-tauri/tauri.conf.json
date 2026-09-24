@@ -11,7 +11,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Echips Hardware Check v0.24.0",
+        "title": "Echips Hardware Check",
         "width": 1120,
         "height": 764,
         "resizable": true,

@@ -65,7 +65,7 @@ Tauri 2 приложение для инженеров сервисного це
   на стороне JS vs snake_case в Rust).
 - Версии: при каждом релизе синхронно поднимаются `src-tauri/Cargo.toml`,
   `src-tauri/Cargo.lock` (запись `name = "echips-diagnostic-app"`),
-  `src-tauri/tauri.conf.json` (поля `version` И `title` окна — «Echips Hardware Check vX.Y.Z») и подпись версии в `src/index.html`
+  `src-tauri/tauri.conf.json` и подпись версии в `src/index.html`
   (`v0.x.y · ОТК / сервис`), плюс запись в README.md ("## Версия").
   Коммит "Версия x.y.z", затем тег `vX.Y.Z` и пуш тега. После публикации
   релиза можно удалить старый релиз/тег по просьбе пользователя

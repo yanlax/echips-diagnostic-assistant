@@ -139,11 +139,13 @@ mod flash {
     use super::app_data_dir;
     use std::os::windows::process::CommandExt;
     use std::path::{Path, PathBuf};
-    use std::process::Command;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
 
     const AMIDEWIN: &[u8] = include_bytes!("../../assets/smbios/AMIDEWINx64.exe");
     const H2OSDE: &[u8] = include_bytes!("../../assets/smbios/H2OSDE-Wx64.exe");
     const AMIFLDRV64: &[u8] = include_bytes!("../../assets/smbios/amifldrv64.sys");
+    const DMIEDIT: &[u8] = include_bytes!("../../assets/smbios/DMIEDITx64.EXE");
     const AMIGENDRV64: &[u8] = include_bytes!("../../assets/smbios/amigendrv64.sys");
 
     #[derive(Clone, Copy, PartialEq)]
@@ -172,15 +174,62 @@ mod flash {
         ))
     }
 
+    /// Запуск с таймаутом и кодом возврата: DMIEDITx64.EXE — GUI-приложение, вывода в консоль у него может
+    /// не быть, поэтому результат смотрим по коду возврата (ErrCode.txt из комплекта завода) и чтением обратно.
+    fn run_status(dir: &Path, exe: &str, args: &[&str], secs: u64) -> Result<(Option<i32>, String), String> {
+        let mut child = Command::new(dir.join(exe))
+            .args(args)
+            .current_dir(dir)
+            .creation_flags(0x08000000)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Не удалось запустить {exe}: {e}"))?;
+        let started = Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+                    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+                    return Ok((out.status.code(), text));
+                }
+                Ok(None) => {
+                    if started.elapsed() > Duration::from_secs(secs) {
+                        let _ = child.kill();
+                        return Err(format!("{exe} не завершилась за {secs} с"));
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+    }
+
+    fn dmiedit_code(code: Option<i32>) -> String {
+        match code {
+            Some(0) => "0 (успех)".into(),
+            Some(0x10) => "0x10 (не загрузился драйвер)".into(),
+            Some(0x49) => "0x49 (платформа не позволяет)".into(),
+            Some(0x61) => "0x61 (программа уже запущена)".into(),
+            Some(0xE0) => "0xE0 (не удалось инициализировать SMBIOS)".into(),
+            Some(0xE1) => "0xE1 (не прочитаны данные DMI)".into(),
+            Some(0xE2) => "0xE2 (запись DMI не удалась)".into(),
+            Some(0xE3) => "0xE3 (система не поддерживает)".into(),
+            Some(c) => format!("{c:#X}"),
+            None => "нет кода".into(),
+        }
+    }
+
     impl Tool {
         pub fn new() -> Result<Tool, String> {
             let dir = app_data_dir().join("smbios");
             std::fs::create_dir_all(&dir).map_err(|e| format!("Не удалось создать папку утилит: {e}"))?;
-            let files: [(&str, &[u8]); 4] = [
+            let files: [(&str, &[u8]); 5] = [
                 ("AMIDEWINx64.exe", AMIDEWIN),
                 ("H2OSDE-Wx64.exe", H2OSDE),
                 ("amifldrv64.sys", AMIFLDRV64),
                 ("amigendrv64.sys", AMIGENDRV64),
+                ("DMIEDITx64.EXE", DMIEDIT),
             ];
             for (name, bytes) in files {
                 let path = dir.join(name);
@@ -271,23 +320,48 @@ mod flash {
             }
         }
 
-        /// UUID пишем в виде 32 hex-символов без дефисов — так делает заводская процедура
-        /// (test.bat из комплекта завода: `set var=%uuid:-=%`). Возвращает вывод утилиты.
-        pub fn write_uuid(&self, uuid: &str) -> Result<String, String> {
-            let flag = self.flag("SU");
-            let plain = uuid.replace('-', "");
-            let out = match self.vendor {
-                Vendor::Insyde => run(&self.dir, self.exe(), &[flag.as_str(), uuid])?,
-                Vendor::Ami => run(&self.dir, self.exe(), &[flag.as_str(), plain.as_str()])?,
-            };
-            Ok(out)
-        }
-
-        pub fn read_uuid(&self) -> Result<String, String> {
+        /// Запись UUID с проверкой чтением обратно. AMI: как показал реальный тест, заводской
+        /// DMIEDITx64.EXE пишет UUID, а AMIDEWINx64 — нет, поэтому пробуем по очереди (каждая
+        /// попытка сверяется чтением через AMIDEWIN): DMIEDIT с UUID без дефисов (как в заводском
+        /// test.bat), DMIEDIT с дефисами, AMIDEWIN без дефисов. Insyde — как раньше (`-SU`).
+        pub fn write_uuid_verified(&self, uuid: &str) -> Result<(), String> {
+            let norm = |t: &str| t.to_lowercase().replace('-', "");
+            let want = norm(uuid);
             let flag = self.flag("SU");
             match self.vendor {
-                Vendor::Insyde => run(&self.dir, self.exe(), &[flag.as_str()]),
-                Vendor::Ami => run(&self.dir, self.exe(), &[flag.as_str()]),
+                Vendor::Insyde => {
+                    let wrote = run(&self.dir, self.exe(), &[flag.as_str(), uuid])?;
+                    let read = run(&self.dir, self.exe(), &[flag.as_str()])?;
+                    if norm(&read).contains(&want) {
+                        Ok(())
+                    } else {
+                        Err(format!(
+                            "Серийные номера записаны, но UUID после записи не совпал. Запись: «{}». Прочитано: «{}».",
+                            super::brief(&wrote),
+                            super::brief(&read)
+                        ))
+                    }
+                }
+                Vendor::Ami => {
+                    let plain = uuid.replace('-', "");
+                    let attempts: [(&str, &str); 3] =
+                        [("DMIEDITx64.EXE", plain.as_str()), ("DMIEDITx64.EXE", uuid), ("AMIDEWINx64.exe", plain.as_str())];
+                    let mut log: Vec<String> = Vec::new();
+                    for (exe, val) in attempts {
+                        match run_status(&self.dir, exe, &[flag.as_str(), val], 40) {
+                            Ok((code, out)) => log.push(format!("{exe} {flag} {val}: код {}, «{}»", dmiedit_code(code), super::brief(&out))),
+                            Err(e) => {
+                                log.push(format!("{exe}: {e}"));
+                                continue;
+                            }
+                        }
+                        let read = run(&self.dir, "AMIDEWINx64.exe", &[flag.as_str()])?;
+                        if norm(&read).contains(&want) {
+                            return Ok(());
+                        }
+                    }
+                    Err(format!("Серийные номера записаны, но UUID не удалось записать: {}", log.join(" | ")))
+                }
             }
         }
     }
@@ -316,17 +390,7 @@ fn do_flash(new_serial: &str, new_uuid: &str) -> Result<(), String> {
             return Err(format!("Проверка после записи не прошла: серийник ({field}) не совпал."));
         }
     }
-    let wrote = tool.write_uuid(new_uuid)?;
-    let read = tool.read_uuid()?;
-    // сверяем без дефисов и без учёта регистра: утилита может печатать UUID и так и так
-    let norm = |t: &str| t.to_lowercase().replace('-', "");
-    if !norm(&read).contains(&norm(new_uuid)) {
-        return Err(format!(
-            "Серийные номера записаны, но UUID после записи не совпал. Ответ утилиты на запись: «{}». Прочитано: «{}».",
-            brief(&wrote),
-            brief(&read)
-        ));
-    }
+    tool.write_uuid_verified(new_uuid)?;
     Ok(())
 }
 

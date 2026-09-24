@@ -12,12 +12,5 @@
     "pin_hash": "36179dbf3b6381f7a6f1495bb766474ff004c3fa8b91a8728107b5bfb34ac17b",
     "salt": "1d7e3627da2025452460af69fef436e6",
     "role": "admin"
-  },
-  {
-    "id": "Ivan",
-    "name": "Ivan i i",
-    "pin_hash": "39060fadae972b153ae8a1ef28a1ae76bed55d0412ffba5fb85e71adbf815234",
-    "salt": "8559088a02e3b18766d03dd3c214a216",
-    "role": "tech"
   }
 ]

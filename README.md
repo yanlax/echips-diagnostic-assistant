@@ -427,7 +427,8 @@ WebView2, лежащей рядом с exe:
 `%LOCALAPPDATA%` и запускает браузер без песочницы и GPU (`--no-sandbox --disable-gpu`).
 Определяется по `%SystemRoot%\System32\winpeshl.exe`. Если окно не открывается, смотрите
 `echips-startup.log` (рядом с exe и в `%TEMP%`): в нём — найден ли WebView2, какие флаги
-включены, текст ошибки; при ошибке создания окна приложение показывает сообщение.
+включены, текст ошибки; при ошибке создания окна приложение показывает сообщение. В WinPE дополнительно пишется журнал самого
+Chromium — `%TEMP%\echips-webview2.log` (почему не стартует браузерный процесс WebView2).
 
 Нужные компоненты образа WinPE (Windows ADK, `Add-WindowsPackage`): **WinPE-WMI**,
 **WinPE-NetFX**, **WinPE-Scripting**, **WinPE-PowerShell**, **WinPE-StorageWMI**,

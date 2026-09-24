@@ -10,6 +10,9 @@ pub fn run() {
         winpe::log(&format!("паника: {info}"));
     }));
     let built = tauri::Builder::default()
+        .on_page_load(|_webview, payload| {
+            winpe::log(&format!("страница: {:?} {}", payload.event(), payload.url()));
+        })
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
@@ -104,7 +107,19 @@ pub fn run() {
     };
     winpe::log("окно создано, приложение запущено");
     app.run(|_app, event| {
+            // Жизненный цикл в лог: если процесс закрывается сам, здесь будет видно кто и с каким кодом.
+            match &event {
+                tauri::RunEvent::Ready => winpe::log("событие: Ready"),
+                tauri::RunEvent::ExitRequested { code, .. } => winpe::log(&format!("событие: ExitRequested code={code:?}")),
+                tauri::RunEvent::WindowEvent { label, event: we, .. } => {
+                    if matches!(we, tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed) {
+                        winpe::log(&format!("событие: окно {label}: {we:?}"));
+                    }
+                }
+                _ => {}
+            }
             if let tauri::RunEvent::Exit = event {
+                winpe::log("событие: Exit");
                 commands::hwmon::hwmon_stop();
                 commands::keyhook::stop_win_key_block();
                 powershell::shutdown();

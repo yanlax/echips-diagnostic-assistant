@@ -87,7 +87,8 @@ pub fn prepare() {
     #[cfg(target_os = "windows")]
     {
         log(&format!(
-            "старт: exe={:?}, WinPE={}, SystemRoot={:?}, LOCALAPPDATA={:?}, TEMP={:?}",
+            "старт: pid={}, exe={:?}, WinPE={}, SystemRoot={:?}, LOCALAPPDATA={:?}, TEMP={:?}",
+            std::process::id(),
             std::env::current_exe().ok(),
             is_winpe(),
             std::env::var_os("SystemRoot"),
@@ -137,8 +138,19 @@ pub fn prepare() {
         if (is_winpe() || std::env::var_os("ECHIPS_SAFE_WEBVIEW").is_some())
             && std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_none()
         {
-            std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--no-sandbox --disable-gpu --disable-gpu-compositing");
-            log("включены флаги браузера для WinPE: --no-sandbox --disable-gpu");
+            // Журнал самого Chromium (--enable-logging) — по нему видно, почему не стартует
+            // браузерный процесс WebView2 (в WinPE процесс приложения перезапускался каждую секунду
+            // после «окно создано» без каких-либо паник).
+            let chromium_log = std::env::var_os("TEMP")
+                .or_else(|| std::env::var_os("TMP"))
+                .map(|t| PathBuf::from(t).join("echips-webview2.log"))
+                .unwrap_or_else(|| PathBuf::from(r"X:\Windows\Temp\echips-webview2.log"));
+            let args = format!(
+                "--no-sandbox --disable-gpu --disable-gpu-compositing --enable-logging --v=1 --log-file={}",
+                chromium_log.display()
+            );
+            std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", &args);
+            log(&format!("включены флаги браузера для WinPE: {args}"));
         }
         log(&format!(
             "WEBVIEW2_BROWSER_EXECUTABLE_FOLDER={:?}, WEBVIEW2_USER_DATA_FOLDER={:?}",

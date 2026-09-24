@@ -356,7 +356,7 @@ pub fn summary() -> Option<HwSummary> {
     let cores: Vec<f64> = snap
         .sensors
         .iter()
-        .filter(|s| s.hw_type.starts_with("Cpu") && s.sensor_type == "Clock" && s.name.starts_with("Core #") && s.value > 0.0)
+        .filter(|s| s.hw_type.starts_with("Cpu") && s.sensor_type == "Clock" && s.name.contains("Core #") && !s.name.contains("Effective") && s.value > 0.0)
         .map(|s| s.value)
         .collect();
     let cpu_clock_mhz = if cores.is_empty() { None } else { Some(cores.iter().sum::<f64>() / cores.len() as f64) };

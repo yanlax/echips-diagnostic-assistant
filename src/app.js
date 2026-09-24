@@ -204,9 +204,12 @@ function counts(){
   });
   return { pass:p, fail:f, na:n, checked:p+f+n };
 }
+/* Заглушки SMBIOS, которые производитель не заменил на настоящее значение */
+function isPlaceholder(v){ return /^(default string|to be filled by o\.e\.m\.?|system manufacturer|system product name|o\.e\.m\.?|oem|not specified|unknown|none|n\/a|default)$/i.test(String(v||'').trim()); }
+function cleanSmbios(v){ v = String(v||'').trim(); return isPlaceholder(v) ? '' : v; }
 function deviceLabel(){
   if (!S.device) return 'определяется…';
-  return (String(S.device.manufacturer||'').trim() + ' ' + String(S.device.model||'').trim()).trim() || 'неизвестная модель';
+  return (cleanSmbios(S.device.manufacturer) + ' ' + cleanSmbios(S.device.model)).trim() || 'неизвестная модель';
 }
 function deviceSn(){ return S.device ? String(S.device.serial_number||'').trim() : ''; }
 function isAdmin(){ return !!(S.engineer && S.engineer.role==='admin'); }
@@ -390,8 +393,8 @@ var A = {
       recordDetail(id, { override:{ from:auto.status, to:v, reason:cm } });
     } else if (d.override){ recordDetail(id, { override:null }); }
     if (cat().kind==='keyboard' && v==='pass'){
-      var total = NUMPAD.length + MEDIA.length; KEYROWS.forEach(function(r){ total += r.length; });
-      var pressed = Object.keys(S.keys).length;
+      var reqIds = kbAllIds().filter(function(i){ return !kbOptional(i); }), total = reqIds.length;
+      var pressed = reqIds.filter(function(i){ return S.keys[i]; }).length;
       if (pressed < total*0.6 && !(S.comments[id]||'').trim()){
         S.markErr = { id:id, text:'Нажато только '+pressed+' из '+total+' клавиш. Нажмите остальные или допишите в комментарии, почему тест засчитан (например, нет цифрового блока).' };
         render(); return;
@@ -1536,8 +1539,12 @@ function sysReport(hw){
   var uu = String(hw.system_uuid||'').toLowerCase();
   if (!uu || /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(uu) || /^f{8}-f{4}-f{4}-f{4}-f{12}$/.test(uu) || uu==='03000200-0400-0500-0006-000700080009') warn.push('UUID не задан (заглушка производителя BIOS)');
   if (!hw.board_serial || /^(default string|to be filled|none|n\/a|0+|—)$/i.test(String(hw.board_serial).trim())) warn.push('серийник платы не задан');
-  var bd = String(hw.board||'').toLowerCase().replace(/[^a-z0-9]/g,''), md = S.device ? String(S.device.model||'').toLowerCase().replace(/[^a-z0-9]/g,'') : '';
-  if (bd && md && bd.indexOf(md)<0 && md.indexOf(bd)<0) warn.push('модель устройства ('+S.device.model+') и плата ('+hw.board+') не совпадают');
+  var boardClean = String(hw.board||'').split(/\s+/).filter(function(w){ return !isPlaceholder(w) && !/^default$/i.test(w) && !/^string$/i.test(w); }).join(' ');
+  if (!boardClean) warn.push('плата в SMBIOS не заполнена (заглушка «'+String(hw.board||'—').trim()+'»)');
+  else {
+    var bd = boardClean.toLowerCase().replace(/[^a-z0-9]/g,''), md = S.device ? cleanSmbios(S.device.model).toLowerCase().replace(/[^a-z0-9]/g,'') : '';
+    if (bd && md && bd.indexOf(md)<0 && md.indexOf(bd)<0) warn.push('модель устройства ('+S.device.model+') и плата ('+hw.board+') не совпадают');
+  }
   warn.forEach(function(w){ lines.push('⚠ '+w); });
   chk('BIOS', (hw.bios_version||'—')+(hw.bios_date?' от '+hw.bios_date:''),
     e.biosContains ? (hw.bios_version||'').toLowerCase().indexOf(String(e.biosContains).toLowerCase())>=0 : null, e.biosContains);
@@ -1941,9 +1948,20 @@ function kbLabel(id){
   if (id.indexOf('m:')===0){ var c2=id.slice(2); var f2=MEDIA.filter(function(k){ return k[0]===c2; })[0]; return f2?f2[1]:c2; }
   var p = id.split(':'); return KEYROWS[p[0]] ? KEYROWS[p[0]][p[1]] : id;
 }
+/* Необязательные клавиши: Insert и медиа-ряд есть не на всех ноутбуках (часто это Fn-комбинации) —
+   не считаются недобором в «нажато N из M», но остаются в списке проверки. */
+function kbOptional(id){ return id.indexOf('m:')===0 || kbLabel(id)==='Ins'; }
+function kbAllIds(){
+  var ids = [];
+  KEYROWS.forEach(function(row,ri){ row.forEach(function(l,ki){ ids.push(ri+':'+ki); }); });
+  NUMPAD.forEach(function(k){ ids.push('n:'+k[0]); });
+  MEDIA.forEach(function(k){ ids.push('m:'+k[0]); });
+  return ids;
+}
 function kbSummaryLines(){
-  var total = NUMPAD.length + MEDIA.length; KEYROWS.forEach(function(r){ total += r.length; });
-  var is = kbIssues(), lines = ['Нажато разных клавиш: '+Object.keys(S.keys).length+' из '+total];
+  var ids = kbAllIds(), req = ids.filter(function(i){ return !kbOptional(i); }), opt = ids.filter(kbOptional);
+  var pr = req.filter(function(i){ return S.keys[i]; }).length, po = opt.filter(function(i){ return S.keys[i]; }).length;
+  var is = kbIssues(), lines = ['Нажато клавиш: '+pr+' из '+req.length+(opt.length ? ' (необязательные — Ins и медиа-ряд: '+po+' из '+opt.length+')' : '')];
   if (is.chat.length) lines.push('Дребезг (двойное срабатывание): '+is.chat.map(kbLabel).join(', '));
   if (is.stuck.length) lines.push('Залипание (нажата >3 с): '+is.stuck.map(kbLabel).join(', '));
   // у модификаторов автоповтор при удержании — норма, в замечания не выносим
@@ -1951,11 +1969,9 @@ function kbSummaryLines(){
   if (many.length) lines.push('Автоповтор при удержании: '+many.join(', '));
   if (S.lastUnknown) lines.push('Клавиша не в раскладке: '+S.lastUnknown);
   // какие именно клавиши не нажимались — иначе «96 из 102» ни о чём не говорит
-  var miss = [];
-  KEYROWS.forEach(function(row,ri){ row.forEach(function(l,ki){ if (!S.keys[ri+':'+ki]) miss.push(l); }); });
-  NUMPAD.forEach(function(k){ if (!S.keys['n:'+k[0]]) miss.push('Num '+k[1]); });
-  MEDIA.forEach(function(k){ if (!S.keys['m:'+k[0]]) miss.push(k[1]); });
+  var miss = req.filter(function(i){ return !S.keys[i]; }).map(kbLabel), missOpt = opt.filter(function(i){ return !S.keys[i]; }).map(kbLabel);
   if (miss.length && miss.length<=40) lines.push('Не нажимались: '+miss.join(', '));
+  if (missOpt.length) lines.push('Необязательные, не нажимались: '+missOpt.join(', '));
   return lines;
 }
 document.addEventListener('keyup', function(e){
@@ -2310,6 +2326,7 @@ function smartLines(list){
     d.attrs.forEach(function(a){ out.push('    '+String(a.id).padStart(3,' ')+' '+a.name+' · тек '+a.current+' худш '+a.worst+' порог '+a.threshold+' raw '+rawText(a)+(a.status!=='ok'?' ['+a.status+']':'')); });
     if (d.nvme){ var h=d.nvme; out.push('    NVMe: резерв '+h.available_spare+'% (порог '+h.spare_threshold+'%), износ '+h.percentage_used+'%, ошибки целостности '+h.media_errors+', небезопасных выключений '+h.unsafe_shutdowns); }
     d.notes.forEach(function(n){ out.push('    ! '+n); });
+    d.attrs.forEach(function(a){ if (/Phy Error|CRC Error/i.test(a.name) && a.raw>=100 && a.raw<=9007199254740991) out.push('    ℹ '+a.name+' = '+a.raw+': ошибки обмена по SATA-интерфейсу (проверьте разъём/контакт), на здоровье диска не влияют, но при росте — тревожный признак'); });
   });
   return out;
 }

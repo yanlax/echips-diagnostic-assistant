@@ -50,12 +50,17 @@ fn cache_path() -> std::path::PathBuf {
         .join("techs_cache.json")
 }
 
+/// Список инженеров на момент сборки (хэши PIN, как в репозитории) — запасной вариант входа без сети.
+const BUILTIN_TECHS: &str = include_str!("../../../data/techs.json");
+/// Выключить (false) при выпуске программы всем сервисам: тогда без сети и без кэша войти нельзя.
+const ALLOW_BUILTIN_TECHS: bool = true;
+
 /// Список + откуда он взят — экран входа показывает предупреждение, если это
 /// кэш (иначе «новый инженер не виден, а почему — непонятно»).
 #[derive(Debug, Serialize, Clone)]
 pub struct TechList {
     pub techs: Vec<Tech>,
-    /// "api" | "raw" | "cache"
+    /// "api" | "raw" | "cache" | "builtin"
     pub source: String,
     pub note: String,
 }
@@ -85,8 +90,10 @@ async fn get_list(client: &reqwest::Client, url: &str, accept: &str) -> Option<(
 /// У каждого запроса таймаут — раньше при недоступном хосте загрузка висела.
 #[tauri::command(async)]
 pub async fn fetch_techs() -> Result<TechList, String> {
+    // Без интернета вход не должен ждать долго: connect 3 с, запрос 6 с (два источника — до ~12 с).
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(12))
+        .connect_timeout(std::time::Duration::from_secs(3))
+        .timeout(std::time::Duration::from_secs(6))
         .build()
         .map_err(|e| e.to_string())?;
     let stamp = chrono::Utc::now().timestamp_millis();
@@ -110,19 +117,30 @@ pub async fn fetch_techs() -> Result<TechList, String> {
         return Ok(TechList { techs: list, source: source.to_string(), note: String::new() });
     }
 
-    match std::fs::read_to_string(cache_path()) {
-        Ok(text) => serde_json::from_str::<Vec<Tech>>(&text)
-            .map(|list| TechList {
+    if let Ok(text) = std::fs::read_to_string(cache_path()) {
+        if let Ok(list) = serde_json::from_str::<Vec<Tech>>(&text) {
+            return Ok(TechList {
                 techs: list,
                 source: "cache".to_string(),
                 note: "Нет связи с GitHub — использован сохранённый список; недавно добавленных инженеров в нём может не быть.".to_string(),
-            })
-            .map_err(|e| format!("Сохранённый список инженеров повреждён: {e}")),
-        Err(_) => Err(
-            "Нет сети и нет ранее сохранённого списка инженеров. Подключите станцию к интернету хотя бы один раз."
-                .to_string(),
-        ),
+            });
+        }
     }
+
+    // Совсем без сети и без кэша (первый запуск на машине без интернета, WinPE): список, вшитый в
+    // exe при сборке (data/techs.json на момент сборки). ВРЕМЕННО, на время тестирования двумя
+    // инженерами (Максим и Алексей) — для выпуска всем сервисам с чётким контролем доступа
+    // выключить: ALLOW_BUILTIN_TECHS = false.
+    if ALLOW_BUILTIN_TECHS {
+        if let Ok(list) = serde_json::from_str::<Vec<Tech>>(BUILTIN_TECHS) {
+            return Ok(TechList {
+                techs: list,
+                source: "builtin".to_string(),
+                note: "Нет связи с GitHub и нет сохранённого списка — использован список, вшитый в программу; новые инженеры появятся при подключении к интернету.".to_string(),
+            });
+        }
+    }
+    Err("Нет сети и нет ранее сохранённого списка инженеров. Подключите станцию к интернету хотя бы один раз.".to_string())
 }
 
 // ---------- управление списком из приложения (только администратор) ----------

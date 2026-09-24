@@ -28,6 +28,13 @@ const TOKEN: &str = match option_env!("ECHIPS_REPORTS_TOKEN") {
 };
 
 fn queue_dir() -> PathBuf {
+    // В WinPE %LOCALAPPDATA% — диск X: в ОЗУ: очередь пропала бы при перезагрузке, а отчёт без
+    // сети как раз и ждёт следующей загрузки. Там кладём рядом с exe (флешка).
+    if crate::winpe::in_winpe() {
+        if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+            return dir.join("reports_queue");
+        }
+    }
     let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into());
     PathBuf::from(base).join("Echips").join("HardwareCheck").join("reports_queue")
 }

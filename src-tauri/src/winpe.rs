@@ -15,6 +15,18 @@
 #[cfg(target_os = "windows")]
 use std::path::{Path, PathBuf};
 
+/// Работаем ли в WinPE (диск X: — это ОЗУ, всё, что на нём, пропадает при перезагрузке).
+pub fn in_winpe() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        is_winpe()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn is_winpe() -> bool {
     // Диск WinPE обычно X:, но не всегда — проверяем и по %SystemRoot%, и по системному диску.

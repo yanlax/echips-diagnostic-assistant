@@ -3292,7 +3292,7 @@ function lockInit(){
   renderLock();
   invoke('fetch_techs').then(function(res){
     S.lock.techs = res.techs || [];
-    S.lock.note = res.source==='cache' ? (res.note || 'Список из локального кэша') : '';
+    S.lock.note = (res.source==='cache' || res.source==='builtin') ? (res.note || 'Список не из GitHub') : '';
     S.lock.phase = 'pin';
     renderLock();
   }).catch(function(err){
@@ -3427,5 +3427,8 @@ document.addEventListener('DOMContentLoaded', function(){
   lockInit();
   invoke('flush_report_queue').catch(function(){});
   setInterval(function(){ if (!S.auto.on) A.reportSync('sync'); }, 20000);
+  // Отчёты, накопленные без сети, досылаем сами: раз в 3 минуты и сразу при появлении связи.
+  setInterval(function(){ invoke('flush_report_queue').catch(function(){}); }, 180000);
+  window.addEventListener('online', function(){ invoke('flush_report_queue').catch(function(){}); });
 });
 })();

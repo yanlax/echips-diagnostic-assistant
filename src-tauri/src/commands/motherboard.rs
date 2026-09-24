@@ -336,7 +336,7 @@ mod flash {
                         Ok(())
                     } else {
                         Err(format!(
-                            "Серийные номера записаны, но UUID после записи не совпал. Запись: «{}». Прочитано: «{}».",
+                            "UUID после записи не совпал. Запись: «{}». Прочитано: «{}».",
                             super::brief(&wrote),
                             super::brief(&read)
                         ))
@@ -360,7 +360,7 @@ mod flash {
                             return Ok(());
                         }
                     }
-                    Err(format!("Серийные номера записаны, но UUID не удалось записать: {}", log.join(" | ")))
+                    Err(format!("UUID не удалось записать: {}", log.join(" | ")))
                 }
             }
         }
@@ -381,16 +381,23 @@ fn brief(out: &str) -> String {
 
 #[cfg(target_os = "windows")]
 fn do_flash(new_serial: &str, new_uuid: &str) -> Result<(), String> {
+    // пустое значение = это поле не меняем (SN и UUID можно писать раздельно)
     let tool = flash::Tool::new()?;
     tool.check_supported()?;
-    tool.write_serial("BS", new_serial)?;
-    tool.write_serial("SS", new_serial)?;
-    for field in ["BS", "SS"] {
-        if !tool.read_serial(field)?.contains(new_serial) {
-            return Err(format!("Проверка после записи не прошла: серийник ({field}) не совпал."));
+    if !new_serial.is_empty() {
+        tool.write_serial("BS", new_serial)?;
+        tool.write_serial("SS", new_serial)?;
+        for field in ["BS", "SS"] {
+            if !tool.read_serial(field)?.contains(new_serial) {
+                return Err(format!("Проверка после записи не прошла: серийник ({field}) не совпал."));
+            }
         }
     }
-    tool.write_uuid_verified(new_uuid)?;
+    if !new_uuid.is_empty() {
+        tool.write_uuid_verified(new_uuid).map_err(|e| {
+            if new_serial.is_empty() { e } else { format!("Серийные номера записаны, но {e}") }
+        })?;
+    }
     Ok(())
 }
 
@@ -406,10 +413,14 @@ pub fn write_smbios_identity(
     if ticket.trim().is_empty() {
         return Err("Не указан номер наряда.".to_string());
     }
-    if !is_valid_serial(&new_serial) {
+    let (new_serial, new_uuid) = (new_serial.trim().to_string(), new_uuid.trim().to_string());
+    if new_serial.is_empty() && new_uuid.is_empty() {
+        return Err("Укажите новый серийный номер и/или UUID.".to_string());
+    }
+    if !new_serial.is_empty() && !is_valid_serial(&new_serial) {
         return Err("Серийный номер: 4–40 символов — латинские буквы, цифры, . _ - (не с дефиса).".to_string());
     }
-    if !is_valid_uuid(&new_uuid) {
+    if !new_uuid.is_empty() && !is_valid_uuid(&new_uuid) {
         return Err("UUID должен быть в формате 8-4-4-4-12.".to_string());
     }
 
@@ -422,14 +433,17 @@ pub fn write_smbios_identity(
         Ok(()) => "written".to_string(),
         Err(e) => format!("failed: {}", e.chars().take(120).collect::<String>()),
     };
+    // при раздельной записи не тронутое поле остаётся равным значению «до»
+    let after_serial = if new_serial.is_empty() { before_serial.clone() } else { new_serial };
+    let after_uuid = if new_uuid.is_empty() { before_uuid.clone() } else { new_uuid };
     let entry = AuditEntry {
         timestamp: chrono::Local::now().to_rfc3339(),
         technician,
         ticket,
         before_serial,
         before_uuid,
-        after_serial: new_serial,
-        after_uuid: new_uuid,
+        after_serial,
+        after_uuid,
         status,
         prev_hash: String::new(),
         hash: String::new(),

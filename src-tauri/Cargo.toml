@@ -1,6 +1,6 @@
 [package]
 name = "echips-diagnostic-app"
-version = "0.39.2"
+version = "0.39.3"
 description = "Echips Hardware Check — диагностика, установка драйверов, замена платы"
 authors = ["Echips"]
 edition = "2021"

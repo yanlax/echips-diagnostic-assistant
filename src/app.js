@@ -1310,9 +1310,12 @@ var A = {
   mbField:function(k,v){ S.mb[k]=v; },
   mbNext:function(){
     var ticket=(S.mb.ticket||'').trim(), serial=(S.mb.serial||'').trim(), uuid=(S.mb.uuid||'').trim();
-    if(!ticket || !serial || !uuid){ S.mb.formErr='Заполните все поля.'; render(); return; }
-    if(!isValidSerial(serial)){ S.mb.formErr='Серийный номер: 4–40 символов — латинские буквы, цифры, . _ - (не с дефиса).'; render(); return; }
-    if(!isValidUuid(uuid)){ S.mb.formErr='UUID в формате 8-4-4-4-12.'; render(); return; }
+    // SN и UUID можно писать раздельно: пустое поле = не менять
+    if(!ticket){ S.mb.formErr='Укажите номер наряда.'; render(); return; }
+    if(!serial && !uuid){ S.mb.formErr='Заполните серийный номер и/или UUID (пустое поле не меняется).'; render(); return; }
+    if(serial && !isValidSerial(serial)){ S.mb.formErr='Серийный номер: 4–40 символов — латинские буквы, цифры, . _ - (не с дефиса).'; render(); return; }
+    if(uuid && !isValidUuid(uuid)){ S.mb.formErr='UUID в формате 8-4-4-4-12.'; render(); return; }
+    S.mb.serial = serial; S.mb.uuid = uuid;
     S.mb.formErr=''; S.mb.step='confirm'; render();
   },
   mbBack:function(){ S.mb.step='form'; render(); },
@@ -3280,8 +3283,8 @@ function screenMb(){
       '<div class="s">UUID '+esc(m.before.uuid)+'</div></div>'+
       '<div class="formgrid" style="margin-top:16px">'+
       '<div class="formfield"><label>Номер наряда</label><input value="'+esc(m.ticket)+'" oninput="echips.mbField(\'ticket\',this.value)" placeholder="Гарантийный случай / наряд"></div>'+
-      '<div class="formfield"><label>Новый серийный номер</label><input value="'+esc(m.serial)+'" oninput="echips.mbField(\'serial\',this.value)" placeholder="4–40 символов"></div>'+
-      '<div class="formfield"><label>Новый UUID</label><input value="'+esc(m.uuid)+'" oninput="echips.mbField(\'uuid\',this.value)" placeholder="8-4-4-4-12"></div>'+
+      '<div class="formfield"><label>Новый серийный номер</label><input value="'+esc(m.serial)+'" oninput="echips.mbField(\'serial\',this.value)" placeholder="4–40 символов; пусто — не менять"></div>'+
+      '<div class="formfield"><label>Новый UUID</label><input value="'+esc(m.uuid)+'" oninput="echips.mbField(\'uuid\',this.value)" placeholder="8-4-4-4-12; пусто — не менять"></div>'+
       (m.formErr?'<div class="err" style="margin:-6px 0 12px">'+esc(m.formErr)+'</div>':'')+
       '</div>'+
       '<div class="headactions">'+
@@ -3291,8 +3294,8 @@ function screenMb(){
     body =
       '<div class="kvgrid">'+
       '<div class="h">Поле</div><div class="h">Было</div><div class="h">Будет</div>'+
-      '<div class="lbl">SN</div><div class="old">'+esc(m.before.serial_number)+'</div><div class="new">'+esc(m.serial)+'</div>'+
-      '<div class="lbl">UUID</div><div class="old">'+esc(m.before.uuid)+'</div><div class="new">'+esc(m.uuid)+'</div>'+
+      '<div class="lbl">SN</div><div class="old">'+esc(m.before.serial_number)+'</div><div class="new">'+(m.serial ? esc(m.serial) : '<span style="opacity:.6">не меняется</span>')+'</div>'+
+      '<div class="lbl">UUID</div><div class="old">'+esc(m.before.uuid)+'</div><div class="new">'+(m.uuid ? esc(m.uuid) : '<span style="opacity:.6">не меняется</span>')+'</div>'+
       '</div>'+
       '<div class="s" style="margin-top:14px">Наряд: '+esc(m.ticket)+' · Техник: '+esc(m.techName)+'</div>'+
       '<div class="warnbox">Запись необратимо меняет SN/UUID платы (утилита завода: AMI — AMIDEWIN, Insyde — H2OSDE). '+
@@ -3310,7 +3313,7 @@ function screenMb(){
   } else {
     body =
       '<div class="resultpane">'+resultIcon(true)+
-      '<div class="msg">SN и UUID записаны и подтверждены чтением обратно. Перезагрузите ПК, чтобы Windows показал новые значения. Запись сохранена в журнал аудита.</div>'+
+      '<div class="msg">'+(m.serial&&m.uuid ? 'SN и UUID' : m.serial ? 'SN' : 'UUID')+' записан'+(m.serial&&m.uuid ? 'ы' : '')+' и подтвержд'+(m.serial&&m.uuid ? 'ены' : 'ён')+' чтением обратно. Перезагрузите ПК, чтобы Windows показал новые значения. Запись сохранена в журнал аудита.</div>'+
       '<div class="actions"><button class="btn btn-primary" onclick="echips.go(\'start\')">Готово</button></div></div>';
   }
   return '<div class="pane">'+

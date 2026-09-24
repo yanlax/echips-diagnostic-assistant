@@ -271,16 +271,38 @@ mod flash {
             }
         }
 
-        pub fn write_uuid(&self, uuid: &str) -> Result<(), String> {
+        /// UUID пишем в виде 32 hex-символов без дефисов — так делает заводская процедура
+        /// (test.bat из комплекта завода: `set var=%uuid:-=%`). Возвращает вывод утилиты.
+        pub fn write_uuid(&self, uuid: &str) -> Result<String, String> {
             let flag = self.flag("SU");
-            run(&self.dir, self.exe(), &[flag.as_str(), uuid]).map(|_| ())
+            let plain = uuid.replace('-', "");
+            let out = match self.vendor {
+                Vendor::Insyde => run(&self.dir, self.exe(), &[flag.as_str(), uuid])?,
+                Vendor::Ami => run(&self.dir, self.exe(), &[flag.as_str(), plain.as_str()])?,
+            };
+            Ok(out)
         }
 
         pub fn read_uuid(&self) -> Result<String, String> {
             let flag = self.flag("SU");
-            run(&self.dir, self.exe(), &[flag.as_str()])
+            match self.vendor {
+                Vendor::Insyde => run(&self.dir, self.exe(), &[flag.as_str()]),
+                Vendor::Ami => run(&self.dir, self.exe(), &[flag.as_str()]),
+            }
         }
     }
+}
+
+/// Без рамки-баннера утилиты: только полезные строки вывода (для сообщения об ошибке).
+#[cfg(target_os = "windows")]
+fn brief(out: &str) -> String {
+    let lines: Vec<&str> = out
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with('|') && !l.starts_with('+') && !l.to_lowercase().contains("copyright"))
+        .collect();
+    let joined = lines.join(" · ");
+    joined.chars().take(300).collect()
 }
 
 #[cfg(target_os = "windows")]
@@ -294,9 +316,16 @@ fn do_flash(new_serial: &str, new_uuid: &str) -> Result<(), String> {
             return Err(format!("Проверка после записи не прошла: серийник ({field}) не совпал."));
         }
     }
-    tool.write_uuid(new_uuid)?;
-    if !tool.read_uuid()?.to_lowercase().contains(&new_uuid.to_lowercase()) {
-        return Err("Серийные номера записаны, но UUID после записи не совпал (проверьте команду UUID для этого BIOS).".to_string());
+    let wrote = tool.write_uuid(new_uuid)?;
+    let read = tool.read_uuid()?;
+    // сверяем без дефисов и без учёта регистра: утилита может печатать UUID и так и так
+    let norm = |t: &str| t.to_lowercase().replace('-', "");
+    if !norm(&read).contains(&norm(new_uuid)) {
+        return Err(format!(
+            "Серийные номера записаны, но UUID после записи не совпал. Ответ утилиты на запись: «{}». Прочитано: «{}».",
+            brief(&wrote),
+            brief(&read)
+        ));
     }
     Ok(())
 }

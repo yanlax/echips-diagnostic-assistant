@@ -26,10 +26,10 @@ pub fn get_system_info() -> Result<SystemInfo, String> {
             $os = Get-CimInstance Win32_OperatingSystem
             $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
             [PSCustomObject]@{
-                manufacturer = $cs.Manufacturer
-                model = $cs.Model
-                serial_number = $bios.SerialNumber
-                bios_version = $bios.SMBIOSBIOSVersion
+                manufacturer = ([string]$cs.Manufacturer).Trim()
+                model = ([string]$cs.Model).Trim()
+                serial_number = ([string]$bios.SerialNumber).Trim()
+                bios_version = ([string]$bios.SMBIOSBIOSVersion).Trim()
                 os_version = $os.Caption
                 cpu = $cpu.Name
                 ram_total_gb = [math]::Round($cs.TotalPhysicalMemory / 1GB, 1)

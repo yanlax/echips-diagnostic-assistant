@@ -546,13 +546,20 @@ fn run_session(window: Window, cfg: StressConfig) {
 
     // температуры читаем отдельным потоком (запросы медленные и не должны тормозить секундный тик)
     let temps: Arc<Mutex<(Option<f64>, Option<f64>, Option<f64>, Option<f64>)>> = Arc::new(Mutex::new((None, None, None, None)));
+    // реальная частота ядер из LibreHardwareMonitor (если датчики запущены) — см. HwSummary::cpu_clock_mhz
+    let live_clock: Arc<Mutex<Option<f64>>> = Arc::new(Mutex::new(None));
     {
-        let (temps, stop) = (Arc::clone(&temps), Arc::clone(&stop));
+        let (temps, stop, live_clock) = (Arc::clone(&temps), Arc::clone(&stop), Arc::clone(&live_clock));
         handles.push(std::thread::spawn(move || {
             while !stop.load(Ordering::Relaxed) {
                 if let Ok(r) = crate::commands::sensors::get_thermal_reading() {
                     if let Ok(mut t) = temps.lock() {
                         *t = (r.cpu_temp_c, r.gpu.map(|g| g.temp_c), r.fan_rpm, r.cpu_power_w);
+                    }
+                }
+                if let Some(h) = crate::commands::hwmon::summary() {
+                    if let Ok(mut c) = live_clock.lock() {
+                        *c = h.cpu_clock_mhz;
                     }
                 }
                 for _ in 0..25 {
@@ -608,6 +615,10 @@ fn run_session(window: Window, cfg: StressConfig) {
         }
         prev_times = now_times;
         if let Some((cur, max)) = cpu_clock() {
+            // CallNtPowerInformation на части ноутбуков всегда отдаёт номинал — берём реальную
+            // частоту из датчиков, если они есть
+            let cur = live_clock.lock().ok().and_then(|g| *g).filter(|c| *c > 0.0).unwrap_or(cur);
+            let max = max.max(cur);
             tick.clock_mhz = cur;
             tick.clock_max_mhz = max;
             clock_sum += cur;

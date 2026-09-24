@@ -113,6 +113,7 @@ var FEATURE_MB = false;
    открывается под администратором Максимом и не обращается к интернету при запуске. Вернуть вход
    для всех сервисов: FEATURE_PIN = true (экран входа, проверка хэшей, вшитый список — весь код на месте). */
 var FEATURE_PIN = false;
+var FEATURE_PAWNIO_UNINSTALL = false; // кнопка «Удалить драйвер PawnIO» скрыта по просьбе пользователя (код сохранён)
 
 var S = {
   batLive: { on:false, data:null, t:null },
@@ -206,9 +207,9 @@ function counts(){
 }
 function deviceLabel(){
   if (!S.device) return 'определяется…';
-  return (S.device.manufacturer + ' ' + S.device.model).trim() || 'неизвестная модель';
+  return (String(S.device.manufacturer||'').trim() + ' ' + String(S.device.model||'').trim()).trim() || 'неизвестная модель';
 }
-function deviceSn(){ return S.device ? S.device.serial_number : ''; }
+function deviceSn(){ return S.device ? String(S.device.serial_number||'').trim() : ''; }
 function isAdmin(){ return !!(S.engineer && S.engineer.role==='admin'); }
 
 /* ---------- окно: свернуть/закрыть ---------- */
@@ -580,7 +581,7 @@ var A = {
     invokeCached('get_disk_health', {}, 30000).then(function(list){
       if (!list.length) throw 'Физические диски не найдены';
       S.dr.disks = list; S.dr.sel = 0; list.forEach(function(d,k){ if (d.is_system) S.dr.sel = k; });
-      S.dr.mode = 64; A.drStart();
+      S.dr.mode = profile().diskReadSampleMb || 256; A.drStart();   // расширенный: 24 × 256 МБ = 6 ГБ
     }).catch(function(err){ S.dr.err = typeof err==='string'?err:'Не удалось получить список дисков'; render(); A.autoApply(null); });
   },
   dwAuto:function(){
@@ -588,7 +589,14 @@ var A = {
     invokeCached('list_fixed_volumes', {}, 30000).then(function(list){
       if (!list.length) throw 'Тома с буквами не найдены';
       S.dw.vols = list; S.dw.sel = 0; list.forEach(function(v,k){ if (v.is_system) S.dw.sel = k; });
-      S.dw.mb = profile().diskWriteMb || 512; A.dwStart();
+      // 10 ГБ (профиль), но не больше, чем позволяет свободное место тома (запас как в write_test: 512 МБ или 5%)
+      var vw = list[S.dw.sel], want = profile().diskWriteMb || 512, freeMb = vw && vw.free_gb!=null ? vw.free_gb*1024 : null;
+      if (freeMb!=null){
+        var room = freeMb - Math.max(512, freeMb/20) - 256;
+        [want, 6144, 2048, 512, 256].some(function(x){ if (x<=want && x<=room){ want = x; return true; } return false; });
+        if (want>room) want = Math.max(128, Math.floor(room));
+      }
+      S.dw.mb = want; A.dwStart();
     }).catch(function(err){ S.dw.err = typeof err==='string'?err:'Не удалось получить список томов'; render(); A.autoApply(null); });
   },
   memAuto:function(){
@@ -1046,16 +1054,16 @@ var A = {
             ? 'Датчики работают (температур: '+temps+'), но тахометра вентилятора нет: контроллер EC этой модели не отдаёт обороты (это не значит, что вентилятора нет).'
             : 'Датчики температуры и оборотов не найдены.';
           log(why);
-          // Тахометра нет — в автопрогоне оцениваем охлаждение косвенно: 30 с нагрузки на CPU,
+          // Тахометра нет — в автопрогоне оцениваем охлаждение косвенно: 60 с нагрузки на CPU,
           // температура и падение частоты (то же правило, что у стресс-теста).
           if (temps && S.auto.on && !S.st.running && !f.abort){
-            log('Прогрев CPU 30 с: оцениваем охлаждение по температуре под нагрузкой…');
+            log('Прогрев CPU 60 с: оцениваем охлаждение по температуре под нагрузкой…');
             var warm = await new Promise(function(resolve){
               var unl = [], temps30 = [], settled = false;
               function fin(res){ if (settled) return; settled = true; unl.forEach(function(u){ u(); }); resolve({ res:res, t:temps30 }); }
               tauriEvent.listen('stress-tick', function(ev){ if (ev.payload.tempC!=null) temps30.push(ev.payload.tempC); }).then(function(u){ unl.push(u); });
               tauriEvent.listen('stress-done', function(ev){ fin(ev.payload); }).then(function(u){ unl.push(u); });
-              invoke('start_stress', { cfg:{ durationSecs:30, cpu:true, fpu:true, cache:false, memory:false, disk:false, gpu:false, threads:0,
+              invoke('start_stress', { cfg:{ durationSecs:60, cpu:true, fpu:true, cache:false, memory:false, disk:false, gpu:false, threads:0,
                 memoryPercent:50, diskLetter:'', diskMb:1024, maxTempC: profile().maxTempC || 95 } }).catch(function(){ fin(null); });
               var guard = setInterval(function(){ if (f.abort){ invoke('stop_stress').catch(function(){}); clearInterval(guard); } if (settled) clearInterval(guard); }, 1000);
             });
@@ -1063,9 +1071,9 @@ var A = {
               var t0 = warm.t.length ? warm.t[0] : null, tMax = warm.t.length ? Math.max.apply(null, warm.t) : null;
               log('Прогрев завершён: температура '+(t0!=null ? t0.toFixed(0)+' → макс '+tMax.toFixed(0)+' °C' : 'н/д')+', загрузка CPU '+warm.res.avgLoad.toFixed(0)+'%'+(warm.res.clockAvgMhz ? ', частота '+warm.res.clockMinMhz.toFixed(0)+'–'+warm.res.clockMaxMhz.toFixed(0)+' МГц' : ''));
               var jv = warm.res.reason==='thermal'
-                ? { status:'fail', note:'Прогрев 30 с остановлен температурной защитой — перегрев (обороты вентилятора датчиками недоступны)' }
+                ? { status:'fail', note:'Прогрев 60 с остановлен температурной защитой — перегрев (обороты вентилятора датчиками недоступны)' }
                 : (t0==null ? null : judgeStress(warm.res));
-              if (jv) return finish({ status:jv.status, note:'Обороты не читаются; охлаждение по прогреву 30 с: '+jv.note });
+              if (jv) return finish({ status:jv.status, note:'Обороты не читаются; охлаждение по прогреву 60 с: '+jv.note });
             }
           }
           log('Оценить охлаждение можно по температуре под нагрузкой (вкладка «Стресс-тест») и на слух.');
@@ -1943,6 +1951,12 @@ function kbSummaryLines(){
   var many = Object.keys(S.kstat).filter(function(id){ return S.kstat[id].rep>0 && ['Shift','Ctrl','Alt','Win','Caps'].indexOf(kbLabel(id))<0; }).map(kbLabel);
   if (many.length) lines.push('Автоповтор при удержании: '+many.join(', '));
   if (S.lastUnknown) lines.push('Клавиша не в раскладке: '+S.lastUnknown);
+  // какие именно клавиши не нажимались — иначе «96 из 102» ни о чём не говорит
+  var miss = [];
+  KEYROWS.forEach(function(row,ri){ row.forEach(function(l,ki){ if (!S.keys[ri+':'+ki]) miss.push(l); }); });
+  NUMPAD.forEach(function(k){ if (!S.keys['n:'+k[0]]) miss.push('Num '+k[1]); });
+  MEDIA.forEach(function(k){ if (!S.keys['m:'+k[0]]) miss.push(k[1]); });
+  if (miss.length && miss.length<=40) lines.push('Не нажимались: '+miss.join(', '));
   return lines;
 }
 document.addEventListener('keyup', function(e){
@@ -2480,7 +2494,7 @@ function sparkBars(samples){ return '<div class="spark">'+sparkInner(samples)+'<
 function fieldDiskRead(){
   A.drLoad();
   var d = S.dr, disks = d.disks || [], r = d.res;
-  var modes = [[64,'Быстрый · 1,5 ГБ'],[256,'Расширенный · 6 ГБ']];
+  var modes = [[64,'Быстрый · 1,5 ГБ'],[128,'3 ГБ'],[256,'Расширенный · 6 ГБ'],[512,'12 ГБ']];
   var out = '<div class="runwrap">'+
     '<div class="control"><div class="k">Диск</div><div class="opts">'+ (disks.length ? disks.map(function(x,i){
       return '<button class="opt'+(d.sel===i?' on':'')+'" onclick="echips.drPick('+i+')" '+(d.running?'disabled':'')+'>'+esc(x.name)+' · '+x.size_gb+' ГБ'+(x.is_system?' · системный':'')+'</button>';
@@ -2667,7 +2681,7 @@ function hwmonPanel(){
   } else {
     out += '<div class="runrow" style="flex-wrap:wrap">'+
       (st.driverInstalled
-        ? '<button class="btn btn-ghost" onclick="echips.hwmAsk(\'uninstall\')">Удалить драйвер PawnIO</button>'
+        ? (FEATURE_PAWNIO_UNINSTALL ? '<button class="btn btn-ghost" onclick="echips.hwmAsk(\'uninstall\')">Удалить драйвер PawnIO</button>' : '')
         : (st.driverEmbedded ? '<button class="btn btn-primary" onclick="echips.hwmInstall()">Установить драйвер PawnIO</button>' : ''))+
       (st.driverInstalled && !st.running ? '<button class="btn btn-ghost" onclick="echips.hwmStart()">Запустить датчики</button>' : '')+'</div>';
   }

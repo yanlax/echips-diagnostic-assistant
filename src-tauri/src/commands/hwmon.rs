@@ -327,6 +327,9 @@ pub struct HwSummary {
     pub gpu_temp: Option<f64>,
     pub fan_rpm: Option<f64>,
     pub cpu_power_w: Option<f64>,
+    /// Средняя реальная частота ядер (LibreHardwareMonitor, «Core #N»), МГц — в отличие от
+    /// CallNtPowerInformation, показывает турбо и троттлинг, а не номинал.
+    pub cpu_clock_mhz: Option<f64>,
 }
 
 /// Ключевые показания из последнего снимка: температура процессора (Package /
@@ -350,5 +353,12 @@ pub fn summary() -> Option<HwSummary> {
     let gpu_temp = pick("Gpu", "Temperature", &["GPU Core", "Core"]).filter(|t| *t > 0.0 && *t < 150.0);
     let fan_rpm = snap.sensors.iter().filter(|s| s.sensor_type == "Fan" && s.value > 0.0).map(|s| s.value).fold(None, |m: Option<f64>, v| Some(m.map_or(v, |x| x.max(v))));
     let cpu_power_w = pick("Cpu", "Power", &["Package"]);
-    Some(HwSummary { cpu_temp, gpu_temp, fan_rpm, cpu_power_w })
+    let cores: Vec<f64> = snap
+        .sensors
+        .iter()
+        .filter(|s| s.hw_type.starts_with("Cpu") && s.sensor_type == "Clock" && s.name.starts_with("Core #") && s.value > 0.0)
+        .map(|s| s.value)
+        .collect();
+    let cpu_clock_mhz = if cores.is_empty() { None } else { Some(cores.iter().sum::<f64>() / cores.len() as f64) };
+    Some(HwSummary { cpu_temp, gpu_temp, fan_rpm, cpu_power_w, cpu_clock_mhz })
 }

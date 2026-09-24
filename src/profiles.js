@@ -20,7 +20,8 @@
 //                     (по умолчанию в автопрогон не входит), с
 //   (memTestMb убран в 0.35.0: память проверяется вся свободная, размер не задаётся)
 //   memPasses         число проходов теста памяти в автопрогоне
-//   diskWriteMb       размер проверочного файла теста записи, МБ
+//   diskWriteMb       размер проверочного файла теста записи в автопрогоне, МБ (10240; урезается по свободному месту тома)
+//   diskReadSampleMb  размер участка теста чтения диска в автопрогоне, МБ (24 участка; 256 → 6 ГБ)
 //   diskSlowBlocksMax допустимо медленных (>250 мс) блоков в тестах чтения/записи
 //   sensorsProbeSecs  сколько секунд снимать показания датчиков в автопрогоне
 //   maxTempC          порог температуры (простой и под нагрузкой), °C
@@ -52,7 +53,8 @@ window.ECHIPS_PROFILES = {
     throttleMinPct: 60,
     throttleMaxSharePct: 20,
     memPasses: 2,
-    diskWriteMb: 512,
+    diskWriteMb: 10240,
+    diskReadSampleMb: 256,
     diskSlowBlocksMax: 3,
     sensorsProbeSecs: 8,
     maxTempC: 95,

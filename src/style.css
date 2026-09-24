@@ -25,21 +25,24 @@
 :root[data-theme="light"]{
   --bg:#F3F4F6; --page:#FFFFFF;
   --side-top:#FFFFFF; --side-bot:#EFF0F2;
-  --glass:rgba(0,0,0,.035); --glass-2:rgba(0,0,0,.025);
-  --line:rgba(0,0,0,.09); --line-soft:rgba(0,0,0,.07); --line-strong:rgba(0,0,0,.15);
+  --glass:#FFFFFF; --glass-2:#FAFAFB;
+  --line:rgba(0,0,0,.16); --line-soft:rgba(0,0,0,.12); --line-strong:rgba(0,0,0,.26);
   --track:rgba(0,0,0,.08); --track-soft:rgba(0,0,0,.05);
   --text:#1B1D21; --text-hi:#0E1013; --text-2:#33363C; --text-3:#4A4E56;
   --dim:#6B6F76; --mute:#797E85; --faint:#8F949B; --faintest:#A6AAB1;
   --accent:#FF8A00; --accent-hover:#F07E00; --accent-hi:#C96400; --accent-ink:#1A1204;
   --accent-soft:rgba(255,138,0,.10); --accent-line:rgba(255,138,0,.38); --accent-glow:rgba(255,138,0,.22);
   --ok:#2E8B57; --err:#D64541; --cool:#3E6E8E;
-  --glass-hover:rgba(0,0,0,.05); --glass-solid:rgba(0,0,0,.035); --line-input:rgba(0,0,0,.13);
-  --ctrl-border:rgba(0,0,0,.18); --ctrl-border-2:rgba(0,0,0,.20); --accent-deep:#B45E06; --err-glow:rgba(214,69,65,.5);
+  --glass-hover:#F1F2F4; --glass-solid:#FFFFFF; --line-input:rgba(0,0,0,.28);
+  --ctrl-border:rgba(0,0,0,.30); --ctrl-border-2:rgba(0,0,0,.34); --accent-deep:#B45E06; --err-glow:rgba(214,69,65,.5);
   --rec-grad:linear-gradient(90deg,rgba(255,138,0,.14),rgba(255,138,0,.03) 55%,rgba(0,0,0,.02));
   --cat-grad:linear-gradient(90deg,rgba(255,138,0,.10),rgba(0,0,0,.02) 60%);
   --shimmer:rgba(0,0,0,.06); --shadow-row:0 6px 20px rgba(0,0,0,.08);
   color-scheme:light;
 }
+:root[data-theme="light"] .btn-ghost,:root[data-theme="light"] .pill.na{background:#fff}
+:root[data-theme="light"] .table .th{background:#F1F2F4}
+:root[data-theme="light"] .card,:root[data-theme="light"] .stat,:root[data-theme="light"] .stat4,:root[data-theme="light"] .note,:root[data-theme="light"] .mode,:root[data-theme="light"] .devbox,:root[data-theme="light"] .techbox{box-shadow:0 1px 2px rgba(0,0,0,.06)}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;background:var(--page);font-family:'Inter',sans-serif;color:var(--text);height:100%}
 body{height:100vh;display:flex;overflow:hidden;

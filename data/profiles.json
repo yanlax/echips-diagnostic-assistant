@@ -1,0 +1,8 @@
+{
+  "models": {
+    "NB15ARH": { "name": "NB15A-RH (Echips Hot)", "expect": { "cpu": "i3-1025G1", "ramGb": 16, "diskGb": 477 } },
+    "BM156ULRH": { "name": "BM156UL-RH", "expect": { "cpu": "Ryzen 5 7430U", "ramGb": 32, "diskGb": 477 } },
+    "NB101A": { "name": "NB101A", "expect": { "cpu": "6500Y", "ramGb": 16, "diskGb": 238 } },
+    "NR161G": { "name": "NR161G", "expect": { "cpu": "i7-8850H", "ramGb": 16, "diskGb": 477 } }
+  }
+}

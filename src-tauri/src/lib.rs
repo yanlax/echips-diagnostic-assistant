@@ -80,6 +80,8 @@ pub fn run() {
             commands::update::check_for_update,
             commands::update::download_update,
             commands::techs::fetch_techs,
+            commands::profiles::fetch_profiles,
+            commands::profiles::profiles_save_model,
             commands::techs::techs_token_status,
             commands::techs::techs_save_token,
             commands::techs::techs_clear_token,

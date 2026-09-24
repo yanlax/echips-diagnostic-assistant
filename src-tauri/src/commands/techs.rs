@@ -202,7 +202,7 @@ fn store_token(token: &str) -> Result<(), String> {
     std::fs::write(token_path(), cipher).map_err(|e| format!("Не удалось сохранить токен: {e}"))
 }
 
-fn read_token() -> Option<String> {
+pub(crate) fn read_token() -> Option<String> {
     if let Ok(cipher) = std::fs::read_to_string(token_path()) {
         let plain_b64 = dpapi(false, cipher.trim()).ok()?;
         let bytes = b64_decode(&plain_b64)?;
@@ -284,7 +284,7 @@ fn b64_decode(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-fn gh_error(status: reqwest::StatusCode) -> String {
+pub(crate) fn gh_error(status: reqwest::StatusCode) -> String {
     match status.as_u16() {
         401 => "Токен недействителен или истёк — введите новый".to_string(),
         403 | 404 => "Нет доступа к репозиторию: у токена должно быть право Contents: write на yanlax/echips-diagnostic-assistant".to_string(),

@@ -69,7 +69,7 @@ fn render_txt(report: &DiagnosticReport) -> String {
     out.push_str(&format!("Устройство: {}\n", report.device_model));
     out.push_str(&format!("Серийный номер: {}\n", report.device_serial));
     if !report.intake.trim().is_empty() {
-        out.push_str(&format!("Номер приёмки: {}\n", report.intake.trim()));
+        out.push_str(&format!("Номер приёмки / ремонта: {}\n", report.intake.trim()));
     }
     out.push_str(&format!("Инженер: {}\n", report.engineer));
     out.push_str(&format!("Начало: {}\n", report.started_at));
@@ -1153,7 +1153,7 @@ pub(crate) fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
         footer: if report.intake.trim().is_empty() {
             format!("Echips Hardware Check · {}", report.device_serial)
         } else {
-            format!("Echips Hardware Check · приёмка {} · {}", report.intake.trim(), report.device_serial)
+            format!("Echips Hardware Check · приёмка/ремонт {} · {}", report.intake.trim(), report.device_serial)
         },
         footer_color: p.text_muted.clone(),
         page_no: 0,
@@ -1233,7 +1233,7 @@ pub(crate) fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
     let device_label = if report.intake.trim().is_empty() {
         "УСТРОЙСТВО".to_string()
     } else {
-        format!("УСТРОЙСТВО · ПРИЁМКА № {}", report.intake.trim())
+        format!("УСТРОЙСТВО · ПРИЁМКА/РЕМОНТ № {}", report.intake.trim())
     };
     let meta: [(&str, String); 4] = [
         (device_label.as_str(), report.device_model.clone()),

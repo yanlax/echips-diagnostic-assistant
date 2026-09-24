@@ -242,6 +242,22 @@ function isAdmin(){ return !!(S.engineer && S.engineer.role==='admin'); }
 })();
 
 /* ---------- загрузка данных устройства при старте ---------- */
+/* Профили моделей из git (data/profiles.json, см. commands/profiles.rs): подмешиваются к ECHIPS_PROFILES —
+   новая модель добавляется правкой файла в репозитории, без пересборки exe. */
+function applyRemoteProfiles(file){
+  if (!file || !file.profiles) return;
+  var P = window.ECHIPS_PROFILES = window.ECHIPS_PROFILES || { default:{ name:'Стандартный', tests:[], expect:{} }, models:{} };
+  P.models = P.models || {};
+  var m = file.profiles.models || {};
+  Object.keys(m).forEach(function(k){ P.models[k] = m[k]; });
+  if (file.profiles['default'] && typeof file.profiles['default']==='object'){
+    Object.keys(file.profiles['default']).forEach(function(k){ P['default'][k] = file.profiles['default'][k]; });
+  }
+  S.profilesSource = file.source || '';
+}
+function loadProfiles(){
+  invoke('fetch_profiles').then(function(f){ applyRemoteProfiles(f); render(); }).catch(function(){});
+}
 function loadDevice(){
   invoke('get_system_info').then(function(info){
     S.device = info;
@@ -715,6 +731,17 @@ var A = {
   /* ---- тест памяти ---- */
   /* Номер приёмки (левое меню): только цифры, до 6. Меняется путь отчёта → новая отправка. */
   setIntake:function(v){ S.intake = String(v||'').replace(/\D/g,'').slice(0,6); var el=document.getElementById('intake-input'); if(el && el.value!==S.intake) el.value=S.intake; },
+  profKey:function(v){ (S.profSave = S.profSave || {}).key = v; },
+  profSave:function(){
+    var P = S.profSave; if (!P || P.busy || !S.hw) return;
+    var key = (P.key||'').trim();
+    if (!key){ P.err = 'Укажите ключ модели.'; P.msg=''; render(); return; }
+    var e = profileFromHw(S.hw);
+    P.busy = true; P.err = ''; P.msg = ''; render();
+    invoke('profiles_save_model', { key:key, profile:{ name:key, expect:e } }).then(function(f){
+      applyRemoteProfiles(f); P.msg = 'Эталон «'+key+'» сохранён в data/profiles.json — теперь действует на всех ноутбуках.';
+    }).catch(function(err){ P.err = typeof err==='string' ? err : 'Не удалось сохранить эталон'; }).then(function(){ P.busy=false; render(); });
+  },
   batLiveToggle:function(){
     var B = S.batLive;
     B.on = !B.on; clearTimeout(B.t);
@@ -2187,6 +2214,7 @@ function fieldRunner(){
     (S.verdict && S.verdict.status ? '<div class="kbnote" style="margin-top:8px">Автооценка: '+({pass:'пройден',fail:'не пройден',na:'не применимо'}[S.verdict.status])+' — '+esc(S.verdict.note)+'</div>' : '')+
     (c.fetch==='winact' ? winactPanel() : '')+
     (c.fetch==='bat' ? batLivePanel() : '')+
+    (c.fetch==='sys' ? sysProfilePanel() : '')+
     (S.runActions.length && !S.auto.on ? '<div class="recbox"><span class="kbnote">Рекомендуемые проверки по итогам анализа:</span>'+ S.runActions.map(function(id){
         var t = CATS.filter(function(x){ return x.id===id; })[0]; if (!t) return '';
         return '<button class="btn btn-ghost" onclick="echips.openCat(\''+id+'\')">'+esc(t.name)+'</button>';
@@ -2212,6 +2240,31 @@ function batLivePanel(){
   var B = S.batLive;
   return '<div class="actpanel"><div class="runrow"><button class="btn btn-ghost" onclick="echips.batLiveToggle()">'+(B.on?'Остановить наблюдение':'Смотреть в реальном времени')+'</button>'+
     '<span class="n">обновление раз в 2 с; в отчёт не попадает</span></div><div id="bat-live" style="margin-top:10px">'+batLiveHtml()+'</div></div>';
+}
+/* Эталон модели (только админ): снимает данные текущего ноутбука и сохраняет профиль в git
+   (data/profiles.json) — следующие ноутбуки этой модели сверяются с ним без пересборки exe. */
+function cpuShort(name){
+  var n = String(name||'');
+  var m = n.match(/i[3579]-\w+/i) || n.match(/Ryzen\s+\d\s+\w+/i) || n.match(/Core\s+Ultra\s+\d\s+\w+/i) || n.match(/\b[NJ]\d{2,4}\b/) || n.match(/\b\d{4}[A-Z]?\b/);
+  return m ? m[0] : n.replace(/\(R\)|\(TM\)|CPU|@.*$/gi, '').replace(/\s+/g,' ').trim();
+}
+function profileFromHw(hw){
+  var biggest = hw.disks.reduce(function(a,d){ return d.size_gb>(a?a.size_gb:0) ? d : a; }, null);
+  var sys = hw.disks.filter(function(d){ return d.is_system; })[0];
+  return { cpu: cpuShort(hw.cpu.name), ramGb: Math.round(hw.ram_total_gb), diskGb: Math.round((sys||biggest||{size_gb:0}).size_gb) };
+}
+function sysProfilePanel(){
+  if (!isAdmin() || !S.hw) return '';
+  var P = S.profSave || (S.profSave = { key:'', msg:'', err:'', busy:false });
+  if (!P.key && S.device) P.key = cleanSmbios(S.device.model) || '';
+  var e = profileFromHw(S.hw), known = profile().name!=='Стандартный';
+  return '<div class="actpanel"><div class="k">Эталон модели (админ)</div>'+
+    '<div class="kbnote" style="margin:6px 0">'+(known ? 'Для этой модели профиль уже есть: «'+esc(profile().name)+'». Сохранение заменит его. ' : 'Профиля для этой модели нет. ')+
+    'Будет записано: процессор «'+esc(e.cpu)+'», ОЗУ '+e.ramGb+' ГБ, системный диск '+e.diskGb+' ГБ.</div>'+
+    '<div class="runrow"><input class="search-input" style="max-width:260px" value="'+esc(P.key)+'" placeholder="ключ модели, например NB101A" oninput="echips.profKey(this.value)">'+
+    '<button class="btn btn-ghost" onclick="echips.profSave()" '+(P.busy?'disabled':'')+'>'+(P.busy?'Сохранение…':'Сохранить эталон в git')+'</button></div>'+
+    (P.msg?'<div class="kbnote" style="margin-top:8px;color:var(--ok)">'+esc(P.msg)+'</div>':'')+
+    (P.err?'<div class="kbnote" style="margin-top:8px;color:var(--err)">'+esc(P.err)+'</div>':'')+'</div>';
 }
 function winactPanel(){
   var a = S.actRaw, act = S.act;
@@ -3625,6 +3678,7 @@ document.addEventListener('keydown', function(e){
 
 document.addEventListener('DOMContentLoaded', function(){
   loadDevice();
+  loadProfiles();
   render();
   if (FEATURE_PIN) {
     lockInit();

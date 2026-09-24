@@ -50,6 +50,9 @@ pub struct ActivationStatus {
 pub fn get_activation_status() -> Result<ActivationStatus, String> {
     #[cfg(target_os = "windows")]
     {
+        // LicenseStatusReason — UInt32 (напр. 0xC004F034 = 3221549108 > Int32.Max): приведение к
+        // [int] в скрипте ниже роняло весь запрос на неактивированной Windows ("Не удаётся
+        // преобразовать значение … в тип System.Int32"), и автоустранение не запускалось.
         let script = format!(
             r#"
             $p = Get-CimInstance SoftwareLicensingProduct -Filter "ApplicationID='{APP_ID}' AND PartialProductKey IS NOT NULL" -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -58,7 +61,7 @@ pub fn get_activation_status() -> Result<ActivationStatus, String> {
             $oem = ''
             if ($svc -and $svc.OA3xOriginalProductKey) {{ $oem = [string]$svc.OA3xOriginalProductKey }}
             $reason = ''
-            if ($p -and $p.LicenseStatusReason) {{ $reason = ('0x{{0:X8}}' -f [int]$p.LicenseStatusReason) }}
+            if ($p -and $p.LicenseStatusReason) {{ $reason = ('0x{{0:X8}}' -f [uint32]$p.LicenseStatusReason) }}
             [PSCustomObject]@{{
                 found = ($null -ne $p)
                 name = [string]$p.Name

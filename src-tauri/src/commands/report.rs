@@ -779,7 +779,8 @@ fn classify_detail(line: &str, card_w: f32, detail_sz: f32) -> DetailLine {
     // названия — искать его с конца, статус всегда короткий хвост строки.
     if let Some((name, value)) = line.rsplit_once(" — ") {
         let value = value.trim();
-        if !name.is_empty() && !value.is_empty() && value.chars().count() <= 20 {
+        // value, начинающееся с «·», — это продолжение строки счётчиков («… включений — · записано —»), а не статус
+        if !name.is_empty() && !value.is_empty() && !value.starts_with('·') && value.chars().count() <= 20 {
             let value_w = pt_to_mm(detail_sz) * 0.62 * value.chars().count() as f32; // моно-шрифт, см. draw_row
             let name_max = max_chars_width(detail_sz, (card_w - value_w - 6.0).max(20.0));
             if name.chars().count() <= name_max {
@@ -1235,10 +1236,17 @@ pub(crate) fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
         // длительности класса .mono в разметке нет).
         let mono = i == 1 || i == 2;
         let font = if mono { &w.font_mono } else { &w.font_regular };
-        let value_lines = if mono { wrap_line(value, max_chars_width_mono(9.0, meta_col_w - 6.0)) } else { wrap_line(value, max_chars_width(9.5, meta_col_w - 6.0)) };
+        // Длинный серийный номер (26+ символов у реальных плат) уменьшаем по ширине колонки,
+        // а не переносим посреди номера; остальное — как раньше.
+        let mono_sz = if i == 1 {
+            (9.0_f32).min((meta_col_w - 2.0) / (pt_to_mm(1.0) * 0.62 * value.chars().count().max(1) as f32)).max(6.0)
+        } else {
+            9.0
+        };
+        let value_lines = if mono { wrap_line(value, max_chars_width_mono(mono_sz, if i == 1 { meta_col_w - 2.0 } else { meta_col_w - 6.0 })) } else { wrap_line(value, max_chars_width(9.5, meta_col_w - 6.0)) };
         let mut vy = w.y - 5.0;
         for line in value_lines.iter().take(2) {
-            w.layer.use_text(line.clone(), if mono { 9.0 } else { 9.5 }, Mm(x), Mm(vy), font);
+            w.layer.use_text(line.clone(), if mono { mono_sz } else { 9.5 }, Mm(x), Mm(vy), font);
             vy -= line_h(9.5);
         }
     }

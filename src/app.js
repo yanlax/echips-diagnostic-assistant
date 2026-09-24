@@ -371,6 +371,11 @@ var A = {
         render(); return;
       }
     }
+    if (cat().kind==='runner' && S.runError && v==='pass' && !(S.comments[id]||'').trim()){
+      // проверка упала с ошибкой (нет данных) — «пройден» без объяснения давал в отчёте пустую строку «pass»
+      S.markErr = { id:id, text:'Проверка не выполнилась ('+S.runError+'). Чтобы засчитать «пройден» без данных, допишите в комментарии, почему.' };
+      render(); return;
+    }
     S.markErr = null;
     if (cat().kind==='keyboard') recordDetail(id, { lines: kbSummaryLines() });
     recordDetail(id, { final:v });
@@ -573,7 +578,7 @@ var A = {
       else {
         var t = Math.max.apply(null, temps);
         A.autoApply(t>=max ? { status:'fail', note:'Температура '+t.toFixed(0)+' °C в простое не ниже порога '+max+' °C' }
-                           : { status:'pass', note:'Датчики отвечают, максимум '+t.toFixed(0)+' °C' });
+                           : { status:'pass', note:'Датчики отвечают, максимум '+t.toFixed(0)+' °C'+(temps.length>=3 && Math.min.apply(null,temps)===t ? ' (значение не меняется — вероятно, фиксированный ACPI-датчик, реальную температуру не отражает)' : '') });
       }
     }, secs*1000);
   },

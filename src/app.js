@@ -1498,6 +1498,42 @@ var A = {
     var m = S.mb, x = (m.saved||[])[i]; if (!x) return;
     m.serial = x.serial || ''; m.uuid = x.uuid || ''; m.formErr = ''; m.idMsg = 'Подставлено из файла: '+(x.serial||'—')+(x.uuid?' · '+x.uuid:''); render();
   },
+  /* Выбор файла вручную (системный диалог через <input type=file>): JSON из «Сохранить значения в файл» либо текст
+     вида «UUID=…» / «SerialNumber=…» (как Info.txt из заводского ReadSN.cmd). */
+  mbChooseFile:function(){ var el = document.getElementById('mb-file'); if (el) el.click(); },
+  mbPickFile:function(inp){
+    var f = inp && inp.files && inp.files[0]; if (!f) return;
+    var m = S.mb; m.idErr = ''; m.idMsg = '';
+    var r = new FileReader();
+    r.onload = function(){ A.mbParseIdentity(String(r.result||''), f.name); inp.value = ''; };
+    r.onerror = function(){ m.idErr = 'Не удалось прочитать файл'; render(); };
+    r.readAsText(f);
+  },
+  mbParseIdentity:function(text, name){
+    var m = S.mb, serial = '', uuid = '';
+    text = text.replace(/^\uFEFF/, '');
+    try {
+      var j = JSON.parse(text);
+      serial = j.serial || j.serial_number || j.SerialNumber || j.sn || '';
+      uuid = j.uuid || j.UUID || '';
+    } catch(e){
+      text.split(/\r?\n/).forEach(function(l){
+        var x = l.match(/^\s*(uuid|serialnumber|serial_number|serial|sn)\s*[=:]\s*(.+?)\s*$/i);
+        if (!x) return;
+        if (/^uuid$/i.test(x[1])) uuid = x[2]; else serial = x[2];
+      });
+    }
+    serial = String(serial||'').trim(); uuid = String(uuid||'').trim().replace(/^\{|\}$/g, '');
+    if (/^[0-9a-f]{32}$/i.test(uuid)) uuid = uuid.replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5').toUpperCase();
+    if (!serial && !uuid){ m.idErr = 'В файле «'+name+'» не найдены серийный номер и UUID'; render(); return; }
+    var bad = [];
+    if (serial && !isValidSerial(serial)) bad.push('серийный номер «'+serial+'» не подходит по формату');
+    if (uuid && !isValidUuid(uuid)) bad.push('UUID «'+uuid+'» не в формате 8-4-4-4-12');
+    if (bad.length){ m.idErr = 'Файл «'+name+'»: '+bad.join('; '); render(); return; }
+    if (serial) m.serial = serial;
+    if (uuid) m.uuid = uuid;
+    m.formErr = ''; m.idMsg = 'Подставлено из файла «'+name+'»: '+(serial||'SN не указан')+(uuid?' · '+uuid:''); render();
+  },
   mbOpenFolder:function(i){ var x = (S.mb.saved||[])[i]; if (x && x.path) invoke('open_containing_folder', { path:x.path }).catch(function(){}); },
   mbBack:function(){ S.mb.step='form'; render(); },
   mbWrite:function(){
@@ -3763,6 +3799,8 @@ function screenMb(){
       '<div class="s" style="margin-top:8px">SN '+esc(m.before.serial_number)+'</div>'+
       '<div class="s">UUID '+esc(m.before.uuid)+'</div>'+
       '<div class="runrow" style="margin-top:10px"><button class="btn btn-ghost" onclick="echips.mbSaveIdentity()">Сохранить значения в файл</button>'+
+      '<button class="btn btn-ghost" onclick="echips.mbChooseFile()">Выбрать файл и подставить…</button>'+
+      '<input type="file" id="mb-file" accept=".json,.txt,.cfg,text/plain,application/json" style="display:none" onchange="echips.mbPickFile(this)">'+
       '<span class="n">перед заменой платы: файл сохранится, папка откроется; после замены значения можно подставить из файла</span></div>'+
       (m.idMsg ? '<div class="kbnote" style="margin-top:8px;color:var(--ok)">'+esc(m.idMsg)+'</div>' : '')+
       (m.idErr ? '<div class="kbnote" style="margin-top:8px;color:var(--err)">'+esc(m.idErr)+'</div>' : '')+'</div>'+

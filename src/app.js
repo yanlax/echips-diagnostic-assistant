@@ -30,6 +30,7 @@ function invoke(cmd, args){
 
 var CATS = [
   { id:'sys', tag:'SYS', name:'Системная информация', method:'Процессор, ОЗУ, диски, видеокарта, плата, BIOS + сверка с профилем модели', impl:'реальные данные', kind:'runner', fetch:'sys' },
+  { id:'ident', tag:'ID', name:'Идентификаторы', method:'Сверка SN системы, SN платы, UUID, MAC и OEM-ключа Windows — после замены платы', impl:'реальные данные', kind:'runner', fetch:'ident' },
   { id:'winact', tag:'WIN', name:'Активация Windows', method:'Статус лицензии и канал, ключ OEM в BIOS; устранение: онлайн-активация, ключ OEM, служба, время', impl:'реальные данные', kind:'runner', fetch:'winact' },
   { id:'drv', tag:'DRV', name:'Драйверы', method:'Устройства без драйвера в Диспетчере устройств — только проверка, установка на вкладке «Установка драйверов»', impl:'реальные данные', kind:'runner', fetch:'drv' },
   { id:'disk', group:'disk', sub:'Здоровье', tag:'HDD', name:'Диск: здоровье', method:'Состояние, износ, температура и ошибки (Get-PhysicalDisk, счётчики надёжности)', impl:'реальные данные', kind:'runner', fetch:'disk' },
@@ -1428,6 +1429,8 @@ var A = {
     S.mb.serial = serial; S.mb.uuid = uuid;
     S.mb.formErr=''; S.mb.step='confirm'; render();
   },
+  /* Одна кнопка после записи: сверка SN системы/платы, UUID, MAC и OEM-ключа — результат идёт в отчёт как тест «Идентификаторы» */
+  mbVerify:function(){ A.go('test','ident'); A.run(); },
   mbBack:function(){ S.mb.step='form'; render(); },
   mbWrite:function(){
     S.mb.step='writing'; render();
@@ -1439,6 +1442,7 @@ var A = {
       newSerial: S.mb.serial,
       newUuid: S.mb.uuid
     }).then(function(){
+      S.mbLast = { serial:S.mb.serial, uuid:S.mb.uuid, at:Date.now() };
       S.mb.step='done'; render();
     }).catch(function(err){
       // Запись не удалась (утилита не подтвердила, BIOS не поддерживается,
@@ -1720,6 +1724,29 @@ function fetchCategory(kind){
         if (d.temp_c!=null && d.temp_c>=75) bad.push(d.name+': температура '+d.temp_c+' °C');
       });
       return { lines:lines, verdict: bad.length ? { status:'fail', note:bad.join('; ') } : { status:'pass', note:'Диски в порядке ('+list.length+' шт.)' } };
+    });
+  }
+  if (kind==='ident'){
+    return Promise.all([invoke('get_system_info'), invoke('get_hardware_summary'), invoke('list_lan_adapters').catch(function(){ return []; }), invoke('get_activation_status').catch(function(){ return null; })]).then(function(r){
+      var si = r[0]||{}, hw = r[1]||{}, lan = r[2]||[], act = r[3], exp = S.mbLast || null;
+      var lines = [], bad = [], notes = [];
+      function idBad(v){ v = String(v||'').trim(); return !v || isPlaceholder(v) || /^(system serial number|not applicable|0+|—)$/i.test(v); }
+      function normU(u){ return String(u||'').toLowerCase().replace(/[^0-9a-f]/g,''); }
+      function row(label, val, ok, extra){ lines.push((ok===null ? '•' : ok ? '✓' : '✗')+' '+label+': '+(val||'—')+(extra?' ('+extra+')':'')); if (ok===false) bad.push(label); }
+      var sn = String(si.serial_number||'').trim(), bsn = String(hw.board_serial||'').trim(), uu = String(hw.system_uuid||'').trim();
+      if (exp) lines.push('Сверка с последней записью в этой сессии ('+(exp.serial?'SN '+exp.serial:'')+(exp.serial&&exp.uuid?', ':'')+(exp.uuid?'UUID '+exp.uuid:'')+')');
+      row('SN системы', sn, exp && exp.serial ? sn===exp.serial : !idBad(sn), exp && exp.serial ? 'ожидается '+exp.serial : idBad(sn) ? 'не задан' : '');
+      row('SN платы', bsn, exp && exp.serial ? bsn===exp.serial : !idBad(bsn), exp && exp.serial ? 'ожидается '+exp.serial : idBad(bsn) ? 'не задан' : '');
+      if (!idBad(sn) && !idBad(bsn) && sn!==bsn) notes.push('SN системы и платы различаются');
+      var uuBad = !uu || /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(uu) || /^f{8}-f{4}-f{4}-f{4}-f{12}$/i.test(uu) || uu.toLowerCase()==='03000200-0400-0500-0006-000700080009';
+      row('UUID', uu, exp && exp.uuid ? normU(uu)===normU(exp.uuid) : !uuBad, exp && exp.uuid ? 'ожидается '+exp.uuid : uuBad ? 'заглушка BIOS' : '');
+      lines.push(lan.length ? '• MAC (Ethernet): '+lan.map(function(a){ return (a.mac||'—')+' — '+(a.description||a.name||''); }).join('; ') : '• MAC (Ethernet): адаптера нет');
+      lines.push('• Ключ Windows (OEM) в BIOS: '+(act ? (act.oem_key_present ? 'есть (…'+act.oem_key_tail+')' : 'нет') : 'не удалось прочитать'));
+      notes.forEach(function(n){ lines.push('⚠ '+n); });
+      if (exp && bad.length) lines.push('ℹ Если значения ещё старые — перезагрузите ПК: Windows обновляет данные SMBIOS после перезагрузки.');
+      return { lines:lines, verdict: bad.length
+        ? { status:'fail', note:'Не совпадает или не задано: '+bad.join(', ') }
+        : { status:'pass', note:'SN, плата и UUID в порядке'+(exp?' и совпадают с записанными':'')+(notes.length?' · ⚠ '+notes.join('; '):'') } };
     });
   }
   if (kind==='winact'){
@@ -3643,7 +3670,7 @@ function screenMb(){
     body =
       '<div class="resultpane">'+resultIcon(true)+
       '<div class="msg">'+(m.serial&&m.uuid ? 'SN и UUID' : m.serial ? 'SN' : 'UUID')+' записан'+(m.serial&&m.uuid ? 'ы' : '')+' и подтвержд'+(m.serial&&m.uuid ? 'ены' : 'ён')+' чтением обратно. Перезагрузите ПК, чтобы Windows показал новые значения. Запись сохранена в журнал аудита.</div>'+
-      '<div class="actions"><button class="btn btn-primary" onclick="echips.go(\'start\')">Готово</button></div></div>';
+      '<div class="actions"><button class="btn btn-ghost" onclick="echips.mbVerify()">Проверить идентификаторы</button><button class="btn btn-primary" onclick="echips.go(\'start\')">Готово</button></div></div>';
   }
   return '<div class="pane">'+
     '<div class="crumbs"><button class="btn-link" onclick="echips.go(\'start\')">← режимы</button>'+

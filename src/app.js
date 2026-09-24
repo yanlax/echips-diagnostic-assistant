@@ -738,7 +738,12 @@ var A = {
     if (S.rm.running) return;
     S.rm.running = letter; render();
     invoke('test_removable_drive', { letter:letter, sizeMb:S.rm.size }).then(function(r){
-      S.rm.running = null; S.rm.log.unshift(r); render();
+      S.rm.running = null; S.rm.log.unshift(r);
+      // в отчёт: скорость и класс порта по каждой проверке
+      recordDetail(S.cat, { lines: S.rm.log.filter(function(x){ return !x.error; }).reverse().map(function(x){
+        return x.letter+': запись '+x.write_mbps.toFixed(1)+' МБ/с, чтение '+x.read_mbps.toFixed(1)+' МБ/с, '+(x.errors?'ошибок данных: '+x.errors:'данные совпали')+' — '+usbClass(x).txt;
+      }) });
+      render();
     }).catch(function(err){
       S.rm.running = null; S.rm.log.unshift({ letter:letter, error: typeof err==='string'?err:'Ошибка теста накопителя' }); render();
     });
@@ -2375,6 +2380,15 @@ function fieldBrightness(){
     '<button class="btn btn-ghost" onclick="echips.brSet('+b.max+')">Максимум</button>'+
     '<span class="n">яркость матрицы должна плавно и без мерцания меняться</span></div></div>';
 }
+/* Класс порта по скорости чтения с флешки (запись у дешёвых флешек медленная и для порта
+   показательна хуже). Пороги ориентировочные: реальный потолок USB 2.0 ≈ 30–40 МБ/с,
+   USB 3.x — сотни; 45–60 — неоднозначная зона (медленная флешка или порт). */
+function usbClass(r){
+  var rd = r.read_mbps;
+  if (rd >= 60) return { txt:'порт уровня USB 3.x', cls:'ok' };
+  if (rd >= 45) return { txt:'неоднозначно: медленная флешка или порт USB 2.0/3.x', cls:'' };
+  return { txt:'скорость уровня USB 2.0 (для синего порта USB 3.x — проверьте порт и флешку)', cls:'warn' };
+}
 function fieldRemovable(){
   A.rmStart();
   var rm = S.rm, drives = rm.drives;
@@ -2387,7 +2401,7 @@ function fieldRemovable(){
     }).join('')+'</div>';
   if (rm.log.length) out += '<div class="log">'+rm.log.map(function(r,i){
       return r.error ? '<div><span class="t">'+String(i+1).padStart(2,'0')+'</span><span style="color:var(--err)">'+esc(r.letter)+': '+esc(r.error)+'</span></div>'
-        : '<div><span class="t">'+String(i+1).padStart(2,'0')+'</span><span>'+esc(r.letter)+': запись '+r.write_mbps.toFixed(1)+' МБ/с · чтение '+r.read_mbps.toFixed(1)+' МБ/с · '+r.size_mb+' МБ · '+(r.errors?'<b style="color:var(--err)">ошибок данных: '+r.errors+'</b>':'данные совпали')+'</span></div>';
+        : '<div><span class="t">'+String(i+1).padStart(2,'0')+'</span><span>'+esc(r.letter)+': запись '+r.write_mbps.toFixed(1)+' МБ/с · чтение '+r.read_mbps.toFixed(1)+' МБ/с · '+r.size_mb+' МБ · '+(r.errors?'<b style="color:var(--err)">ошибок данных: '+r.errors+'</b>':'данные совпали')+' · <span style="color:'+(usbClass(r).cls==='ok'?'var(--ok)':usbClass(r).cls==='warn'?'#F0C24B':'var(--mute)')+'">'+usbClass(r).txt+'</span></span></div>';
     }).join('')+'</div>';
   return out+'</div>';
 }

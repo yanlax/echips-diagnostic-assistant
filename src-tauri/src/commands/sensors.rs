@@ -86,7 +86,11 @@ fn acpi_reading() -> Result<SensorReading, String> {
             "try { \
                $t = Get-CimInstance -Namespace 'root/wmi' -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction Stop | Select-Object -First 1; \
                if ($t) { [math]::Round(($t.CurrentTemperature / 10) - 273.15, 1) } \
-             } catch { }",
+             } catch { }; \
+             if (-not $t) { try { \
+               $z = Get-CimInstance -ClassName Win32_PerfFormattedData_Counters_ThermalZoneInformation -ErrorAction Stop | Where-Object { $_.Temperature -gt 0 } | Select-Object -First 1; \
+               if ($z) { [math]::Round([double]$z.Temperature - 273.15, 1) } \
+             } catch { } }",
         )?;
         let trimmed = raw.trim();
         let gpu = read_nvidia();
@@ -94,7 +98,7 @@ fn acpi_reading() -> Result<SensorReading, String> {
             Ok(celsius) if celsius > -50.0 && celsius < 150.0 => Ok(SensorReading {
                 available: true,
                 cpu_temp_c: Some(celsius),
-                note: "ACPI thermal zone (WMI) — может не отражать реальную температуру CPU/GPU на всех платах".into(),
+                note: "ACPI thermal zone / счётчик ThermalZoneInformation (WMI) — может не отражать реальную температуру CPU/GPU на всех платах".into(),
                 gpu,
                 source: "acpi".into(),
                 ..Default::default()

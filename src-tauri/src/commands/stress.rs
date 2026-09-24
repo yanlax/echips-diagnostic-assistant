@@ -90,6 +90,8 @@ pub struct StressResult {
     pub mem_errors: u64,
     pub disk_errors: u64,
     pub log: Vec<String>,
+    /// путь к CSV-логу показаний по секундам
+    pub log_file: String,
 }
 
 // ------------------------------------------------------------------
@@ -401,6 +403,9 @@ pub struct StressMarker {
     pub last_temp_c: Option<f64>,
     pub last_gpu_temp_c: Option<f64>,
     pub last_load: f64,
+    /// CSV с показаниями по секундам (%LOCALAPPDATA%\Echips\HardwareCheck\stress_logs) — остаётся и после обрыва
+    #[serde(default)]
+    pub log_file: String,
 }
 
 fn marker_path() -> std::path::PathBuf {
@@ -574,6 +579,20 @@ fn run_session(window: Window, cfg: StressConfig) {
 
     let names: Vec<String> = loads.iter().map(|l| l.name.to_string()).collect();
     let mut marker = StressMarker { started_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(), duration_secs: cfg.duration_secs, stressors: names, ..Default::default() };
+    // CSV-лог по секундам: для длинных прогонов (4 часа) данные остаются на диске и после сбоя/перезагрузки
+    let log_path = {
+        let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into());
+        let dir = std::path::PathBuf::from(base).join("Echips").join("HardwareCheck").join("stress_logs");
+        let _ = std::fs::create_dir_all(&dir);
+        dir.join(format!("stress_{}.csv", chrono::Local::now().format("%Y%m%d_%H%M%S")))
+    };
+    let mut csv = std::fs::File::create(&log_path).ok();
+    if let Some(f) = csv.as_mut() {
+        use std::io::Write;
+        let _ = writeln!(f, "elapsed_s;load_pct;clock_mhz;cpu_temp_c;gpu_temp_c;fan_rpm;power_w");
+    }
+    let log_file = if csv.is_some() { log_path.to_string_lossy().to_string() } else { String::new() };
+    marker.log_file = log_file.clone();
     write_marker(&marker);
 
     let started = Instant::now();
@@ -683,6 +702,14 @@ fn run_session(window: Window, cfg: StressConfig) {
             hot_ticks = 0;
         }
 
+        if let Some(f) = csv.as_mut() {
+            use std::io::Write;
+            let opt = |v: Option<f64>| v.map(|x| format!("{x:.1}")).unwrap_or_default();
+            let _ = writeln!(f, "{};{:.0};{:.0};{};{};{};{}", elapsed, tick.load, tick.clock_mhz, opt(tick.temp_c), opt(tick.gpu_temp_c), opt(tick.fan_rpm), opt(tick.power_w));
+            if tick_no % 10 == 0 {
+                let _ = f.flush();
+            }
+        }
         let _ = window.emit("stress-tick", &tick);
         if tick_no % 5 == 0 {
             marker.last_elapsed = elapsed;
@@ -740,6 +767,7 @@ fn run_session(window: Window, cfg: StressConfig) {
         mem_errors: mem_errors.load(Ordering::Relaxed),
         disk_errors: disk_errors.load(Ordering::Relaxed),
         log: events_log,
+        log_file,
     };
     remove_marker();
     let _ = window.emit("stress-done", &result);

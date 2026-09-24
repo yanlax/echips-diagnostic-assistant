@@ -1329,6 +1329,19 @@ var A = {
     recordDetail('stress', { auto:{ status:'fail', note:note }, final:'fail', lines:[note, 'Нагрузки: '+m.stressors.join(', ')+' · запущен '+m.startedAt+' · заданная длительность '+(m.durationSecs||'до остановки')] });
     invoke('clear_stress_marker').catch(function(){}); S.stressMarker = null; renderNav(); render();
   },
+  /* Продолжить прерванный (например, 4-часовой) прогон: те же нагрузки на оставшееся время; прерывание остаётся в журнале событий.
+     Автозапуск после перезагрузки не делаем (это правка автозагрузки Windows) — инженер запускает приложение сам. */
+  markerResume:function(){
+    var m = S.stressMarker; if (!m) return;
+    var rem = Math.max(60, (m.durationSecs||0) - (m.lastElapsed||0));
+    invoke('clear_stress_marker').catch(function(){}); S.stressMarker = null;
+    A.go('stress');
+    var c = S.st.cfg, names = m.stressors||[];
+    ['cpu','fpu','cache','memory','disk','gpu'].forEach(function(k){ c[k] = names.indexOf(k)>=0; });
+    c.dur = rem; c.threads = 'all';
+    A.stStart();
+    S.st.events.push('Продолжение прерванного прогона (прервано на '+m.lastElapsed+' с из '+m.durationSecs+' с)');
+  },
   markerDismiss:function(){ invoke('clear_stress_marker').catch(function(){}); S.stressMarker = null; render(); },
 
   /* ---- установка драйверов ---- */
@@ -3397,6 +3410,7 @@ function stOnDone(res){
   res.stressors.forEach(function(x){ lines.push('  '+x.name+': ср '+x.avg.toFixed(1)+' '+x.unit+', мин '+x.min.toFixed(1)+', макс '+x.max.toFixed(1)+(x.baseline>0 ? ', базовая '+x.baseline.toFixed(1)+', худшее '+Math.round(x.minRatio*100)+'%, ниже 80%: '+x.throttledSecs+' с' : '')); });
   var gsc = st.hist.scores.gpu; if (gsc && gsc.length) lines.push('  gpu: ср '+(gsc.reduce(function(a,b){ return a+b; },0)/gsc.length).toFixed(1)+' кадр/с, мин '+Math.min.apply(null,gsc));
   if (res.memErrors||res.diskErrors) lines.push('Ошибки данных: память '+res.memErrors+', диск '+res.diskErrors);
+  if (res.logFile) lines.push('Показания по секундам (CSV): '+res.logFile);
   st.events.forEach(function(e){ lines.push('! '+e); });
   recordDetail('stress', { lines:lines.slice(0,60), series: downsample(st.hist.load, 200) });
   var v = judgeStress(res);
@@ -3474,7 +3488,10 @@ function markerBanner(){
   var m = S.stressMarker; if (!m) return '';
   return '<div class="markerr" style="margin:10px 0"><b>Прошлый стресс-тест был прерван</b> (перезагрузка, зависание или выключение питания) на '+m.lastElapsed+' с из '+(m.durationSecs||'«до остановки»')+
     '. Нагрузки: '+esc(m.stressors.join(', '))+'; последние показания: загрузка '+Math.round(m.lastLoad)+'%, температура '+(m.lastTempC!=null ? m.lastTempC.toFixed(0)+' °C' : 'н/д')+'.'+
-    '<div class="headactions" style="margin-top:8px;justify-content:flex-start"><button class="btn btn-danger" onclick="echips.markerRecord()">Записать в отчёт как «не пройден»</button>'+
+    (m.logFile ? '<div class="kbnote" style="margin-top:6px">Показания по секундам сохранены: '+esc(m.logFile)+'</div>' : '')+
+    '<div class="headactions" style="margin-top:8px;justify-content:flex-start">'+
+    (m.durationSecs && m.durationSecs-m.lastElapsed>=60 ? '<button class="btn btn-primary" onclick="echips.markerResume()">Продолжить: осталось '+fmtTime(m.durationSecs-m.lastElapsed)+'</button>' : '')+
+    '<button class="btn btn-danger" onclick="echips.markerRecord()">Записать в отчёт как «не пройден»</button>'+
     '<button class="btn btn-ghost" onclick="echips.markerDismiss()">Закрыть</button></div></div>';
 }
 function screenStress(){

@@ -343,3 +343,23 @@ pub fn stop_win_key_block() {
         win::stop();
     }
 }
+
+/// Какие клавиши нажаты прямо сейчас (VK-коды) — опрос `GetAsyncKeyState`, как в заводской
+/// утилите Keyboard.exe (Form1_KeyDown + GetAsyncKeyState). Видит клавиши, которые WebView2
+/// и Windows не доводят до страницы (Win, PrtScr, медиа-ряд, F5/F11/F12), без хука и блокировок.
+#[tauri::command(async)]
+pub fn poll_pressed_keys() -> Vec<u8> {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+        // 1..6 — кнопки мыши, их пропускаем.
+        (7u16..=254)
+            .filter(|&vk| unsafe { GetAsyncKeyState(vk as i32) } < 0)
+            .map(|vk| vk as u8)
+            .collect()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Vec::new()
+    }
+}

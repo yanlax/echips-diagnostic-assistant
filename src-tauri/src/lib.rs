@@ -76,6 +76,7 @@ pub fn run() {
             commands::report::open_containing_folder,
             commands::keyhook::start_win_key_block,
             commands::keyhook::stop_win_key_block,
+            commands::keyhook::poll_pressed_keys,
             commands::update::check_for_update,
             commands::update::download_update,
             commands::techs::fetch_techs,

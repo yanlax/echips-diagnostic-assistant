@@ -104,11 +104,16 @@ pub fn prepare() {
             }
         }
 
-        // Флаги нужны в WinPE; для проверки на обычной Windows можно принудительно: ECHIPS_SAFE_WEBVIEW=1
-        if (is_winpe() || std::env::var_os("ECHIPS_SAFE_WEBVIEW").is_some())
-            && std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_none()
-        {
-            std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--no-sandbox --disable-gpu --disable-gpu-compositing");
+        // Флаги безопасного режима нужны в WinPE; для проверки на обычной Windows можно
+        // принудительно: ECHIPS_SAFE_WEBVIEW=1. `--use-fake-ui-for-media-stream` — всегда:
+        // окно WebView2 само принимает запрос доступа к камере/микрофону (тесты «Камера»
+        // и «Звук»). Приложение внутреннее (инженеры Echips), внешних страниц не открывает.
+        if std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_none() {
+            let mut args = String::from("--use-fake-ui-for-media-stream");
+            if is_winpe() || std::env::var_os("ECHIPS_SAFE_WEBVIEW").is_some() {
+                args.push_str(" --no-sandbox --disable-gpu --disable-gpu-compositing");
+            }
+            std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", args);
         }
     }
 }

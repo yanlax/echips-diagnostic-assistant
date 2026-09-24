@@ -1958,6 +1958,7 @@ document.addEventListener('keydown', function(e){
 
   var k = kbStat(id);
   if (e.repeat){ k.rep++; return; }
+  if (k.down && k.ext) return; // эту же клавишу уже засчитал опрос GetAsyncKeyState
   kbCommitPress(id, now);
   render();
 });
@@ -1982,20 +1983,37 @@ var HOOK_VK_CODE = {
   // id в CODEMAP (см. регэксп /^F\d+$/ там), отдельно заводить не нужно.
   116:'F5', 122:'F11', 123:'F12'
 };
+// Общий вход для клавиш, которые страница не видит сама (хук-ретрансляция и опрос GetAsyncKeyState):
+// пока клавиша числится нажатой, повторные «нажатия» (автоповтор хука, второй источник) игнорируем.
+function kbExternal(code, down){
+  var id = CODEMAP[code];
+  if (!id){ if (down){ S.lastUnknown = code; render(); } return; }
+  var now = Date.now(), k = kbStat(id);
+  if (down){ if (k.down) return; kbCommitPress(id, now); k.ext = true; }
+  else { k.ext = false; if (!k.down) return; k.down = false; k.lastUp = now; }
+  render();
+}
 tauriEvent.listen('hook-relay-key', function(ev){
   if (S.screen!=='test' || cat().kind!=='keyboard') return;
   var code = HOOK_VK_CODE[ev.payload.vk];
-  if (!code) return;
-  var id = CODEMAP[code];
-  if (!id){ S.lastUnknown = code; render(); return; }
-  var now = Date.now();
-  if (ev.payload.down) {
-    kbCommitPress(id, now);
-  } else {
-    var k = kbStat(id); k.down = false; k.lastUp = now;
-  }
-  render();
+  if (code) kbExternal(code, !!ev.payload.down);
 });
+/* Опрос состояния клавиш, как в заводской утилите (GetAsyncKeyState): Win, PrtScr, медиа-ряд,
+   F5/F11/F12 засчитываются без хука и блокировок. Обычные клавиши берём из DOM, чтобы не дублировать. */
+var POLL_VK_CODE = { 91:'MetaLeft', 92:'MetaRight' };
+Object.keys(HOOK_VK_CODE).forEach(function(v){ POLL_VK_CODE[v] = HOOK_VK_CODE[v]; });
+var pollPrev = {}, pollBusy = false;
+setInterval(function(){
+  if (pollBusy || S.screen!=='test' || cat().kind!=='keyboard'){ if (S.screen!=='test' || cat().kind!=='keyboard') pollPrev = {}; return; }
+  pollBusy = true;
+  invoke('poll_pressed_keys').then(function(list){
+    var cur = {};
+    (list||[]).forEach(function(vk){ if (POLL_VK_CODE[vk]) cur[vk] = true; });
+    Object.keys(cur).forEach(function(vk){ if (!pollPrev[vk]) kbExternal(POLL_VK_CODE[vk], true); });
+    Object.keys(pollPrev).forEach(function(vk){ if (!cur[vk]) kbExternal(POLL_VK_CODE[vk], false); });
+    pollPrev = cur;
+  }).catch(function(){}).then(function(){ pollBusy = false; });
+}, 40);
 
 function keyCls(id){
   var k = S.kstat[id], now = Date.now(), c = 'key';

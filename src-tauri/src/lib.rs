@@ -6,7 +6,10 @@ mod winpe;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     winpe::prepare();
-    tauri::Builder::default()
+    std::panic::set_hook(Box::new(|info| {
+        winpe::log(&format!("паника: {info}"));
+    }));
+    let built = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
@@ -86,9 +89,21 @@ pub fn run() {
             commands::upload::submit_report,
             commands::upload::flush_report_queue,
         ])
-        .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(|_app, event| {
+        .build(tauri::generate_context!());
+    let app = match built {
+        Ok(app) => app,
+        Err(e) => {
+            let msg = format!("Не удалось создать окно приложения: {e}");
+            winpe::log(&msg);
+            winpe::message_box(
+                "Echips Hardware Check",
+                &format!("{msg}\n\nЕсли это WinPE или Windows без Edge WebView2 — положите рядом с exe папку переносимого WebView2 (см. README, «Работа в WinPE»).\nПодробности: echips-startup.log рядом с exe или во временной папке."),
+            );
+            return;
+        }
+    };
+    winpe::log("окно создано, приложение запущено");
+    app.run(|_app, event| {
             if let tauri::RunEvent::Exit = event {
                 commands::hwmon::hwmon_stop();
                 commands::keyhook::stop_win_key_block();

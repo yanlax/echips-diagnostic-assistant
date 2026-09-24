@@ -17,7 +17,55 @@ use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "windows")]
 fn is_winpe() -> bool {
-    Path::new(r"X:\Windows\System32\winpeshl.exe").exists()
+    // Диск WinPE обычно X:, но не всегда — проверяем и по %SystemRoot%, и по системному диску.
+    let sysroot = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"X:\Windows"));
+    sysroot.join(r"System32\winpeshl.exe").exists()
+        || Path::new(r"X:\Windows\System32\winpeshl.exe").exists()
+        || std::env::var("SystemDrive").map_or(false, |d| d.eq_ignore_ascii_case("X:"))
+}
+
+/// Лог запуска — пишется рядом с exe и во временную папку. Нужен потому, что при
+/// ошибке создания окна (например, в WinPE без WebView2) процесс раньше просто
+/// закрывался без единого следа.
+pub fn log(msg: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::io::Write;
+        let line = format!("{} · {msg}\r\n", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"));
+        let mut targets: Vec<PathBuf> = vec![];
+        if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+            targets.push(dir.join("echips-startup.log"));
+        }
+        if let Some(t) = std::env::var_os("TEMP").or_else(|| std::env::var_os("TMP")) {
+            targets.push(PathBuf::from(t).join("echips-startup.log"));
+        }
+        for t in targets {
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(t) {
+                let _ = f.write_all(line.as_bytes());
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = msg;
+    }
+}
+
+/// Окно с текстом ошибки — приложение без окна WebView2 иначе молча исчезает.
+pub fn message_box(title: &str, text: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+        let t: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+        let x: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
+            MessageBoxW(std::ptr::null_mut(), x.as_ptr(), t.as_ptr(), MB_OK | MB_ICONERROR);
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (title, text);
+    }
 }
 
 /// Папка, в которой лежит msedgewebview2.exe: сама `dir` или её подпапка.
@@ -38,6 +86,14 @@ fn runtime_folder(dir: &Path) -> Option<PathBuf> {
 pub fn prepare() {
     #[cfg(target_os = "windows")]
     {
+        log(&format!(
+            "старт: exe={:?}, WinPE={}, SystemRoot={:?}, LOCALAPPDATA={:?}, TEMP={:?}",
+            std::env::current_exe().ok(),
+            is_winpe(),
+            std::env::var_os("SystemRoot"),
+            std::env::var_os("LOCALAPPDATA"),
+            std::env::var_os("TEMP"),
+        ));
         // В WinPE нет %LOCALAPPDATA%: все логи/кэши приложения читают эту переменную.
         if std::env::var_os("LOCALAPPDATA").is_none() {
             let tmp = std::env::var_os("TEMP").or_else(|| std::env::var_os("TMP")).unwrap_or_else(|| r"X:\Windows\Temp".into());
@@ -52,8 +108,11 @@ pub fn prepare() {
                         let name = entry.file_name().to_string_lossy().to_lowercase();
                         if p.is_dir() && name.contains("webview2") {
                             if let Some(folder) = runtime_folder(&p) {
+                                log(&format!("WebView2 (переносимый): {}", folder.display()));
                                 std::env::set_var("WEBVIEW2_BROWSER_EXECUTABLE_FOLDER", folder);
                                 break;
+                            } else {
+                                log(&format!("папка {} похожа на WebView2, но msedgewebview2.exe в ней не найден", p.display()));
                             }
                         }
                     }
@@ -71,8 +130,20 @@ pub fn prepare() {
             }
         }
 
-        if is_winpe() && std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_none() {
-            std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--no-sandbox --disable-gpu --disable-gpu-compositing");
+        if std::env::var_os("WEBVIEW2_BROWSER_EXECUTABLE_FOLDER").is_none() {
+            log("рядом с exe нет папки с переносимым WebView2 (в имени должно быть «webview2», внутри msedgewebview2.exe) — будет искаться установленный");
         }
+        // Флаги нужны в WinPE; для проверки на обычной Windows можно принудительно: ECHIPS_SAFE_WEBVIEW=1
+        if (is_winpe() || std::env::var_os("ECHIPS_SAFE_WEBVIEW").is_some())
+            && std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_none()
+        {
+            std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--no-sandbox --disable-gpu --disable-gpu-compositing");
+            log("включены флаги браузера для WinPE: --no-sandbox --disable-gpu");
+        }
+        log(&format!(
+            "WEBVIEW2_BROWSER_EXECUTABLE_FOLDER={:?}, WEBVIEW2_USER_DATA_FOLDER={:?}",
+            std::env::var_os("WEBVIEW2_BROWSER_EXECUTABLE_FOLDER"),
+            std::env::var_os("WEBVIEW2_USER_DATA_FOLDER"),
+        ));
     }
 }

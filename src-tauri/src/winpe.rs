@@ -83,9 +83,77 @@ fn runtime_folder(dir: &Path) -> Option<PathBuf> {
     None
 }
 
+
+/// Перехват «тяжёлых» исключений процесса (0xC…: нарушение доступа, fast-fail и т. п.) —
+/// пишет код, адрес и модуль (DLL), в котором случился сбой. В WinPE процесс умирал через
+/// 1–2 с после Ready без паники Rust и без событий закрытия — это признак нативного сбоя
+/// внутри библиотеки WebView2, и именно этот лог покажет, в какой.
+#[cfg(target_os = "windows")]
+mod crash {
+    use std::ffi::c_void;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[repr(C)]
+    struct ExceptionRecord {
+        code: u32,
+        flags: u32,
+        record: *mut ExceptionRecord,
+        address: *mut c_void,
+        n_params: u32,
+        info: [usize; 15],
+    }
+    #[repr(C)]
+    struct ExceptionPointers {
+        record: *mut ExceptionRecord,
+        context: *mut c_void,
+    }
+
+    extern "system" {
+        fn AddVectoredExceptionHandler(first: u32, handler: unsafe extern "system" fn(*mut ExceptionPointers) -> i32) -> *mut c_void;
+        fn GetModuleHandleExW(flags: u32, addr: *const c_void, module: *mut *mut c_void) -> i32;
+        fn GetModuleFileNameW(module: *mut c_void, buf: *mut u16, size: u32) -> u32;
+    }
+
+    static SEEN: AtomicU32 = AtomicU32::new(0);
+
+    unsafe extern "system" fn handler(p: *mut ExceptionPointers) -> i32 {
+        if p.is_null() || (*p).record.is_null() {
+            return 0;
+        }
+        let rec = &*(*p).record;
+        // только серьёзные (0xC…), и не больше 40 записей, чтобы не засорить лог безобидными
+        if rec.code >= 0xC000_0000 && SEEN.fetch_add(1, Ordering::Relaxed) < 40 {
+            let mut module = String::from("?");
+            let mut h: *mut c_void = std::ptr::null_mut();
+            // GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS (4) | UNCHANGED_REFCOUNT (2)
+            if GetModuleHandleExW(6, rec.address as *const c_void, &mut h) != 0 && !h.is_null() {
+                let mut buf = [0u16; 512];
+                let n = GetModuleFileNameW(h, buf.as_mut_ptr(), buf.len() as u32) as usize;
+                if n > 0 {
+                    module = String::from_utf16_lossy(&buf[..n.min(buf.len())]);
+                }
+            }
+            super::log(&format!(
+                "исключение {:#010X} по адресу {:p}, модуль {module}, параметры {:?}",
+                rec.code,
+                rec.address,
+                &rec.info[..(rec.n_params as usize).min(3)]
+            ));
+        }
+        0 // EXCEPTION_CONTINUE_SEARCH — обработку не подменяем
+    }
+
+    pub fn install() {
+        unsafe {
+            AddVectoredExceptionHandler(1, handler);
+        }
+    }
+}
+
 pub fn prepare() {
     #[cfg(target_os = "windows")]
     {
+        crash::install();
         log(&format!(
             "старт: pid={}, exe={:?}, WinPE={}, SystemRoot={:?}, LOCALAPPDATA={:?}, TEMP={:?}",
             std::process::id(),

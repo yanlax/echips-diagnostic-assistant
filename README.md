@@ -72,7 +72,7 @@ src-tauri/
       peripherals.rs                LAN, USB-накопитель (запись/чтение), яркость, мониторы, сигнал Wi-Fi
       summary.rs                    get_hardware_summary — сводка железа (как CPU-Z)
 
-src-tauri/assets/smbios/        Amidewin.exe, H2OSDE-Wx64.exe, драйверы AMI (вшиты)
+src-tauri/assets/smbios/        AMIDEWINx64.exe, H2OSDE-Wx64.exe, драйверы AMI (вшиты)
 data/techs.json                 инженеры и хэши PIN (читается приложением)
 src-tauri/icons/                иконки приложения (из echips-driver-assistant),
                                   лежат в git — в CI не генерируются
@@ -375,9 +375,9 @@ src/logo.png, src/fonts/        логотип и локальные шрифт�
 
 1. **Запись SN/UUID (замена платы)** — реализована по заводской процедуре
    (`FlashSerialNumber.cmd` из комплекта завода): тип BIOS по `Win32_BIOS`;
-   AMI — `Amidewin.exe /BS`, `/SS` (успех — "Done"), Insyde —
+   AMI — `AMIDEWINx64.exe /BS`, `/SS` (успех — "Done"), Insyde —
    `H2OSDE-Wx64.exe -W -BS`, `-W -SS` (успех — "OK"), затем чтение обратно
-   и сверка. Утилиты и драйверы `amifldrv*.sys` вшиты в exe
+   и сверка. Утилиты и драйверы `amifldrv64.sys`/`amigendrv64.sys` вшиты в exe
    (`src-tauri/assets/smbios`, распространение разрешено заводом) и
    распаковываются в `%LOCALAPPDATA%\Echips\HardwareCheck\smbios`.
    **Проверить на реальной плате**: UUID для AMI (`/SU`) в заводском скрипте
@@ -450,6 +450,11 @@ GitHub Actions (`.github/workflows/build.yml`, ручной запуск чер�
 "Run workflow" или пуш тега `v*`).
 
 ## Версия
+
+0.38.0 — «Замена платы» снова включена (`FEATURE_MB = true`): завод прислал новую AMIDEWINx64.exe
+(2020 г., Aptio V, American Megatrends International) и драйверы `amifldrv64.sys`/`amigendrv64.sys`
+вместо AMIDEWIN 2014 г.; 32-битные файлы удалены. Insyde (H2OSDE) без изменений. Не проверено на
+железе — первую запись сделать на одном тестовом ноутбуке.
 
 0.37.0 — по отчёту Максима: скрыта кнопка «Удалить драйвер PawnIO» (флаг `FEATURE_PAWNIO_UNINSTALL`);
 автопрогон: запись 10 ГБ (урезается по свободному месту тома) и расширенное чтение 6 ГБ; в тесте чтения

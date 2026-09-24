@@ -122,7 +122,7 @@ fn is_valid_uuid(v: &str) -> bool {
 
 /// Запись SN/UUID платы — по заводской процедуре (FlashSerialNumber.cmd из
 /// комплекта тестовых утилит завода, присланного сервисом): тип BIOS
-/// определяется по Win32_BIOS; AMI — Amidewin.exe (`/BS <SN>`, `/SS <SN>`,
+/// определяется по Win32_BIOS; AMI — AMIDEWINx64.exe (`/BS <SN>`, `/SS <SN>`,
 /// успех — "Done" в выводе), Insyde — H2OSDE-Wx64.exe (`-W -BS <SN>`,
 /// `-W -SS <SN>`, успех — "OK"). После записи серийник читается обратно теми
 /// же утилитами и сверяется (как в заводском скрипте). UUID: Insyde `-SU <uuid>`
@@ -131,7 +131,8 @@ fn is_valid_uuid(v: &str) -> bool {
 /// поэтому его стоит проверить на реальной плате. Утилиты вшиты в exe
 /// (src-tauri/assets/smbios, распространение разрешено заводом-разработчиком)
 /// и при первой записи распаковываются в %LOCALAPPDATA%\Echips\HardwareCheck\smbios
-/// (драйверу amifldrv64.sys нужно лежать рядом с Amidewin.exe).
+/// (драйверы amifldrv64.sys/amigendrv64.sys лежат рядом с AMIDEWINx64.exe; с v0.38.0 —
+/// новая 64-битная AMIDEWIN 2020 г. от завода для Aptio V вместо 32-битной 2014 г.).
 /// Любой исход (успех/сбой) пишется в аудит-лог.
 #[cfg(target_os = "windows")]
 mod flash {
@@ -140,10 +141,10 @@ mod flash {
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
-    const AMIDEWIN: &[u8] = include_bytes!("../../assets/smbios/Amidewin.exe");
+    const AMIDEWIN: &[u8] = include_bytes!("../../assets/smbios/AMIDEWINx64.exe");
     const H2OSDE: &[u8] = include_bytes!("../../assets/smbios/H2OSDE-Wx64.exe");
     const AMIFLDRV64: &[u8] = include_bytes!("../../assets/smbios/amifldrv64.sys");
-    const AMIFLDRV32: &[u8] = include_bytes!("../../assets/smbios/amifldrv32.sys");
+    const AMIGENDRV64: &[u8] = include_bytes!("../../assets/smbios/amigendrv64.sys");
 
     #[derive(Clone, Copy, PartialEq)]
     enum Vendor {
@@ -176,10 +177,10 @@ mod flash {
             let dir = app_data_dir().join("smbios");
             std::fs::create_dir_all(&dir).map_err(|e| format!("Не удалось создать папку утилит: {e}"))?;
             let files: [(&str, &[u8]); 4] = [
-                ("Amidewin.exe", AMIDEWIN),
+                ("AMIDEWINx64.exe", AMIDEWIN),
                 ("H2OSDE-Wx64.exe", H2OSDE),
                 ("amifldrv64.sys", AMIFLDRV64),
-                ("amifldrv32.sys", AMIFLDRV32),
+                ("amigendrv64.sys", AMIGENDRV64),
             ];
             for (name, bytes) in files {
                 let path = dir.join(name);
@@ -208,7 +209,7 @@ mod flash {
         fn exe(&self) -> &'static str {
             match self.vendor {
                 Vendor::Insyde => "H2OSDE-Wx64.exe",
-                Vendor::Ami => "Amidewin.exe",
+                Vendor::Ami => "AMIDEWINx64.exe",
             }
         }
 
@@ -228,7 +229,7 @@ mod flash {
             if low.contains("doesn't support") || low.contains("not support") {
                 let tool = match self.vendor {
                     Vendor::Insyde => "H2OSDE (Insyde)",
-                    Vendor::Ami => "AMIDEWIN (AMI, v5.15 от 2014 г.)",
+                    Vendor::Ami => "AMIDEWIN (AMI Aptio V, 2020 г.)",
                 };
                 let reason = out
                     .lines()

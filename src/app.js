@@ -103,11 +103,10 @@ var STATUS = {
 // Каталог драйверов — та же публичная ссылка, что в echips-driver-assistant.
 var MANIFEST_PUBLIC_URL = "https://disk.360.yandex.ru/d/79yQHBN93UDZGg";
 
-/* «Замена платы» ВРЕМЕННО ВЫРЕЗАНА (по просьбе пользователя): заводской комплект утилит записи SN/UUID
-   устарел для BIOS новых ноутбуков («System doesn't support», заводской скрипт тоже не пишет). Код,
-   экраны и Rust-команды остались — вернуть функцию: FEATURE_MB = true (и обновить утилиты в
-   src-tauri/assets/smbios, когда завод пришлёт новые). */
-var FEATURE_MB = false;
+/* «Замена платы»: с v0.38.0 снова включена — завод прислал новую AMIDEWINx64 (2020 г., Aptio V) в
+   src-tauri/assets/smbios. Если на каком-то BIOS утилита снова скажет «System doesn't support» —
+   check_supported() покажет причину; выключить функцию: FEATURE_MB = false. */
+var FEATURE_MB = true;
 
 /* Вход по PIN ВРЕМЕННО ВЫКЛЮЧЕН (по просьбе пользователя, на время тестирования): программа сразу
    открывается под администратором Максимом и не обращается к интернету при запуске. Вернуть вход
@@ -3279,7 +3278,7 @@ function screenMb(){
       '<div class="lbl">UUID</div><div class="old">'+esc(m.before.uuid)+'</div><div class="new">'+esc(m.uuid)+'</div>'+
       '</div>'+
       '<div class="s" style="margin-top:14px">Наряд: '+esc(m.ticket)+' · Техник: '+esc(m.techName)+'</div>'+
-      '<div class="warnbox">Запись необратимо меняет SN/UUID платы (утилита завода: AMI — Amidewin, Insyde — H2OSDE). '+
+      '<div class="warnbox">Запись необратимо меняет SN/UUID платы (утилита завода: AMI — AMIDEWIN, Insyde — H2OSDE). '+
       'После записи серийник читается обратно и сверяется; в Windows новые значения видны после перезагрузки. Попытка попадёт в аудит-лог с хэш-цепочкой.</div>'+
       '<div class="headactions" style="margin-top:16px">'+
       '<button class="btn btn-ghost" onclick="echips.mbBack()">Назад</button>'+

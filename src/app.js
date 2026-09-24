@@ -3343,12 +3343,13 @@ function renderLock(){
 /* Физическая клавиатура для ввода PIN — работает, только пока открыт
    экран входа (phase 'pin'), чтобы не конфликтовать со слушателем теста
    клавиатуры (тот включён лишь на S.screen==='test' с категорией kb). */
-document.addEventListener('keydown', function(e){
-  if (S.lock.phase!=='pin') return;
-  if (/^[0-9]$/.test(e.key)){ e.preventDefault(); A.lockDigit(e.key); }
-  else if (e.key==='Backspace'){ e.preventDefault(); A.lockBackspace(); }
-  else if (e.key==='Enter'){ e.preventDefault(); A.lockSubmit(); }
-});
+// PIN-ВХОД ВРЕМЕННО ОТКЛЮЧЁН (на время тестирования) — слушатель клавиш экрана входа:
+// document.addEventListener('keydown', function(e){
+//   if (S.lock.phase!=='pin') return;
+//   if (/^[0-9]$/.test(e.key)){ e.preventDefault(); A.lockDigit(e.key); }
+//   else if (e.key==='Backspace'){ e.preventDefault(); A.lockBackspace(); }
+//   else if (e.key==='Enter'){ e.preventDefault(); A.lockSubmit(); }
+// });
 
 /* ---------- админ-панель (Shift+F10) ----------
    Идея пользователя: список всех IPC-вызовов (invoke → Rust) с результатом,
@@ -3386,7 +3387,18 @@ document.addEventListener('keydown', function(e){
 document.addEventListener('DOMContentLoaded', function(){
   loadDevice();
   render();
-  lockInit();
+  // PIN-ВХОД ВРЕМЕННО ОТКЛЮЧЁН на время тестирования: программа сразу открывается
+  // под администратором Максимом. Чтобы вернуть вход по PIN для всех сервисов —
+  // раскомментировать lockInit() и слушатель клавиш выше, убрать блок «автовход»
+  // и раскомментировать #lock-overlay в index.html.
+  // lockInit();
+  // --- автовход (только на время тестирования) ---
+  S.engineer = { id:'maksim', name:'Максим', role:'admin' };
+  S.lock.phase = 'unlocked';
+  // Список инженеров нужен экрану «+ добавить инженера» (это не вход, а управление списком).
+  invoke('fetch_techs').then(function(list){ S.lock.techs = list || []; render(); }).catch(function(){});
+  render();
+  // --- конец автовхода ---
   invoke('flush_report_queue').catch(function(){});
 });
 })();

@@ -154,6 +154,7 @@ mod flash {
     pub struct Tool {
         dir: PathBuf,
         vendor: Vendor,
+        bios_info: String,
     }
 
     fn run(dir: &Path, exe: &str, args: &[&str]) -> Result<String, String> {
@@ -201,7 +202,7 @@ mod flash {
                     info.trim()
                 ));
             };
-            Ok(Tool { dir, vendor })
+            Ok(Tool { dir, vendor, bios_info: info.trim().to_string() })
         }
 
         fn exe(&self) -> &'static str {
@@ -218,6 +219,32 @@ mod flash {
             }
         }
 
+        /// Проверка ДО записи: читаем серийник плата тем же инструментом. Если утилита сообщает, что
+        /// система не поддерживается (напр. AMIDEWIN 2014 г. на BIOS 2025 г.: «d7 - Error: System
+        /// doesn't support»), писать бессмысленно — возвращаем понятную причину, а не сырой вывод.
+        pub fn check_supported(&self) -> Result<(), String> {
+            let out = self.read_serial("BS")?;
+            let low = out.to_lowercase();
+            if low.contains("doesn't support") || low.contains("not support") {
+                let tool = match self.vendor {
+                    Vendor::Insyde => "H2OSDE (Insyde)",
+                    Vendor::Ami => "AMIDEWIN (AMI, v5.15 от 2014 г.)",
+                };
+                let reason = out
+                    .lines()
+                    .map(|l| l.trim())
+                    .find(|l| l.to_lowercase().contains("error"))
+                    .unwrap_or("система не поддерживается")
+                    .to_string();
+                return Err(format!(
+                    "Заводская утилита {tool} не поддерживает BIOS этого устройства ({reason}). \
+                     Нужна более новая версия утилиты — запросите её у разработчиков завода. BIOS: {}.",
+                    self.bios_info
+                ));
+            }
+            Ok(())
+        }
+
         /// field: "BS" (плата) или "SS" (система)
         pub fn write_serial(&self, field: &str, sn: &str) -> Result<(), String> {
             let flag = self.flag(field);
@@ -228,7 +255,10 @@ mod flash {
             if out.contains(done) {
                 Ok(())
             } else {
-                Err(format!("Утилита не подтвердила запись серийного номера ({field}): {}", out.trim()))
+                // без баннера утилиты (рамка с копирайтом) — только строки с ошибкой, иначе весь вывод
+                let errs: Vec<&str> = out.lines().map(|l| l.trim()).filter(|l| l.to_lowercase().contains("error")).collect();
+                let detail = if errs.is_empty() { out.trim().to_string() } else { errs.join("; ") };
+                Err(format!("Утилита не подтвердила запись серийного номера ({field}): {detail}"))
             }
         }
 
@@ -255,6 +285,7 @@ mod flash {
 #[cfg(target_os = "windows")]
 fn do_flash(new_serial: &str, new_uuid: &str) -> Result<(), String> {
     let tool = flash::Tool::new()?;
+    tool.check_supported()?;
     tool.write_serial("BS", new_serial)?;
     tool.write_serial("SS", new_serial)?;
     for field in ["BS", "SS"] {

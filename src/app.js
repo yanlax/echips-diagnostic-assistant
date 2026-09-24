@@ -109,6 +109,11 @@ var MANIFEST_PUBLIC_URL = "https://disk.360.yandex.ru/d/79yQHBN93UDZGg";
    src-tauri/assets/smbios, когда завод пришлёт новые). */
 var FEATURE_MB = false;
 
+/* Вход по PIN ВРЕМЕННО ВЫКЛЮЧЕН (по просьбе пользователя, на время тестирования): программа сразу
+   открывается под администратором Максимом и не обращается к интернету при запуске. Вернуть вход
+   для всех сервисов: FEATURE_PIN = true (экран входа, проверка хэшей, вшитый список — весь код на месте). */
+var FEATURE_PIN = false;
+
 var S = {
   screen:'start', cat:'usb', results:{}, comments:{},
   keys:{}, fill:0, padDots:[], padCount:0, padMax:0, padMoves:0,
@@ -3389,7 +3394,7 @@ function renderLock(){
    экран входа (phase 'pin'), чтобы не конфликтовать со слушателем теста
    клавиатуры (тот включён лишь на S.screen==='test' с категорией kb). */
 document.addEventListener('keydown', function(e){
-  if (S.lock.phase!=='pin') return;
+  if (!FEATURE_PIN || S.lock.phase!=='pin') return;
   if (/^[0-9]$/.test(e.key)){ e.preventDefault(); A.lockDigit(e.key); }
   else if (e.key==='Backspace'){ e.preventDefault(); A.lockBackspace(); }
   else if (e.key==='Enter'){ e.preventDefault(); A.lockSubmit(); }
@@ -3431,7 +3436,18 @@ document.addEventListener('keydown', function(e){
 document.addEventListener('DOMContentLoaded', function(){
   loadDevice();
   render();
-  lockInit();
+  if (FEATURE_PIN) {
+    lockInit();
+  } else {
+    // автовход под Максимом: без экрана PIN и без сети
+    S.engineer = { id:'maksim', name:'Максим', role:'admin' };
+    S.lock.phase = 'unlocked';
+    var ov = document.getElementById('lock-overlay');
+    if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
+    // список инженеров нужен только экрану «+ добавить инженера»; ошибки (нет сети) молча игнорируем
+    invoke('fetch_techs').then(function(res){ S.lock.techs = res.techs || []; render(); }).catch(function(){});
+    render();
+  }
   invoke('flush_report_queue').catch(function(){});
   setInterval(function(){ if (!S.auto.on) A.reportSync('sync'); }, 20000);
   // Отчёты, накопленные без сети, досылаем сами: раз в 3 минуты и сразу при появлении связи.

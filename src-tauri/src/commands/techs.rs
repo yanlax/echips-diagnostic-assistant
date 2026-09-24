@@ -117,28 +117,33 @@ pub async fn fetch_techs() -> Result<TechList, String> {
         return Ok(TechList { techs: list, source: source.to_string(), note: String::new() });
     }
 
-    if let Ok(text) = std::fs::read_to_string(cache_path()) {
-        if let Ok(list) = serde_json::from_str::<Vec<Tech>>(&text) {
-            return Ok(TechList {
-                techs: list,
-                source: "cache".to_string(),
-                note: "Нет связи с GitHub — использован сохранённый список; недавно добавленных инженеров в нём может не быть.".to_string(),
-            });
-        }
-    }
+    // Без сети: вшитый список (пока ALLOW_BUILTIN_TECHS) ОБЪЕДИНЯЕТСЯ с кэшем с диска — записи кэша
+    // перекрывают вшитые с тем же id. Раньше кэш полностью подменял вшитый список: устаревший кэш
+    // от старого онлайн-запуска (без нужных инженеров) не пускал никого, хотя вшитый список был верным.
+    let cached: Option<Vec<Tech>> = std::fs::read_to_string(cache_path())
+        .ok()
+        .and_then(|t| serde_json::from_str::<Vec<Tech>>(&t).ok());
+    // Вшитый список на момент сборки (data/techs.json). ВРЕМЕННО, на время тестирования двумя
+    // инженерами — для выпуска всем сервисам с чётким контролем доступа выключить:
+    // ALLOW_BUILTIN_TECHS = false.
+    let builtin: Option<Vec<Tech>> = if ALLOW_BUILTIN_TECHS { serde_json::from_str::<Vec<Tech>>(BUILTIN_TECHS).ok() } else { None };
 
-    // Совсем без сети и без кэша (первый запуск на машине без интернета, WinPE): список, вшитый в
-    // exe при сборке (data/techs.json на момент сборки). ВРЕМЕННО, на время тестирования двумя
-    // инженерами (Максим и Алексей) — для выпуска всем сервисам с чётким контролем доступа
-    // выключить: ALLOW_BUILTIN_TECHS = false.
-    if ALLOW_BUILTIN_TECHS {
-        if let Ok(list) = serde_json::from_str::<Vec<Tech>>(BUILTIN_TECHS) {
-            return Ok(TechList {
-                techs: list,
-                source: "builtin".to_string(),
-                note: "Нет связи с GitHub и нет сохранённого списка — использован список, вшитый в программу; новые инженеры появятся при подключении к интернету.".to_string(),
-            });
+    if cached.is_some() || builtin.is_some() {
+        let mut list = builtin.clone().unwrap_or_default();
+        if let Some(c) = &cached {
+            for t in c {
+                match list.iter_mut().find(|x| x.id == t.id) {
+                    Some(existing) => *existing = t.clone(),
+                    None => list.push(t.clone()),
+                }
+            }
         }
+        let (source, note) = if cached.is_some() {
+            ("cache", "Нет связи с GitHub — использован сохранённый список (вместе со вшитым); недавно добавленных инженеров в нём может не быть.")
+        } else {
+            ("builtin", "Нет связи с GitHub и нет сохранённого списка — использован список, вшитый в программу; новые инженеры появятся при подключении к интернету.")
+        };
+        return Ok(TechList { techs: list, source: source.to_string(), note: note.to_string() });
     }
     Err("Нет сети и нет ранее сохранённого списка инженеров. Подключите станцию к интернету хотя бы один раз.".to_string())
 }

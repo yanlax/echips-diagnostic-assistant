@@ -1,8 +1,8 @@
 // Отправка отчётов администратору: после автопрогона и при ручном экспорте
 // приложение кладёт JSON прямо в приватный репозиторий отчётов
 // (yanlax/echips-reports) через GitHub Contents API, по структуре
-// <инженер>/<дата диагностики>/<время>_<серийник>_<auto|manual>.json
-// и рядом такой же .pdf.
+// <инженер>/<дата диагностики>/<время начала>_<серийник>.json и рядом .pdf;
+// отчёт одного прогона обновляется в тех же файлах (без дубликатов).
 //
 // Токен вшивается в exe при сборке из секрета GitHub Actions
 // ECHIPS_REPORTS_TOKEN (в публичном коде его нет). Это осознанный компромисс
@@ -48,31 +48,59 @@ fn client() -> Result<reqwest::Client, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Кладёт один файл в репозиторий. 422 («файл уже есть») считаем успехом: так
-/// повторная отправка после частичного сбоя (JSON ушёл, PDF нет) не плодит
-/// дубликаты и не застревает.
-async fn put_file(client: &reqwest::Client, path: &str, bytes: &[u8], message: &str) -> Result<(), String> {
+fn contents_url(path: &str) -> String {
     let url_path: Vec<String> = path.split('/').map(|s| urlencoding::encode(s).into_owned()).collect();
-    let url = format!("https://api.github.com/repos/{REPO}/contents/{}", url_path.join("/"));
+    format!("https://api.github.com/repos/{REPO}/contents/{}", url_path.join("/"))
+}
+
+fn map_status(s: u16) -> String {
+    match s {
+        401 => "Токен отправки отчётов недействителен или истёк".to_string(),
+        403 | 404 => "Нет доступа к репозиторию отчётов".to_string(),
+        other => format!("GitHub вернул {other}"),
+    }
+}
+
+/// Кладёт файл в репозиторий; если файл уже есть (отчёт того же прогона
+/// обновился) — заменяет его, передавая sha текущей версии. Так один прогон =
+/// одна пара файлов, без дубликатов.
+async fn put_file(client: &reqwest::Client, path: &str, bytes: &[u8], message: &str) -> Result<(), String> {
+    let url = contents_url(path);
+    let get = client
+        .get(&url)
+        .header("User-Agent", "echips-diagnostic-app")
+        .header("Accept", "application/vnd.github+json")
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .map_err(|e| format!("Нет связи: {e}"))?;
+    let sha: Option<String> = match get.status().as_u16() {
+        200 => get.json::<Value>().await.ok().and_then(|v| v["sha"].as_str().map(|s| s.to_string())),
+        404 => None,
+        other => return Err(map_status(other)),
+    };
+    let mut body = json!({ "message": message, "content": b64_encode(bytes) });
+    if let Some(sha) = sha {
+        body["sha"] = json!(sha);
+    }
     let resp = client
         .put(&url)
         .header("User-Agent", "echips-diagnostic-app")
         .header("Accept", "application/vnd.github+json")
         .bearer_auth(TOKEN)
-        .json(&json!({ "message": message, "content": b64_encode(bytes) }))
+        .json(&body)
         .send()
         .await
         .map_err(|e| format!("Нет связи: {e}"))?;
     match resp.status().as_u16() {
-        200 | 201 | 422 => Ok(()),
-        401 => Err("Токен отправки отчётов недействителен или истёк".to_string()),
-        403 | 404 => Err("Нет доступа к репозиторию отчётов".to_string()),
-        s => Err(format!("GitHub вернул {s}")),
+        200 | 201 => Ok(()),
+        other => Err(map_status(other)),
     }
 }
 
-/// Загружает JSON и PDF отчёта. Имя файла строится из sent_at конверта (а не
-/// из текущего времени) — при повторной отправке из очереди пути те же.
+/// Загружает JSON и PDF отчёта. Путь зависит только от прогона (инженер, дата
+/// и время начала, серийник), а не от момента отправки — повторная отправка
+/// того же прогона (в том числе из очереди) обновляет те же файлы.
 async fn post(client: &reqwest::Client, envelope: &Value) -> Result<(), String> {
     if TOKEN.is_empty() {
         return Err("В этой сборке нет токена отправки отчётов".to_string());
@@ -81,22 +109,13 @@ async fn post(client: &reqwest::Client, envelope: &Value) -> Result<(), String> 
     let serial = safe(report["device_serial"].as_str().unwrap_or(""));
     let engineer = safe(report["engineer"].as_str().unwrap_or(""));
     let kind = safe(envelope["kind"].as_str().unwrap_or(""));
-    let sent = envelope["sent_at"]
+    let started = report["started_at"]
         .as_str()
         .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
         .map(|t| t.with_timezone(&chrono::Local))
         .unwrap_or_else(chrono::Local::now);
-    // Папка дня — дата самой диагностики (начало прогона), а не отправки:
-    // отчёт из очереди, ушедший на следующий день, всё равно ляжет в свой день.
-    let day = report["started_at"]
-        .as_str()
-        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-        .map(|t| t.with_timezone(&chrono::Local))
-        .unwrap_or(sent)
-        .format("%Y-%m-%d")
-        .to_string();
-    // Структура: <инженер>/<дата диагностики>/<время отправки>_<серийник>_<тип>.{json,pdf}
-    let base = format!("{}/{}/{}_{}_{}", engineer, day, sent.format("%H%M%S%3f"), serial, kind);
+    // Структура: <инженер>/<дата диагностики>/<время начала>_<серийник>.{json,pdf}
+    let base = format!("{}/{}/{}_{}", engineer, started.format("%Y-%m-%d"), started.format("%H%M%S"), serial);
     let message = format!(
         "Отчёт: {} / {} ({})",
         safe(report["device_model"].as_str().unwrap_or("")),

@@ -1,9 +1,11 @@
 mod commands;
 mod powershell;
 mod sysutil;
+mod winpe;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    winpe::prepare();
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())

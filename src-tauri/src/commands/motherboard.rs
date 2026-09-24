@@ -102,7 +102,13 @@ fn append_audit_entry(mut entry: AuditEntry) -> Result<AuditEntry, String> {
 }
 
 fn is_valid_serial(v: &str) -> bool {
-    (8..=20).contains(&v.len()) && v.chars().all(|c| c.is_ascii_alphanumeric())
+    // Реальные серийники бывают длинными (26+ символов). Не с дефиса — иначе
+    // утилита примет значение за свой ключ; значения передаются аргументом
+    // процесса без оболочки, инъекции через них невозможны.
+    let mut chars = v.chars();
+    (4..=40).contains(&v.len())
+        && chars.next().map_or(false, |c| c.is_ascii_alphanumeric())
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
 }
 
 fn is_valid_uuid(v: &str) -> bool {
@@ -276,7 +282,7 @@ pub fn write_smbios_identity(
         return Err("Не указан номер наряда.".to_string());
     }
     if !is_valid_serial(&new_serial) {
-        return Err("Серийный номер должен быть 8–20 латинскими буквами/цифрами.".to_string());
+        return Err("Серийный номер: 4–40 символов — латинские буквы, цифры, . _ - (не с дефиса).".to_string());
     }
     if !is_valid_uuid(&new_uuid) {
         return Err("UUID должен быть в формате 8-4-4-4-12.".to_string());

@@ -241,7 +241,8 @@ function loadDevice(){
 }
 
 /* ---------- действия ---------- */
-function isValidSerial(v){ return v.length>=8 && v.length<=20 && /^[A-Za-z0-9]+$/.test(v); }
+/* Реальные серийники бывают длинными (напр. BM156ULRH003110125121000097 — 26 символов); лимит 8–20 не давал записать. */
+function isValidSerial(v){ return /^[A-Za-z0-9][A-Za-z0-9._-]{3,39}$/.test(v); }
 function isValidUuid(v){ return /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/.test(v); }
 
 function stopSensorPoll(){
@@ -300,7 +301,7 @@ var A = {
       else if (c.kind==='fans') A.fanTest(false);
     }
   },
-  reset:function(){ _icache = {}; S.detail = {}; A.autoOff(); S.rm.log=[]; S.results={}; S.comments={}; S.keys={}; S.snapshot=false; S.reportSummary=''; render(); },
+  reset:function(){ _icache = {}; S.detail = {}; A.autoOff(); S.rm.log=[]; S.results={}; S.comments={}; S.keys={}; S.snapshot=false; S.reportSummary=''; S.startedAt = new Date().toISOString(); S.sentHash = null; render(); },
   press:function(id){ S.keys[id]=true; render(); },
   kbReset:function(){ S.keys={}; S.kstat={}; S.lastUnknown=null; render(); },
   nextFill:function(){ S.fill=(S.fill+1)%FILLS.length; render(); paintFill(); },
@@ -389,6 +390,7 @@ var A = {
     // порядок внутри каждой группы как в профиле, состав не меняется.
     ids = ids.filter(function(id){ return isInteractive(id); }).concat(ids.filter(function(id){ return !isInteractive(id); }));
     S.results={}; S.comments={}; S.keys={}; S.snapshot=false; S.reportSummary='';
+    S.startedAt = new Date().toISOString(); S.sentHash = null;
     S.auto = { on:true, ids:ids, idx:-1, stopped:false, waiting:false, msg:'', cls:'', timer:null };
     A.autoNext();
   },
@@ -400,9 +402,9 @@ var A = {
   },
   autoStop:function(){ A.autoOff(); A.go('dash'); },
   autoReport:function(){
-    var finished = S.auto.on && S.auto.idx >= S.auto.ids.length;
+    var wasAuto = S.auto.on;
     A.autoOff();
-    if (finished) A.reportSubmit('auto');
+    if (wasAuto) A.reportSync('auto');
     A.go('report');
   },
   autoNext:function(){
@@ -1213,7 +1215,7 @@ var A = {
   mbNext:function(){
     var ticket=(S.mb.ticket||'').trim(), serial=(S.mb.serial||'').trim(), uuid=(S.mb.uuid||'').trim();
     if(!ticket || !serial || !uuid){ S.mb.formErr='Заполните все поля.'; render(); return; }
-    if(!isValidSerial(serial)){ S.mb.formErr='Серийный номер: 8–20 латинских букв/цифр.'; render(); return; }
+    if(!isValidSerial(serial)){ S.mb.formErr='Серийный номер: 4–40 символов — латинские буквы, цифры, . _ - (не с дефиса).'; render(); return; }
     if(!isValidUuid(uuid)){ S.mb.formErr='UUID в формате 8-4-4-4-12.'; render(); return; }
     S.mb.formErr=''; S.mb.step='confirm'; render();
   },
@@ -1259,20 +1261,33 @@ var A = {
       })
     };
   },
-  /* Отправка отчёта админу (Rust → Cloudflare Worker → приватный репозиторий
-     отчётов, см. commands/upload.rs). kind: 'auto' (конец автопрогона) или
-     'manual' (ручной экспорт). При отсутствии сети отчёт ждёт в очереди.
-     Ручные экспорты не чаще раза в минуту — TXT+JSON+PDF подряд это один отчёт. */
-  reportSubmit:function(kind){
-    if (kind==='manual' && Date.now()-(S.sentManualAt||0) < 60000) return;
-    if (kind==='manual') S.sentManualAt = Date.now();
-    invoke('submit_report', { kind:kind, report:A.buildReport() }).then(function(r){
-      S.reportSend = /^sent/.test(r) ? 'sent' : 'queued'; render();
-    }).catch(function(){ S.reportSend = 'queued'; render(); });
+  /* Отправка отчёта админу (Rust → приватный репозиторий отчётов, см.
+     commands/upload.rs). Отчёт одного прогона лежит в одном и том же файле и
+     обновляется при изменениях. Шлём только если содержимое изменилось с
+     прошлой отправки (хэш без времени сборки) и в нём есть хоть один
+     результат — поэтому экспорт без правок, повторные клики и периодическая
+     проверка ничего не дублируют. kind: 'auto' (конец автопрогона), 'manual'
+     (экспорт), 'sync' (отдельные тесты вне автопрогона, раз в ~20 с). */
+  reportSync:function(kind){
+    if (!S.engineer) return;
+    if (S.reportBusy){ S.reportAgain = kind; return; }
+    var rep = A.buildReport();
+    if (!rep.results.some(function(r){ return r.status!=='idle'; })) return;
+    var copy = JSON.parse(JSON.stringify(rep)); delete copy.finished_at;
+    sha256Hex(JSON.stringify(copy)).then(function(h){
+      if (h===S.sentHash) return;
+      S.reportBusy = true;
+      return invoke('submit_report', { kind:kind, report:rep }).then(function(r){
+        S.sentHash = h; S.reportSend = /^sent/.test(r) ? 'sent' : 'queued';
+      }).catch(function(){ S.reportSend = 'queued'; }).then(function(){
+        S.reportBusy = false; render();
+        if (S.reportAgain){ var k = S.reportAgain; S.reportAgain = null; A.reportSync(k); }
+      });
+    });
   },
   exportReport:function(kind){
     var report = A.buildReport();
-    A.reportSubmit('manual');
+    A.reportSync('manual');
     var command = kind==='json' ? 'save_report_json' : kind==='pdf' ? 'save_report_pdf' : 'save_report_txt';
     invoke(command, { report: report }).then(function(path){
       S.exported = { kind: kind, path: path }; render();
@@ -3047,7 +3062,7 @@ function screenMb(){
       '<div class="s">UUID '+esc(m.before.uuid)+'</div></div>'+
       '<div class="formgrid" style="margin-top:16px">'+
       '<div class="formfield"><label>Номер наряда</label><input value="'+esc(m.ticket)+'" oninput="echips.mbField(\'ticket\',this.value)" placeholder="Гарантийный случай / наряд"></div>'+
-      '<div class="formfield"><label>Новый серийный номер</label><input value="'+esc(m.serial)+'" oninput="echips.mbField(\'serial\',this.value)" placeholder="8–20 букв/цифр"></div>'+
+      '<div class="formfield"><label>Новый серийный номер</label><input value="'+esc(m.serial)+'" oninput="echips.mbField(\'serial\',this.value)" placeholder="4–40 символов"></div>'+
       '<div class="formfield"><label>Новый UUID</label><input value="'+esc(m.uuid)+'" oninput="echips.mbField(\'uuid\',this.value)" placeholder="8-4-4-4-12"></div>'+
       (m.formErr?'<div class="err" style="margin:-6px 0 12px">'+esc(m.formErr)+'</div>':'')+
       '</div>'+
@@ -3345,13 +3360,12 @@ function renderLock(){
 /* Физическая клавиатура для ввода PIN — работает, только пока открыт
    экран входа (phase 'pin'), чтобы не конфликтовать со слушателем теста
    клавиатуры (тот включён лишь на S.screen==='test' с категорией kb). */
-// PIN-ВХОД ВРЕМЕННО ОТКЛЮЧЁН (на время тестирования) — слушатель клавиш экрана входа:
-// document.addEventListener('keydown', function(e){
-//   if (S.lock.phase!=='pin') return;
-//   if (/^[0-9]$/.test(e.key)){ e.preventDefault(); A.lockDigit(e.key); }
-//   else if (e.key==='Backspace'){ e.preventDefault(); A.lockBackspace(); }
-//   else if (e.key==='Enter'){ e.preventDefault(); A.lockSubmit(); }
-// });
+document.addEventListener('keydown', function(e){
+  if (S.lock.phase!=='pin') return;
+  if (/^[0-9]$/.test(e.key)){ e.preventDefault(); A.lockDigit(e.key); }
+  else if (e.key==='Backspace'){ e.preventDefault(); A.lockBackspace(); }
+  else if (e.key==='Enter'){ e.preventDefault(); A.lockSubmit(); }
+});
 
 /* ---------- админ-панель (Shift+F10) ----------
    Идея пользователя: список всех IPC-вызовов (invoke → Rust) с результатом,
@@ -3389,18 +3403,8 @@ document.addEventListener('keydown', function(e){
 document.addEventListener('DOMContentLoaded', function(){
   loadDevice();
   render();
-  // PIN-ВХОД ВРЕМЕННО ОТКЛЮЧЁН на время тестирования: программа сразу открывается
-  // под администратором Максимом. Чтобы вернуть вход по PIN для всех сервисов —
-  // раскомментировать lockInit() и слушатель клавиш выше, убрать блок «автовход»
-  // и раскомментировать #lock-overlay в index.html.
-  // lockInit();
-  // --- автовход (только на время тестирования) ---
-  S.engineer = { id:'maksim', name:'Максим', role:'admin' };
-  S.lock.phase = 'unlocked';
-  // Список инженеров нужен экрану «+ добавить инженера» (это не вход, а управление списком).
-  invoke('fetch_techs').then(function(list){ S.lock.techs = list || []; render(); }).catch(function(){});
-  render();
-  // --- конец автовхода ---
+  lockInit();
   invoke('flush_report_queue').catch(function(){});
+  setInterval(function(){ if (!S.auto.on) A.reportSync('sync'); }, 20000);
 });
 })();

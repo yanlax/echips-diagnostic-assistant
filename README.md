@@ -396,6 +396,30 @@ src/logo.png, src/fonts/        логотип и локальные шрифт�
    нельзя достоверно увидеть без надёжного чтения частот/температур,
    которых нет (см. п.3).
 
+## Работа в WinPE
+
+Окно приложения — Edge WebView2, а в WinPE его нет (ошибка «Could not find the
+WebView2 Runtime»). Приложение умеет работать с **переносимой копией**
+WebView2, лежащей рядом с exe:
+
+1. Скачайте с https://developer.microsoft.com/microsoft-edge/webview2 раздел
+   **Fixed Version** (x64) — файл `Microsoft.WebView2.FixedVersionRuntime.<версия>.x64.cab`.
+2. Распакуйте: `expand -F:* Microsoft.WebView2.FixedVersionRuntime.*.cab .` — получится папка
+   `Microsoft.WebView2.FixedVersionRuntime.<версия>.x64` с `msedgewebview2.exe`.
+3. Положите её **рядом с `Echips-Hardware-Check.exe`** (любая папка, в имени которой есть
+   `webview2`). Приложение само найдёт её при старте (`src-tauri/src/winpe.rs`).
+   Это работает и на обычной Windows без Edge.
+
+В самом WinPE приложение дополнительно: подставляет временную папку вместо отсутствующего
+`%LOCALAPPDATA%` и запускает браузер без песочницы и GPU (`--no-sandbox --disable-gpu`).
+Определяется по `X:\Windows\System32\winpeshl.exe`.
+
+Нужные компоненты образа WinPE (Windows ADK, `Add-WindowsPackage`): **WinPE-WMI**,
+**WinPE-NetFX**, **WinPE-Scripting**, **WinPE-PowerShell**, **WinPE-StorageWMI**,
+**WinPE-DismCmdlets** — почти все проверки идут через PowerShell/WMI. Запуск от администратора
+(в WinPE это и так так). Не проверено на реальном WinPE; чего в PE нет физически
+(Проводник, Windows Update, часть драйверов) — соответствующие проверки покажут ошибку.
+
 ## Сборка
 
 Собирается только на Windows (или через CI) — код использует

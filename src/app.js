@@ -758,13 +758,27 @@ var A = {
   setStage:function(v){ S.repairStage = S.repairStage===v ? '' : v; renderStageBtns(); },
   setIntake:function(v){ S.intake = String(v||'').replace(/\D/g,'').slice(0,6); var el=document.getElementById('intake-input'); if(el && el.value!==S.intake) el.value=S.intake; },
   profKey:function(v){ (S.profSave = S.profSave || {}).key = v; },
+  profBios:function(v){ (S.profSave = S.profSave || {}).bios = !!v; },
+  profMaxT:function(v){ (S.profSave = S.profSave || {}).maxT = v; },
   profSave:function(){
     var P = S.profSave; if (!P || P.busy || !S.hw) return;
     var key = (P.key||'').trim();
     if (!key){ P.err = 'Укажите ключ модели.'; P.msg=''; render(); return; }
     var e = profileFromHw(S.hw);
     P.busy = true; P.err = ''; P.msg = ''; render();
-    invoke('profiles_save_model', { key:key, profile:{ name:key, expect:e } }).then(function(f){
+    // Сохраняем поверх существующего профиля модели: прочие поля (клавиатура, подсказки, пороги) не теряются
+    var ex = ((window.ECHIPS_PROFILES||{}).models||{})[key] || {}, np = {}, ee = {};
+    Object.keys(ex).forEach(function(k){ np[k] = ex[k]; });
+    Object.keys(ex.expect||{}).forEach(function(k){ ee[k] = ex.expect[k]; });
+    Object.keys(e).forEach(function(k){ ee[k] = e[k]; });
+    if (P.bios && S.hw.bios_version){
+      var list = (ee.biosAny || (ee.biosContains ? [ee.biosContains] : [])).slice();
+      if (list.indexOf(S.hw.bios_version)<0) list.push(S.hw.bios_version);
+      ee.biosAny = list; delete ee.biosContains;
+    }
+    np.name = np.name || key; np.expect = ee;
+    var mt = parseFloat(P.maxT); if (mt>=60 && mt<=110) np.maxTempC = mt;
+    invoke('profiles_save_model', { key:key, profile:np }).then(function(f){
       applyRemoteProfiles(f); P.msg = 'Эталон «'+key+'» сохранён в data/profiles.json — теперь действует на всех ноутбуках.';
     }).catch(function(err){ P.err = typeof err==='string' ? err : 'Не удалось сохранить эталон'; }).then(function(){ P.busy=false; render(); });
   },
@@ -1647,8 +1661,9 @@ function sysReport(hw){
     if (bd && md && bd.indexOf(md)<0 && md.indexOf(bd)<0) warn.push('модель устройства ('+S.device.model+') и плата ('+hw.board+') не совпадают');
   }
   warn.forEach(function(w){ lines.push('⚠ '+w); });
+  var biosLow = String(hw.bios_version||'').toLowerCase(), biosList = (e.biosAny && e.biosAny.length) ? e.biosAny : (e.biosContains ? [e.biosContains] : []);
   chk('BIOS', (hw.bios_version||'—')+(hw.bios_date?' от '+hw.bios_date:''),
-    e.biosContains ? (hw.bios_version||'').toLowerCase().indexOf(String(e.biosContains).toLowerCase())>=0 : null, e.biosContains);
+    biosList.length ? biosList.some(function(b){ return biosLow.indexOf(String(b).toLowerCase())>=0; }) : null, biosList.length ? biosList.join(' / ') : '');
   chk('Тип корпуса', hw.is_laptop ? 'ноутбук' : 'настольный ПК / другое', null);
   // справочно: TPM и Secure Boot вердикт не меняют (нет ≠ «не пройдено»)
   chk('TPM', hw.tpm || 'н/д', null);
@@ -2060,13 +2075,22 @@ function kbLabel(id){
 }
 /* Необязательные клавиши: Insert и медиа-ряд есть не на всех ноутбуках (часто это Fn-комбинации) —
    не считаются недобором в «нажато N из M», но остаются в списке проверки. */
-function kbOptional(id){ return id.indexOf('m:')===0 || kbLabel(id)==='Ins'; }
+function kbGroup(id){ return id.indexOf('n:')===0 ? 'numpad' : id.indexOf('m:')===0 ? 'media' : kbLabel(id)==='Ins' ? 'insert' : ''; }
+/* Режим группы клавиш в профиле модели: profile.keyboard = { numpad, insert, media } = 'required' | 'optional' | 'absent'
+   (по умолчанию: цифровой блок обязателен, Insert и медиа-ряд необязательны; 'absent' — клавиш нет, не показываются). */
+function kbMode(id){
+  var g = kbGroup(id); if (!g) return 'required';
+  var m = (profile().keyboard || {})[g];
+  return m || (g==='numpad' ? 'required' : 'optional');
+}
+function kbOptional(id){ return kbMode(id)==='optional'; }
+function kbAbsent(id){ return kbMode(id)==='absent'; }
 function kbAllIds(){
   var ids = [];
   KEYROWS.forEach(function(row,ri){ row.forEach(function(l,ki){ ids.push(ri+':'+ki); }); });
   NUMPAD.forEach(function(k){ ids.push('n:'+k[0]); });
   MEDIA.forEach(function(k){ ids.push('m:'+k[0]); });
-  return ids;
+  return ids.filter(function(i){ return !kbAbsent(i); });
 }
 function kbSummaryLines(){
   var ids = kbAllIds(), req = ids.filter(function(i){ return !kbOptional(i); }), opt = ids.filter(kbOptional);
@@ -2211,20 +2235,21 @@ function keyCls(id){
 }
 function keyBadge(id){ var k = S.kstat[id]; return k && k.n>1 ? '<b class="kcnt">×'+k.n+'</b>' : ''; }
 function fieldKeyboard(){
-  var pressed = Object.keys(S.keys).length, total = NUMPAD.length + MEDIA.length;
-  KEYROWS.forEach(function(r){ total += r.length; });
+  var allIds = kbAllIds(), reqIds = allIds.filter(function(i){ return !kbOptional(i); });
+  var pressed = reqIds.filter(function(i){ return S.keys[i]; }).length, total = reqIds.length;
   var is = kbIssues();
   var main = '<div class="kbrows">'+ KEYROWS.map(function(row,ri){
       return '<div class="kbrow">'+ row.map(function(label,ki){
         var id = ri+':'+ki;
+        if (kbAbsent(id)) return '';
         return '<div class="'+keyCls(id)+'" style="flex:'+(WIDE[label]||1)+' 1 0" onclick="echips.press(\''+id+'\')">'+esc(label)+keyBadge(id)+'</div>';
       }).join('') +'</div>';
     }).join('') +'</div>';
-  var num = '<div class="numpad">'+ NUMPAD.map(function(k){
+  var num = kbAbsent('n:NumLock') ? '' : '<div class="numpad">'+ NUMPAD.map(function(k){
       var id = 'n:'+k[0];
       return '<div class="'+keyCls(id)+'" style="grid-row:'+k[2]+(k[4]?' / span '+k[4]:'')+';grid-column:'+k[3]+(k[5]?' / span '+k[5]:'')+'" onclick="echips.press(\''+id+'\')">'+esc(k[1])+keyBadge(id)+'</div>';
     }).join('') +'</div>';
-  var media = '<div class="kbmedia"><span class="kbnote">Fn-комбинации (мультимедиа):</span>'+ MEDIA.map(function(k){
+  var media = kbAbsent('m:AudioVolumeUp') ? '' : '<div class="kbmedia"><span class="kbnote">Fn-комбинации (мультимедиа):</span>'+ MEDIA.map(function(k){
       var id = 'm:'+k[0];
       return '<div class="'+keyCls(id)+' mk" onclick="echips.press(\''+id+'\')">'+esc(k[1])+keyBadge(id)+'</div>';
     }).join('') +'</div>';
@@ -2239,7 +2264,7 @@ function fieldKeyboard(){
     (S.kbWinBlockErr ? '<span class="n" style="color:var(--err)">'+esc(S.kbWinBlockErr)+'</span>' : '')+
     '</div>'+
     '<div class="kbmeta"><span>RAW INPUT · нажмите каждую клавишу на ноутбуке</span>'+
-    '<span>нажато '+pressed+' из '+total+' · rollover '+(pressed>3?'n-key ok':'—')+'</span></div>'+
+    '<span>нажато '+pressed+' из '+total+' (обязательных) · rollover '+(pressed>3?'n-key ok':'—')+'</span></div>'+
     '<div class="kbboth">'+main+num+'</div>'+media+
     '<div class="kbnote">'+(st.length ? st.join(' · ')+' · ' : '')+'на клавише ×N — число нажатий (видно повторные нажатия); жёлтая рамка — дребезг (два срабатывания быстрее 25 мс); красная — клавиша нажата дольше 3 с (залипание). '+
     'Автоповтор при удержании: '+rep+' клавиш.'+(S.lastUnknown?' Не найдена в раскладке: '+esc(S.lastUnknown)+'.':'')+
@@ -2335,12 +2360,14 @@ function profileFromHw(hw){
 }
 function sysProfilePanel(){
   if (!isAdmin() || !S.hw) return '';
-  var P = S.profSave || (S.profSave = { key:'', msg:'', err:'', busy:false });
+  var P = S.profSave || (S.profSave = { key:'', msg:'', err:'', busy:false, maxT:'', bios:false });
   if (!P.key && S.device) P.key = cleanSmbios(S.device.model) || '';
   var e = profileFromHw(S.hw), known = profile().name!=='Стандартный';
   return '<div class="actpanel"><div class="k">Эталон модели (админ)</div>'+
     '<div class="kbnote" style="margin:6px 0">'+(known ? 'Для этой модели профиль уже есть: «'+esc(profile().name)+'». Сохранение заменит его. ' : 'Профиля для этой модели нет. ')+
     'Будет записано: процессор «'+esc(e.cpu)+'», ОЗУ '+e.ramGb+' ГБ, системный диск '+e.diskGb+' ГБ.</div>'+
+    '<div class="runrow" style="margin-bottom:8px"><label class="kbnote"><input type="checkbox" '+(P.bios?'checked ':'')+'onclick="echips.profBios(this.checked)"> добавить текущую версию BIOS ('+esc(S.hw.bios_version||'—')+') в допустимые</label>'+
+    '<input class="search-input" style="max-width:190px" type="number" min="60" max="110" value="'+esc(P.maxT)+'" placeholder="порог темп., °C (сейчас '+(profile().maxTempC||95)+')" oninput="echips.profMaxT(this.value)"></div>'+
     '<div class="runrow"><input class="search-input" style="max-width:260px" value="'+esc(P.key)+'" placeholder="ключ модели, например NB101A" oninput="echips.profKey(this.value)">'+
     '<button class="btn btn-ghost" onclick="echips.profSave()" '+(P.busy?'disabled':'')+'>'+(P.busy?'Сохранение…':'Сохранить эталон в git')+'</button></div>'+
     (P.msg?'<div class="kbnote" style="margin-top:8px;color:var(--ok)">'+esc(P.msg)+'</div>':'')+
@@ -2820,6 +2847,14 @@ function fieldMem(){
   return out+'</div>';
 }
 
+/* Подсказка «что делать», если тест не пройден (автооценка или вердикт техника). Тексты — profile().hints,
+   поэтому правятся в data/profiles.json без пересборки. */
+function hintFor(id){ var H = profile().hints || {}; return H[id] || ''; }
+function hintBox(id){
+  var d = S.detail[id], failed = S.results[id]==='fail' || (d && d.auto && d.auto.status==='fail') || (S.cat===id && S.verdict && S.verdict.status==='fail');
+  var t = failed ? hintFor(id) : '';
+  return t ? '<div class="hintbox"><b>Что делать:</b> '+esc(t)+'</div>' : '';
+}
 function screenTest(){
   var c = cat(), field = '';
   if(c.kind==='keyboard') field = fieldKeyboard();
@@ -2846,6 +2881,7 @@ function screenTest(){
     '<div class="base">'+c.tag+' · '+c.impl+'</div></div>'+
     '<div class="field">'+field+'</div>'+
     (S.markErr && S.markErr.id===c.id ? '<div class="markerr" id="mark-err">'+esc(S.markErr.text)+'</div>' : '')+
+    hintBox(c.id)+
     '<div class="verdict">'+
       '<input placeholder="Комментарий техника — попадёт в отчёт" value="'+esc(S.comments[c.id]||'')+'" oninput="echips.comment(this.value)">'+
       '<button class="btn btn-ghost" onclick="echips.mark(\'na\')" title="Такого узла нет в этой модели (например, тачпад на настольном ПК)">Не применимо</button>'+
@@ -2994,6 +3030,31 @@ function histLabel(ref){
   var m = String(ref.device||'').match(/^(\d{1,6})_(.+)$/);
   return { intake: m ? m[1] : '', serial: m ? m[2] : ref.device };
 }
+/* Числовые показатели теста из строк подробностей: «износ 0%», «температура 41 °C» → { ключ: {v, unit} }.
+   Ключ = название теста + текст перед числом; время/наработка/счётчики включений в сравнение не берём. */
+var HIST_SKIP = /наработк|включен|записан|длительност|время|проход|потоков|модул|замеров|ядер|ошибок чтения:? *0$/i;
+function histMetrics(res){
+  var out = {}, lines = (res.details||[]).concat([res.auto_note||'']);
+  lines.forEach(function(line){
+    String(line).split(/ · |; |, /).forEach(function(part){
+      var m = part.match(/^\s*[•✓✗⚠]?\s*([^\d:=]*?[A-Za-zА-Яа-я][^\d:=]*?)[:=]?\s*(-?\d+(?:[.,]\d+)?)\s*(%|°C|МБ\/с|ГБ\/с|ГБ|МБ|МГц|ГГц|Вт|мс|об\/мин|ГФлопс|Мопс\/с|кадр\/с)?\s*$/);
+      if (!m) return;
+      var key = m[1].replace(/\s+/g,' ').trim(), unit = m[3] || '';
+      if (key.length<3 || HIST_SKIP.test(key)) return;
+      var k = res.title+' · '+key; if (out[k]===undefined) out[k] = { v:parseFloat(m[2].replace(',','.')), unit:unit, key:key, title:res.title };
+    });
+  });
+  return out;
+}
+function histMetricDiff(ra, rb){
+  var A = {}, B = {}, rows = [];
+  (ra.results||[]).forEach(function(r){ var m = histMetrics(r); Object.keys(m).forEach(function(k){ A[k] = m[k]; }); });
+  (rb.results||[]).forEach(function(r){ var m = histMetrics(r); Object.keys(m).forEach(function(k){ B[k] = m[k]; }); });
+  Object.keys(B).forEach(function(k){
+    if (A[k] && A[k].v!==B[k].v) rows.push({ title:B[k].title, key:B[k].key, a:A[k].v, b:B[k].v, unit:B[k].unit || A[k].unit });
+  });
+  return rows;
+}
 function histSummary(rep){
   var c = { pass:0, fail:0, na:0, idle:0 };
   (rep.results||[]).forEach(function(r){ c[r.status] = (c[r.status]||0)+1; });
@@ -3032,6 +3093,13 @@ function screenHistory(){
       '<div class="cmpgrid"><div>'+histHeader(A_)+'</div><div>'+histHeader(B_)+'</div></div>'+
       (head.length ? '<div class="kbnote" style="margin-top:10px">Отличия в заголовке: '+head.map(esc).join(' · ')+'</div>' : '')+
       '<div class="kbnote" style="margin-top:10px">Изменилось тестов: '+changed.length+' из '+rows.length+' (тесты «не проверено» в одном из отчётов не сравниваются)</div>'+
+      (function(){
+        var md = histMetricDiff(ra, rb);
+        return md.length ? '<div class="kbnote" style="margin-top:12px">Изменившиеся показатели ('+md.length+')</div><div class="smtable" style="margin-top:6px">'+md.slice(0,60).map(function(x){
+          var d = x.b - x.a, arrow = d>0 ? '▲' : '▼';
+          return '<div class="smr nv"><span>'+esc(x.title)+' · '+esc(x.key)+'</span><span class="mono">'+x.a+' → '+x.b+' '+esc(x.unit)+' '+arrow+'</span></div>';
+        }).join('')+'</div>' : '';
+      })()+
       '<div class="smtable" style="margin-top:8px"><div class="smh nv"><span>Тест</span><span>Старый → новый</span></div>'+
       rows.filter(function(x){ return x.changed || (x.a&&x.a.status==='fail') || (x.b&&x.b.status==='fail'); }).map(function(x){
         var sa = x.a ? HIST_ST[x.a.status] : '—', sb = x.b ? HIST_ST[x.b.status] : '—';

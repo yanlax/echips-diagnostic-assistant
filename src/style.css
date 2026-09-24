@@ -667,3 +667,5 @@ h1.title{font-family:var(--grotesk);font-size:27px;font-weight:600;color:var(--t
 .stagebtns button.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-hi)}
 .stagebadge{font-family:var(--mono);font-size:10px;padding:1px 6px;border-radius:6px;border:1px solid var(--line-strong)}
 .stagebadge.before{color:var(--cool)}.stagebadge.after{color:var(--ok)}
+
+.hintbox{margin-top:10px;padding:10px 12px;border-radius:9px;border:1px solid var(--accent-line);background:var(--accent-soft);font-size:12.5px;line-height:1.45;color:var(--text-2)}

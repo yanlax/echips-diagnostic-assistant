@@ -756,6 +756,10 @@ var A = {
   /* Номер приёмки (левое меню): только цифры, до 6. Меняется путь отчёта → новая отправка. */
   /* Этап ремонта: «До ремонта» / «После ремонта» (повторный клик снимает выбор) — пишется в отчёт и в имя файла,
      вкладка «История» по нему сама находит пару для сравнения. */
+  sendNow:function(){
+    var b = document.getElementById('queue-send'); if (b) b.textContent = '…';
+    invoke('flush_report_queue').catch(function(){}).then(function(){ S.sentHash = null; A.reportSync('sync'); setTimeout(function(){ refreshQueue(); if (b) b.textContent = 'отправить'; }, 2500); });
+  },
   setStage:function(v){ S.repairStage = S.repairStage===v ? '' : v; renderStageBtns(); },
   setIntake:function(v){ S.intake = String(v||'').replace(/\D/g,'').slice(0,6); var el=document.getElementById('intake-input'); if(el && el.value!==S.intake) el.value=S.intake; },
   profKey:function(v){ (S.profSave = S.profSave || {}).key = v; },
@@ -1528,7 +1532,7 @@ var A = {
       return invoke('submit_report', { kind:kind, report:rep }).then(function(r){
         S.sentHash = h; S.reportSend = /^sent/.test(r) ? 'sent' : 'queued';
       }).catch(function(){ S.reportSend = 'queued'; }).then(function(){
-        S.reportBusy = false; render();
+        S.reportBusy = false; render(); refreshQueue();
         if (S.reportAgain){ var k = S.reportAgain; S.reportAgain = null; A.reportSync(k); }
       });
     });
@@ -1987,11 +1991,24 @@ function fetchCategory(kind){
 }
 
 /* ---------- сайдбар ---------- */
+/* Состояние отправки отчётов в левом меню: последняя успешная отправка, очередь, причина неудачи */
+function fmtClock(iso){ var d = new Date(iso); return isNaN(d) ? '' : String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); }
+function renderQueue(){
+  var el = document.getElementById('queue-text'), btn = document.getElementById('queue-send'); if (!el) return;
+  var q = S.queue;
+  if (!q){ el.textContent = 'Отчёты: —'; return; }
+  var ok = q.last_ok ? '<span class="ok">отправлены '+esc(fmtClock(q.last_ok))+'</span>' : 'ещё не отправлялись';
+  var wait = q.count>0 ? ' · <span class="bad">в очереди: '+q.count+'</span>' : '';
+  var err = q.last_err && q.count>0 ? '<br><span class="bad">'+esc(String(q.last_err).slice(0,80))+'</span>' : '';
+  el.innerHTML = 'Отчёты: '+ok+wait+err;
+  if (btn) btn.style.display = (q.count>0 || q.last_err) ? '' : 'none';
+}
+function refreshQueue(){ invoke('report_queue_info').then(function(q){ S.queue = q; renderQueue(); }).catch(function(){}); }
 function renderStageBtns(){
   ['before','after'].forEach(function(k){ var b=document.getElementById('stage-'+k); if (b) b.classList.toggle('on', S.repairStage===k); });
 }
 function renderNav(){
-  renderStageBtns();
+  renderStageBtns(); renderQueue();
   var active = { start:'start', drivers:'start', mb:'start', techadmin:'start', dash:'dash', test:'dash', sensors:'sensors', stress:'stress', report:'report', repdetail:'report', history:'history' }[S.screen];
   var c = counts();
   var items = [
@@ -4050,8 +4067,8 @@ document.addEventListener('DOMContentLoaded', function(){
     invoke('fetch_techs').then(function(res){ S.lock.techs = res.techs || []; render(); }).catch(function(){});
     render();
   }
-  invoke('flush_report_queue').catch(function(){});
-  setInterval(function(){ if (!S.auto.on) A.reportSync('sync'); }, 20000);
+  invoke('flush_report_queue').catch(function(){}).then(refreshQueue);
+  setInterval(function(){ if (!S.auto.on) A.reportSync('sync'); refreshQueue(); }, 20000);
   // Отчёты, накопленные без сети, досылаем сами: раз в 3 минуты и сразу при появлении связи.
   setInterval(function(){ invoke('flush_report_queue').catch(function(){}); }, 180000);
   window.addEventListener('online', function(){ invoke('flush_report_queue').catch(function(){}); });

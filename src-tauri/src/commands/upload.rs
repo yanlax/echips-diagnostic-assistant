@@ -284,6 +284,46 @@ pub async fn fetch_report(path: String) -> Result<Value, String> {
     serde_json::from_str(&text).map_err(|e| format!("Отчёт повреждён: {e}"))
 }
 
+/// Состояние отправки отчётов: файлы `reports_last_ok.txt` / `reports_last_err.txt` рядом с очередью
+/// (время последней успешной отправки и причина последней неудачи) — для строки в левом меню.
+fn state_path(name: &str) -> PathBuf {
+    let q = queue_dir();
+    q.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from(".")).join(name)
+}
+
+fn note_ok() {
+    let _ = std::fs::create_dir_all(queue_dir().parent().unwrap_or(std::path::Path::new(".")));
+    let _ = std::fs::write(state_path("reports_last_ok.txt"), chrono::Local::now().to_rfc3339());
+    let _ = std::fs::remove_file(state_path("reports_last_err.txt"));
+}
+
+fn note_err(reason: &str) {
+    let _ = std::fs::create_dir_all(queue_dir().parent().unwrap_or(std::path::Path::new(".")));
+    let _ = std::fs::write(state_path("reports_last_err.txt"), reason);
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct QueueInfo {
+    /// сколько отчётов ждёт отправки
+    pub count: usize,
+    /// время последней успешной отправки (RFC3339) или пусто
+    pub last_ok: String,
+    /// причина последней неудачи (пусто, если после неё была успешная отправка)
+    pub last_err: String,
+}
+
+#[tauri::command(async)]
+pub fn report_queue_info() -> QueueInfo {
+    let count = std::fs::read_dir(queue_dir())
+        .map(|rd| rd.filter_map(|e| e.ok()).filter(|e| e.path().extension().map_or(false, |x| x == "json")).count())
+        .unwrap_or(0);
+    QueueInfo {
+        count,
+        last_ok: std::fs::read_to_string(state_path("reports_last_ok.txt")).unwrap_or_default().trim().to_string(),
+        last_err: std::fs::read_to_string(state_path("reports_last_err.txt")).unwrap_or_default().trim().to_string(),
+    }
+}
+
 /// Отправляет накопленное в очереди; на первой же неудаче останавливается.
 async fn flush(client: &reqwest::Client) -> usize {
     let mut files: Vec<PathBuf> = match std::fs::read_dir(queue_dir()) {
@@ -301,11 +341,13 @@ async fn flush(client: &reqwest::Client) -> usize {
             let _ = std::fs::remove_file(&path);
             continue;
         };
-        if post(client, &body).await.is_err() {
+        if let Err(reason) = post(client, &body).await {
+            note_err(&reason);
             break;
         }
         let _ = std::fs::remove_file(&path);
         sent += 1;
+        note_ok();
     }
     sent
 }
@@ -323,10 +365,12 @@ pub async fn submit_report(kind: String, report: Value) -> Result<String, String
     let client = client()?;
     match post(&client, &envelope).await {
         Ok(()) => {
+            note_ok();
             flush(&client).await;
             Ok("sent".to_string())
         }
         Err(reason) => {
+            note_err(&reason);
             let dir = queue_dir();
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
             let name = format!("{}.json", chrono::Local::now().timestamp_millis());

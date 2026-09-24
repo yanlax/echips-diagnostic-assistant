@@ -91,6 +91,7 @@ pub fn run() {
             commands::techs::techs_remove,
             commands::upload::submit_report,
             commands::upload::flush_report_queue,
+            commands::upload::report_queue_info,
             commands::upload::list_reports,
             commands::upload::fetch_report,
         ])

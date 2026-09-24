@@ -83,7 +83,7 @@ var FILLS = [
 ];
 function fillBg(f){ return f.bg || f.color; }
 var KEYROWS = [
-  ['Esc','F1','F2','F3','F4','F5','F6','F7','F8','F9','F10','F11','F12','PrtScr','Del'],
+  ['Esc','F1','F2','F3','F4','F5','F6','F7','F8','F9','F10','F11','F12','PrtScr','Ins','Del'],
   ['`','1','2','3','4','5','6','7','8','9','0','-','=','Bksp'],
   ['Tab','Q','W','E','R','T','Y','U','I','O','P','[',']','\\'],
   ['Caps','A','S','D','F','G','H','J','K','L',';',"'",'Enter'],
@@ -501,6 +501,9 @@ var A = {
   smAuto:function(){
     S.sm.disks = null; S.sm.err = null; S.sm.loading = true;
     invoke('get_smart_report').then(function(list){
+      // В автопрогоне — только системный диск; остальные проверяются вручную (вкладка «Категории»).
+      var sysOnly = list.filter(function(d){ return d.is_system; });
+      if (sysOnly.length) list = sysOnly;
       S.sm.disks = list; S.sm.loading = false; S.sm.sel = 0; list.forEach(function(d,k){ if (d.is_system) S.sm.sel = k; }); render();
       recordDetail('smart', { lines: smartLines(list) });
       A.autoApply(judgeSmart(list));
@@ -957,7 +960,7 @@ var A = {
     stopSensorPoll();
     A.hwmRefresh();
     function poll(){
-      invoke('hwmon_snapshot').then(function(sn){ S.hwm.snap = sn; }).catch(function(){});
+      invoke('hwmon_snapshot').then(function(sn){ S.hwm.snap = sn; var gt = gpuHottest(sn); if (gt!=null && !(S.sensorReading && S.sensorReading.gpu)) S.gpuHistory = S.gpuHistory.concat([gt]).slice(-100); }).catch(function(){});
       invoke('get_thermal_reading').then(function(r){
         S.sensorReading = r;
         if (r.available && r.cpu_temp_c!=null){
@@ -1042,7 +1045,30 @@ var A = {
           var why = temps
             ? 'Датчики работают (температур: '+temps+'), но тахометра вентилятора нет: контроллер EC этой модели не отдаёт обороты (это не значит, что вентилятора нет).'
             : 'Датчики температуры и оборотов не найдены.';
-          log(why); log('Оценить охлаждение можно по температуре под нагрузкой (вкладка «Стресс-тест») и на слух.');
+          log(why);
+          // Тахометра нет — в автопрогоне оцениваем охлаждение косвенно: 30 с нагрузки на CPU,
+          // температура и падение частоты (то же правило, что у стресс-теста).
+          if (temps && S.auto.on && !S.st.running && !f.abort){
+            log('Прогрев CPU 30 с: оцениваем охлаждение по температуре под нагрузкой…');
+            var warm = await new Promise(function(resolve){
+              var unl = [], temps30 = [], settled = false;
+              function fin(res){ if (settled) return; settled = true; unl.forEach(function(u){ u(); }); resolve({ res:res, t:temps30 }); }
+              tauriEvent.listen('stress-tick', function(ev){ if (ev.payload.tempC!=null) temps30.push(ev.payload.tempC); }).then(function(u){ unl.push(u); });
+              tauriEvent.listen('stress-done', function(ev){ fin(ev.payload); }).then(function(u){ unl.push(u); });
+              invoke('start_stress', { cfg:{ durationSecs:30, cpu:true, fpu:true, cache:false, memory:false, disk:false, gpu:false, threads:0,
+                memoryPercent:50, diskLetter:'', diskMb:1024, maxTempC: profile().maxTempC || 95 } }).catch(function(){ fin(null); });
+              var guard = setInterval(function(){ if (f.abort){ invoke('stop_stress').catch(function(){}); clearInterval(guard); } if (settled) clearInterval(guard); }, 1000);
+            });
+            if (warm.res){
+              var t0 = warm.t.length ? warm.t[0] : null, tMax = warm.t.length ? Math.max.apply(null, warm.t) : null;
+              log('Прогрев завершён: температура '+(t0!=null ? t0.toFixed(0)+' → макс '+tMax.toFixed(0)+' °C' : 'н/д')+', загрузка CPU '+warm.res.avgLoad.toFixed(0)+'%'+(warm.res.clockAvgMhz ? ', частота '+warm.res.clockMinMhz.toFixed(0)+'–'+warm.res.clockMaxMhz.toFixed(0)+' МГц' : ''));
+              var jv = warm.res.reason==='thermal'
+                ? { status:'fail', note:'Прогрев 30 с остановлен температурной защитой — перегрев (обороты вентилятора датчиками недоступны)' }
+                : (t0==null ? null : judgeStress(warm.res));
+              if (jv) return finish({ status:jv.status, note:'Обороты не читаются; охлаждение по прогреву 30 с: '+jv.note });
+            }
+          }
+          log('Оценить охлаждение можно по температуре под нагрузкой (вкладка «Стресс-тест») и на слух.');
           return finish({ status:'na', note: temps ? 'Обороты вентилятора недоступны: EC не отдаёт тахометр (температуры читаются, оценивайте по стресс-тесту)' : 'Датчики оборотов и температур не найдены' });
         }
         log('Найдено вентиляторов: '+fans.length);
@@ -1474,7 +1500,7 @@ function absent(id, what){
 }
 
 function sysReport(hw){
-  var e = profile().expect || {}, lines = [], bad = [];
+  var e = profile().expect || {}, lines = [], bad = [], warn = [];
   function chk(label, val, ok, exp){
     lines.push((ok===null ? '•' : ok ? '✓' : '✗') + ' ' + label + ': ' + val + (exp!=null && exp!=='' ? ' (ожидается ' + exp + ')' : ''));
     if (ok===false) bad.push(label);
@@ -1499,10 +1525,17 @@ function sysReport(hw){
   chk('Плата', hw.board || '—', null);
   chk('Серийник платы', hw.board_serial || '—', null);
   chk('UUID', hw.system_uuid || '—', null);
+  // Предупреждения (вердикт не меняют): SMBIOS не прошит на заводе / расхождения модели
+  var uu = String(hw.system_uuid||'').toLowerCase();
+  if (!uu || /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(uu) || /^f{8}-f{4}-f{4}-f{4}-f{12}$/.test(uu) || uu==='03000200-0400-0500-0006-000700080009') warn.push('UUID не задан (заглушка производителя BIOS)');
+  if (!hw.board_serial || /^(default string|to be filled|none|n\/a|0+|—)$/i.test(String(hw.board_serial).trim())) warn.push('серийник платы не задан');
+  var bd = String(hw.board||'').toLowerCase().replace(/[^a-z0-9]/g,''), md = S.device ? String(S.device.model||'').toLowerCase().replace(/[^a-z0-9]/g,'') : '';
+  if (bd && md && bd.indexOf(md)<0 && md.indexOf(bd)<0) warn.push('модель устройства ('+S.device.model+') и плата ('+hw.board+') не совпадают');
+  warn.forEach(function(w){ lines.push('⚠ '+w); });
   chk('BIOS', (hw.bios_version||'—')+(hw.bios_date?' от '+hw.bios_date:''),
     e.biosContains ? (hw.bios_version||'').toLowerCase().indexOf(String(e.biosContains).toLowerCase())>=0 : null, e.biosContains);
   chk('Тип корпуса', hw.is_laptop ? 'ноутбук' : 'настольный ПК / другое', null);
-  return { lines:lines, bad:bad };
+  return { lines:lines, bad:bad, warn:warn };
 }
 
 var ACT_ERRORS = {
@@ -1528,13 +1561,16 @@ function fetchCategory(kind){
       var hasExp = Object.keys(profile().expect||{}).length>0;
       return { lines:r.lines, verdict: r.bad.length
         ? { status:'fail', note:'Не совпадает с профилем «'+profile().name+'»: '+r.bad.join(', ') }
-        : { status:'pass', note: hasExp ? 'Железо совпадает с профилем «'+profile().name+'»' : 'Сводка собрана (эталона в профиле нет)' } };
+        : { status:'pass', note: (hasExp ? 'Железо совпадает с профилем «'+profile().name+'»' : 'Сводка собрана (эталона в профиле нет)') + (r.warn.length ? ' · ⚠ '+r.warn.join('; ') : '') } };
     });
   }
   if (kind==='disk'){
     return invokeCached('get_disk_health', {}, 30000).then(function(list){
       var P = profile(), maxWear = P.diskMaxWearPct!=null ? P.diskMaxWearPct : 90, lines = [], bad = [];
       if (!list.length) return { lines:['Физические диски не найдены.'], verdict:{ status:'fail', note:'Диск не обнаружен' } };
+      // В автопрогоне проверяем только системный диск (внешние/добавочные — вручную через «Категории»).
+      var sysOnly = S.auto.on ? list.filter(function(d){ return d.is_system; }) : [];
+      if (sysOnly.length){ lines.push('Автопрогон: проверяется только системный диск (других дисков в системе: '+(list.length-sysOnly.length)+')'); list = sysOnly; }
       list.forEach(function(d){
         lines.push(d.name+' · '+d.size_gb+' ГБ · '+(d.media||'тип не определён')+' · '+(d.bus||'')+(d.is_system?' · системный':''));
         lines.push('    Состояние: '+(d.health||'—')+(d.status?' ('+d.status+')':''));
@@ -1575,15 +1611,20 @@ function fetchCategory(kind){
     });
   }
   if (kind==='drv'){
-    return invoke('list_problem_devices').then(function(list){
+    return invoke('list_problem_devices').then(function(all){
+      // Служебные устройства, которые на ноутбуках показываются «без драйвера» без последствий
+      // (PS/2-эмуляция мыши/клавиатуры при тачпаде на I2C/HID) — в замечания не берём, но пишем в лог.
+      var BENIGN = /PS\/2 (Mouse|Keyboard)|PS\/2-совместим|Standard PS\/2/i;
+      var list = all.filter(function(d){ return !BENIGN.test(d.friendly_name||''); });
+      var skipped = all.filter(function(d){ return BENIGN.test(d.friendly_name||''); }).map(function(d){ return d.friendly_name+' (служебное, не считается)'; });
       var names = list.map(function(d){ return d.friendly_name + (d['class'] ? ' ('+d['class']+')' : ''); });
       return {
-        lines: list.length
+        lines: (list.length
           ? names.concat(['Установить драйверы можно во вкладке «Установка драйверов» — здесь только проверка, без установки.'])
-          : ['Устройств без драйверов не найдено (Диспетчер устройств: ошибок нет).'],
+          : ['Устройств без драйверов не найдено (Диспетчер устройств: ошибок нет).']).concat(skipped),
         verdict: list.length
           ? { status:'fail', note:'Без драйверов: '+list.length+' устройств — '+names.slice(0,3).join(', ')+(list.length>3?' и ещё '+(list.length-3):'')+'. Установить можно во вкладке «Установка драйверов»' }
-          : { status:'pass', note:'Устройств без драйверов не найдено' }
+          : { status:'pass', note:'Устройств без драйверов не найдено'+(skipped.length?' (служебных пропущено: '+skipped.length+')':'') }
       };
     });
   }
@@ -1743,6 +1784,10 @@ function fetchCategory(kind){
         lines.push('powercfg /batteryreport не вернул данные о ёмкости на этой машине.');
       }
       if (b.cycle_count!=null) lines.push('Циклов заряда: ' + b.cycle_count);
+      if (b.charge_percent!=null && b.charge_percent<20){
+        lines.push('⚠ Заряд ниже 20% — оценка ёмкости и поведения батареи при таком заряде неточна, повторите после подзарядки.');
+        if (verdict) verdict = { status:verdict.status, note:verdict.note+' · ⚠ заряд '+b.charge_percent+'% (<20%)' };
+      }
       return { lines:lines, verdict:verdict };
     });
   }
@@ -1840,7 +1885,7 @@ var NUMPAD = [
 ];
 var MEDIA = [['AudioVolumeUp','Гром. +'],['AudioVolumeDown','Гром. −'],['AudioVolumeMute','Mute'],['MediaPlayPause','Play/Pause'],['MediaTrackNext','След.'],['MediaTrackPrevious','Пред.']];
 var CODEMAP = (function(){
-  var named = { 'Esc':['Escape'],'Del':['Delete'],'PrtScr':['PrintScreen'],'`':['Backquote'],'-':['Minus'],'=':['Equal'],'Bksp':['Backspace'],'Tab':['Tab'],
+  var named = { 'Esc':['Escape'],'Del':['Delete'],'Ins':['Insert'],'PrtScr':['PrintScreen'],'`':['Backquote'],'-':['Minus'],'=':['Equal'],'Bksp':['Backspace'],'Tab':['Tab'],
     '[':['BracketLeft'],']':['BracketRight'],'\\':['Backslash'],'Caps':['CapsLock'],';':['Semicolon'],"'":['Quote'],
     'Enter':['Enter'],',':['Comma'],'.':['Period'],'/':['Slash'],
     'Win':['MetaLeft','MetaRight'],'Space':['Space'],'←':['ArrowLeft'],'↑':['ArrowUp'],'↓':['ArrowDown'],'→':['ArrowRight'] };
@@ -1894,7 +1939,8 @@ function kbSummaryLines(){
   var is = kbIssues(), lines = ['Нажато разных клавиш: '+Object.keys(S.keys).length+' из '+total];
   if (is.chat.length) lines.push('Дребезг (двойное срабатывание): '+is.chat.map(kbLabel).join(', '));
   if (is.stuck.length) lines.push('Залипание (нажата >3 с): '+is.stuck.map(kbLabel).join(', '));
-  var many = Object.keys(S.kstat).filter(function(id){ return S.kstat[id].rep>0; }).map(kbLabel);
+  // у модификаторов автоповтор при удержании — норма, в замечания не выносим
+  var many = Object.keys(S.kstat).filter(function(id){ return S.kstat[id].rep>0 && ['Shift','Ctrl','Alt','Win','Caps'].indexOf(kbLabel(id))<0; }).map(kbLabel);
   if (many.length) lines.push('Автоповтор при удержании: '+many.join(', '));
   if (S.lastUnknown) lines.push('Клавиша не в раскладке: '+S.lastUnknown);
   return lines;
@@ -2704,16 +2750,51 @@ function fieldFans(){
     (f.res ? '<div class="kbnote" style="margin-top:6px">Автооценка: '+({pass:'пройден',fail:'не пройден',na:'не применимо'}[f.res.status])+' — '+esc(f.res.note)+'</div>' : '')+'</div>';
 }
 
+/* Видеоадаптеры из снимка LibreHardwareMonitor (NVIDIA, AMD, Intel — в т.ч. встроенные). */
+function gpuFromSnap(sn){
+  if (!sn || !sn.sensors) return [];
+  var by = {}, order = [];
+  sn.sensors.forEach(function(x){ if (/^Gpu/.test(x.hwType)){ if (!by[x.hw]){ by[x.hw] = { name:x.hw, hwType:x.hwType, s:[] }; order.push(x.hw); } by[x.hw].s.push(x); } });
+  return order.map(function(n){
+    var g = by[n], s = g.s;
+    function pick(type, re){ var l = s.filter(function(x){ return x.type===type && (!re || re.test(x.name)); }); return l.length ? l[0].value : null; }
+    function maxOf(type){ var l = s.filter(function(x){ return x.type===type; }).map(function(x){ return x.value; }); return l.length ? Math.max.apply(null, l) : null; }
+    var temp = pick('Temperature', /GPU Core|Core/i); if (temp==null) temp = maxOf('Temperature');
+    var mem = s.filter(function(x){ return /Memory Used/i.test(x.name) && (x.type==='SmallData' || x.type==='Data'); })[0];
+    return { name:g.name, hwType:g.hwType, vendor: /Nvidia/i.test(g.hwType) ? 'NVIDIA' : /Amd/i.test(g.hwType) ? 'AMD' : /Intel/i.test(g.hwType) ? 'Intel' : 'GPU',
+      temp:(temp!=null && temp>0 && temp<150) ? temp : null, load: pick('Load', /GPU Core|D3D 3D|Core/i), power: maxOf('Power'),
+      clockCore: pick('Clock', /GPU Core|Core/i), clockMem: pick('Clock', /Memory/i), memUsed: mem ? mem.value : null, memType: mem ? mem.type : null };
+  });
+}
+function gpuHottest(sn){ var t = gpuFromSnap(sn).map(function(g){ return g.temp; }).filter(function(v){ return v!=null; }); return t.length ? Math.max.apply(null, t) : null; }
 function screenSensors(){
   var r = S.sensorReading;
   var cpuVal = r && r.available ? r.cpu_temp_c.toFixed(1) : '—';
   var g = r && r.gpu;
   var rows = [
     { k:'CPU (ACPI)', v:cpuVal, u:'°C', c:'#FF8A00', m: r ? esc(r.note) : 'опрос…' },
-    { k:'GPU (nvidia-smi)', v: g ? g.temp_c.toFixed(0) : '—', u:'°C', c:'#6E8FA8',
-      m: g ? esc(g.name)+(g.fan_pct!=null?' · вентилятор '+g.fan_pct+'%':'')+(g.power_w!=null?' · '+g.power_w+' Вт':'')+(g.util_pct!=null?' · загрузка '+g.util_pct+'%':'')
-           : (r ? 'Видеокарта NVIDIA не найдена или драйвер без nvidia-smi. Для AMD/Intel данных нет.' : 'опрос…') }
   ];
+  var gpus = gpuFromSnap(S.hwm && S.hwm.snap);
+  if (gpus.length){
+    gpus.forEach(function(g){
+      var integ = g.vendor==='Intel' || (g.vendor==='AMD' && g.temp==null);
+      var parts = [];
+      if (g.load!=null) parts.push('загрузка '+g.load.toFixed(0)+'%');
+      if (g.power!=null && g.power>0) parts.push(g.power.toFixed(1)+' Вт');
+      if (g.clockCore!=null) parts.push(g.clockCore.toFixed(0)+' МГц');
+      if (g.clockMem!=null) parts.push('память '+g.clockMem.toFixed(0)+' МГц');
+      if (g.memUsed!=null) parts.push('видеопамяти занято '+(g.memType==='Data' ? (g.memUsed*1024).toFixed(0) : g.memUsed.toFixed(0))+' МБ');
+      if (g.vendor==='NVIDIA' && r && r.gpu){ if (r.gpu.fan_pct!=null) parts.push('вентилятор '+r.gpu.fan_pct+'%'); }
+      if (g.temp==null) parts.push(integ ? 'встроенная графика: температура в составе CPU (Package)' : 'температура недоступна');
+      rows.push({ k:'GPU · '+g.vendor, v: g.temp!=null ? g.temp.toFixed(0) : '—', u: g.temp!=null ? '°C' : '', c: g.vendor==='NVIDIA' ? '#76B900' : g.vendor==='AMD' ? '#E5484D' : '#4A90E2',
+        m: esc(g.name)+(parts.length ? ' · '+parts.join(' · ') : '') });
+    });
+  } else {
+    var g0 = r && r.gpu;
+    rows.push({ k:'GPU', v: g0 ? g0.temp_c.toFixed(0) : '—', u:'°C', c:'#6E8FA8',
+      m: g0 ? esc(g0.name)+(g0.fan_pct!=null?' · вентилятор '+g0.fan_pct+'%':'')+(g0.power_w!=null?' · '+g0.power_w+' Вт':'')+(g0.util_pct!=null?' · загрузка '+g0.util_pct+'%':'')
+            : (r ? 'Видеоадаптеры не обнаружены датчиками — нужен драйвер PawnIO (запустите датчики ниже).' : 'опрос…') });
+  }
   var grid = '<line x1="0" y1="0" x2="1000" y2="0" stroke="rgba(255,255,255,.06)"></line>'+
     '<line x1="0" y1="150" x2="1000" y2="150" stroke="rgba(255,255,255,.06)"></line>'+
     '<line x1="0" y1="300" x2="1000" y2="300" stroke="rgba(255,255,255,.10)"></line>';
@@ -2736,7 +2817,7 @@ function screenSensors(){
         '<div class="v"><b>'+r2.v+'</b><span>'+r2.u+'</span></div><div class="m">'+r2.m+'</div></div>';
     }).join('') +'</div>'+
     '<div class="chart">'+chart+'</div>'+hwmonPanel()+
-    '<div class="footrow"><span class="txt">Без драйвера PawnIO доступен один ACPI-датчик через WMI (не на всех платах) и GPU NVIDIA через nvidia-smi. Снимок можно приложить к отчёту.</span>'+
+    '<div class="footrow"><span class="txt">Без драйвера PawnIO доступен один ACPI-датчик через WMI (не на всех платах) и GPU NVIDIA через nvidia-smi; с драйвером — все видеоадаптеры (NVIDIA, AMD, Intel, в т.ч. встроенные). Снимок можно приложить к отчёту.</span>'+
     '<button class="btn btn-ghost" onclick="echips.snapshot()">'+(S.snapshot?'Снимок добавлен в отчёт':'Приложить снимок к отчёту')+'</button></div></div>';
 }
 

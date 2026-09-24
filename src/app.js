@@ -295,6 +295,7 @@ var A = {
   go:function(screen,id){
     if(screen==='techadmin' && !isAdmin()) screen='start'; // экран только для администратора (см. isAdmin)
     if(screen==='mb' && !FEATURE_MB) screen='start';
+    if(screen==='history' && !isAdmin()) screen='start';   // история отчётов — только админ
     stopSensorPoll(); stopCamera(); stopAudio();
     if (S.rm.timer){ clearInterval(S.rm.timer); S.rm.timer=null; }
     if (S.kbT){ clearInterval(S.kbT); S.kbT=null; }
@@ -316,6 +317,7 @@ var A = {
     if(screen==='drivers'){ A.drvStart(); }
     if(screen==='mb'){ A.mbReset(); }
     if(screen==='sensors'){ A.sensorsStart(); }
+    if(screen==='history'){ A.histLoad(); }
     render();
   },
   openCat:function(id){
@@ -763,6 +765,35 @@ var A = {
       applyRemoteProfiles(f); P.msg = 'Эталон «'+key+'» сохранён в data/profiles.json — теперь действует на всех ноутбуках.';
     }).catch(function(err){ P.err = typeof err==='string' ? err : 'Не удалось сохранить эталон'; }).then(function(){ P.busy=false; render(); });
   },
+  /* ---- история отчётов (админ): список из echips-reports, просмотр, сравнение двух ---- */
+  histLoad:function(force){
+    var H = S.hist = S.hist || { list:null, loading:false, err:'', q:'', sel:[], view:null, cmp:null, busy:false };
+    if (H.loading || (H.list && !force)) return;
+    H.loading = true; H.err = ''; render();
+    invoke('list_reports').then(function(l){ H.list = l; }).catch(function(e){ H.err = typeof e==='string' ? e : 'Не удалось получить список отчётов'; H.list = []; })
+      .then(function(){ H.loading = false; render(); });
+  },
+  histQ:function(v){ S.hist.q = v; render(); },
+  histPick:function(idx){
+    var H = S.hist, path = H.shown[idx].path, i = H.sel.indexOf(path);
+    if (i>=0) H.sel.splice(i,1); else { H.sel.push(path); if (H.sel.length>2) H.sel.shift(); }
+    render();
+  },
+  histOpen:function(idx){
+    var H = S.hist, path = H.shown[idx].path; H.busy = true; H.err = ''; render();
+    invoke('fetch_report', { path:path }).then(function(env){ H.view = { path:path, env:env }; H.cmp = null; })
+      .catch(function(e){ H.err = typeof e==='string' ? e : 'Не удалось открыть отчёт'; }).then(function(){ H.busy = false; render(); });
+  },
+  histCompare:function(){
+    var H = S.hist; if (H.sel.length!==2) return;
+    H.busy = true; H.err = ''; render();
+    // порядок: старый отчёт слева (по дате/имени файла), новый справа
+    var paths = H.sel.slice().sort();
+    Promise.all(paths.map(function(p){ return invoke('fetch_report', { path:p }); })).then(function(envs){
+      H.cmp = { a:{ path:paths[0], env:envs[0] }, b:{ path:paths[1], env:envs[1] } }; H.view = null;
+    }).catch(function(e){ H.err = typeof e==='string' ? e : 'Не удалось получить отчёты'; }).then(function(){ H.busy = false; render(); });
+  },
+  histBack:function(){ S.hist.view = null; S.hist.cmp = null; render(); },
   batLiveToggle:function(){
     var B = S.batLive;
     B.on = !B.on; clearTimeout(B.t);
@@ -1605,6 +1636,9 @@ function sysReport(hw){
   chk('BIOS', (hw.bios_version||'—')+(hw.bios_date?' от '+hw.bios_date:''),
     e.biosContains ? (hw.bios_version||'').toLowerCase().indexOf(String(e.biosContains).toLowerCase())>=0 : null, e.biosContains);
   chk('Тип корпуса', hw.is_laptop ? 'ноутбук' : 'настольный ПК / другое', null);
+  // справочно: TPM и Secure Boot вердикт не меняют (нет ≠ «не пройдено»)
+  chk('TPM', hw.tpm || 'н/д', null);
+  chk('Secure Boot', hw.secure_boot || 'н/д', null);
   return { lines:lines, bad:bad, warn:warn };
 }
 
@@ -1866,7 +1900,7 @@ function fetchCategory(kind){
 
 /* ---------- сайдбар ---------- */
 function renderNav(){
-  var active = { start:'start', drivers:'start', mb:'start', techadmin:'start', dash:'dash', test:'dash', sensors:'sensors', stress:'stress', report:'report', repdetail:'report' }[S.screen];
+  var active = { start:'start', drivers:'start', mb:'start', techadmin:'start', dash:'dash', test:'dash', sensors:'sensors', stress:'stress', report:'report', repdetail:'report', history:'history' }[S.screen];
   var c = counts();
   var items = [
     { k:'start', label:'Режим', meta:'' },
@@ -1875,6 +1909,7 @@ function renderNav(){
     { k:'stress', label:'Стресс-тест', meta:S.st.running?'···':'' },
     { k:'report', label:'Отчёт', meta:'' }
   ];
+  if (isAdmin()) items.push({ k:'history', label:'История', meta:'' });
   document.getElementById('steps').innerHTML = items.map(function(i){
     return '<div class="step'+(i.k===active?' active':'')+'" onclick="echips.go(\''+i.k+'\')">'+
       '<span class="dot"></span><span class="lbl">'+i.label+'</span><span class="meta">'+i.meta+'</span></div>';
@@ -2921,6 +2956,75 @@ function gpuFromSnap(sn){
   });
 }
 function gpuHottest(sn){ var t = gpuFromSnap(sn).map(function(g){ return g.temp; }).filter(function(v){ return v!=null; }); return t.length ? Math.max.apply(null, t) : null; }
+/* ---------- История отчётов (админ) ---------- */
+var HIST_ST = { pass:'OK', fail:'ОШИБКА', na:'н/п', idle:'—' };
+function histLabel(ref){
+  var m = String(ref.device||'').match(/^(\d{1,6})_(.+)$/);
+  return { intake: m ? m[1] : '', serial: m ? m[2] : ref.device };
+}
+function histSummary(rep){
+  var c = { pass:0, fail:0, na:0, idle:0 };
+  (rep.results||[]).forEach(function(r){ c[r.status] = (c[r.status]||0)+1; });
+  return c;
+}
+function histHeader(env){
+  var r = env.report||{}, c = histSummary(r);
+  return '<div class="card"><div class="k">'+esc(r.device_model||'—')+'</div>'+
+    '<div class="s" style="margin-top:6px">SN '+esc(r.device_serial||'—')+(r.intake ? ' · приёмка/ремонт '+esc(r.intake) : '')+' · инженер '+esc(r.engineer||'—')+(r.run_mode ? ' · режим '+esc(r.run_mode) : '')+'</div>'+
+    '<div class="s">'+esc(r.started_at||'')+' → '+esc(r.finished_at||'')+' · версия '+esc(env.app_version||'?')+' · отправка: '+esc(env.kind||'')+'</div>'+
+    '<div class="s" style="margin-top:6px">пройдено '+c.pass+' · ошибок '+c.fail+' · не применимо '+c.na+' · не проверено '+c.idle+'</div>'+
+    (r.summary_comment ? '<div class="s" style="margin-top:6px">Комментарий: '+esc(r.summary_comment)+'</div>' : '')+'</div>';
+}
+function screenHistory(){
+  var H = S.hist || { list:null, loading:false, err:'', q:'', sel:[], view:null, cmp:null, busy:false };
+  var body;
+  if (H.busy){
+    body = hexSpinner('ЗАГРУЗКА ОТЧЁТА');
+  } else if (H.view){
+    var r = H.view.env.report||{};
+    body = '<div class="headactions" style="margin-bottom:12px"><button class="btn btn-ghost" onclick="echips.histBack()">← к списку</button></div>'+histHeader(H.view.env)+
+      '<div class="smtable" style="margin-top:12px">'+(r.results||[]).filter(function(x){ return x.status!=='idle'; }).map(function(x){
+        return '<div class="smr nv"><span>'+esc(x.title)+'</span><span class="mono">'+HIST_ST[x.status]+(x.auto_note||x.comment ? ' · '+esc(String(x.comment||x.auto_note).slice(0,140)) : '')+'</span></div>';
+      }).join('')+'</div>';
+  } else if (H.cmp){
+    var A_ = H.cmp.a.env, B_ = H.cmp.b.env, ra = A_.report||{}, rb = B_.report||{}, byId = {};
+    (ra.results||[]).forEach(function(x){ byId[x.id] = { a:x }; });
+    (rb.results||[]).forEach(function(x){ (byId[x.id] = byId[x.id] || {}).b = x; });
+    var rows = Object.keys(byId).map(function(id){ var e = byId[id]; return { title:(e.b||e.a).title, a:e.a, b:e.b, changed:(e.a&&e.a.status)!==(e.b&&e.b.status) }; });
+    var changed = rows.filter(function(x){ return x.changed; });
+    var head = [];
+    ['device_model','device_serial','intake','engineer','run_mode'].forEach(function(k){ if ((ra[k]||'')!==(rb[k]||'')) head.push(k+': «'+(ra[k]||'—')+'» → «'+(rb[k]||'—')+'»'); });
+    body = '<div class="headactions" style="margin-bottom:12px"><button class="btn btn-ghost" onclick="echips.histBack()">← к списку</button></div>'+
+      '<div class="cmpgrid"><div>'+histHeader(A_)+'</div><div>'+histHeader(B_)+'</div></div>'+
+      (head.length ? '<div class="kbnote" style="margin-top:10px">Отличия в заголовке: '+head.map(esc).join(' · ')+'</div>' : '')+
+      '<div class="kbnote" style="margin-top:10px">Изменилось тестов: '+changed.length+' из '+rows.length+'</div>'+
+      '<div class="smtable" style="margin-top:8px"><div class="smh nv"><span>Тест</span><span>Старый → новый</span></div>'+
+      rows.filter(function(x){ return x.changed || (x.a&&x.a.status==='fail') || (x.b&&x.b.status==='fail'); }).map(function(x){
+        var sa = x.a ? HIST_ST[x.a.status] : '—', sb = x.b ? HIST_ST[x.b.status] : '—';
+        var note = x.changed && x.b ? String(x.b.comment||x.b.auto_note||'').slice(0,140) : '';
+        return '<div class="smr nv"><span>'+esc(x.title)+(x.changed?' <b style="color:var(--accent)">●</b>':'')+'</span><span class="mono">'+sa+' → '+sb+(note?' · '+esc(note):'')+'</span></div>';
+      }).join('')+'</div>';
+  } else {
+    var q = (H.q||'').toLowerCase().trim(), list = (H.list||[]).filter(function(x){ return !q || (x.device+' '+x.engineer+' '+x.date).toLowerCase().indexOf(q)>=0; });
+    body = '<div class="runrow" style="margin-bottom:10px"><input class="search-input" style="max-width:360px" placeholder="поиск: серийник, приёмка, инженер, дата" value="'+esc(H.q||'')+'" oninput="echips.histQ(this.value)">'+
+      '<button class="btn btn-ghost" onclick="echips.histLoad(true)" '+(H.loading?'disabled':'')+'>Обновить</button>'+
+      '<button class="btn btn-primary" onclick="echips.histCompare()" '+(H.sel.length===2?'':'disabled')+'>Сравнить выбранные ('+H.sel.length+'/2)</button></div>'+
+      (H.err ? '<div class="kbnote" style="color:var(--err);margin-bottom:8px">'+esc(H.err)+'</div>' : '')+
+      (H.loading ? '<div class="kbnote">загрузка списка отчётов…</div>' :
+      '<div class="kbnote" style="margin-bottom:8px">Отчётов: '+list.length+(list.length>200 ? ' (показаны первые 200 — уточните поиск)' : '')+'</div>'+
+      '<div class="smtable"><div class="smh histrow"><span></span><span>Дата</span><span>Инженер</span><span>Приёмка</span><span>Серийный номер</span><span></span></div>'+
+      (H.shown = list.slice(0,200)).map(function(x,i){
+        var d = histLabel(x), on = H.sel.indexOf(x.path)>=0, tm = /^\d{6}/.test(x.file) ? x.file.slice(0,2)+':'+x.file.slice(2,4) : '';
+        return '<div class="smr histrow"><span><input type="checkbox" '+(on?'checked ':'')+'onclick="echips.histPick('+i+')"></span>'+
+          '<span class="mono">'+esc(x.date)+' '+tm+'</span><span>'+esc(x.engineer)+'</span><span class="mono">'+esc(d.intake||'—')+'</span><span class="mono">'+esc(d.serial)+'</span>'+
+          '<span><button class="btn-link" onclick="echips.histOpen('+i+')">открыть</button></span></div>';
+      }).join('')+'</div>');
+  }
+  return '<div class="pane"><div class="head"><div><div class="eyebrow">Только для администратора</div><h1 class="title">История</h1></div></div>'+
+    '<div class="lede">Отчёты из приватного репозитория: открыть, найти по серийнику или приёмке, сравнить два отчёта одного ноутбука (до и после ремонта).</div>'+
+    '<div class="field" style="margin-top:14px">'+body+'</div></div>';
+}
+
 function screenSensors(){
   var r = S.sensorReading;
   var cpuVal = r && r.available ? r.cpu_temp_c.toFixed(1) : '—';
@@ -3573,7 +3677,8 @@ function render(){
     : S.screen==='test' ? screenTest()
     : S.screen==='repdetail' ? screenRepDetail()
     : S.screen==='sensors' ? screenSensors()
-    : S.screen==='stress' ? screenStress() : screenReport();
+    : S.screen==='stress' ? screenStress()
+    : S.screen==='history' ? screenHistory() : screenReport();
   if (isNewView && host.firstElementChild) host.firstElementChild.classList.add('enter');
   if(sel!==null){
     var inp = host.querySelector('input');

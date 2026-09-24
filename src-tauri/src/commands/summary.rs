@@ -80,6 +80,12 @@ pub struct HardwareSummary {
     /// отсутствие батареи и Wi-Fi не считается неисправностью.
     #[serde(default)]
     pub is_laptop: bool,
+    /// TPM: версия спецификации и состояние («2.0 · включён»), пусто/«н/д» — если прочитать не удалось.
+    #[serde(default)]
+    pub tpm: String,
+    /// Secure Boot: «включён» / «выключен» / «недоступен (Legacy BIOS)» / «н/д».
+    #[serde(default)]
+    pub secure_boot: String,
 }
 
 #[tauri::command(async)]
@@ -133,6 +139,26 @@ pub fn get_hardware_summary() -> Result<HardwareSummary, String> {
             $laptopTypes = 8, 9, 10, 11, 12, 14, 18, 21, 30, 31, 32
             $isLaptop = $false
             foreach ($t in $chassis) { if ($laptopTypes -contains [int]$t) { $isLaptop = $true } }
+            # TPM и Secure Boot — справочные сведения; чтение части свойств требует прав администратора,
+            # поэтому любая ошибка даёт «н/д», а не сбой всей сводки
+            $tpm = 'н/д'
+            try {
+                $t = Get-CimInstance -Namespace 'root\cimv2\Security\MicrosoftTpm' -ClassName Win32_Tpm -ErrorAction Stop | Select-Object -First 1
+                if ($t) {
+                    $ver = ([string]$t.SpecVersion).Split(',')[0].Trim()
+                    $on = if ($t.IsEnabled_InitialValue -and $t.IsActivated_InitialValue) { 'включён' } elseif ($t.IsEnabled_InitialValue) { 'включён, не активирован' } else { 'выключен' }
+                    $tpm = ($ver + ' · ' + $on)
+                } else { $tpm = 'не обнаружен' }
+            } catch {
+                try {
+                    $p = Get-PnpDevice -PresentOnly -ErrorAction Stop | Where-Object { $_.FriendlyName -match 'TPM|Trusted Platform' } | Select-Object -First 1
+                    if ($p) { $tpm = 'обнаружен (' + [string]$p.FriendlyName + ')' } else { $tpm = 'не обнаружен' }
+                } catch {}
+            }
+            $sb = 'н/д'
+            try { $sb = if (Confirm-SecureBootUEFI -ErrorAction Stop) { 'включён' } else { 'выключен' } } catch {
+                if ([string]$_.Exception.Message -match 'not supported|Cmdlet not supported|не поддерж') { $sb = 'недоступен (Legacy BIOS)' }
+            }
             $total = 0
             foreach ($m in $ram) { $total += $m.capacity_gb }
             [PSCustomObject]@{
@@ -152,6 +178,8 @@ pub fn get_hardware_summary() -> Result<HardwareSummary, String> {
                 bios_version = [string]$bios.SMBIOSBIOSVersion
                 bios_date = if ($bios.ReleaseDate) { $bios.ReleaseDate.ToString('yyyy-MM-dd') } else { '' }
                 is_laptop = $isLaptop
+                tpm = $tpm
+                secure_boot = $sb
             } | ConvertTo-Json -Depth 5 -Compress
         "#;
         // ConvertTo-Json схлопывает массив из одного элемента в объект — нормализуем.

@@ -90,6 +90,8 @@ pub fn run() {
             commands::techs::techs_remove,
             commands::upload::submit_report,
             commands::upload::flush_report_queue,
+            commands::upload::list_reports,
+            commands::upload::fetch_report,
         ])
         .build(tauri::generate_context!());
     let app = match built {

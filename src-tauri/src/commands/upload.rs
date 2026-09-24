@@ -155,7 +155,127 @@ async fn post(client: &reqwest::Client, envelope: &Value) -> Result<(), String> 
             put_file(client, &format!("{by_device}.pdf"), &pdf, &message).await?;
         }
     }
+    // Индекс по серийнику: _по_ноутбукам/<серийник>/index.md со списком всех отчётов по устройству.
+    // Вспомогательная вещь — её сбой не должен держать отчёт в очереди.
+    let _ = update_device_index(client, &serial).await;
     Ok(())
+}
+
+/// Собирает `_по_ноутбукам/<серийник>/index.md`: таблица всех отчётов (дата, время, инженер, приёмка,
+/// ссылки на JSON и PDF), новые сверху. Файлы называются `<дата>_<ЧЧММСС>_<инженер>[_приёмка<N>].{json,pdf}`.
+async fn update_device_index(client: &reqwest::Client, serial: &str) -> Result<(), String> {
+    let dir = format!("_по_ноутбукам/{serial}");
+    let resp = client
+        .get(contents_url(&dir))
+        .header("User-Agent", "echips-diagnostic-app")
+        .header("Accept", "application/vnd.github+json")
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(map_status(resp.status().as_u16()));
+    }
+    let items: Value = resp.json().await.map_err(|e| e.to_string())?;
+    let mut names: Vec<String> = items
+        .as_array()
+        .map(|a| a.iter().filter_map(|x| x["name"].as_str().map(|s| s.to_string())).collect())
+        .unwrap_or_default();
+    names.retain(|n| n.ends_with(".json"));
+    names.sort();
+    names.reverse();
+    let mut md = format!("# Отчёты по устройству {serial}\n\n| Дата | Время | Инженер | Приёмка / ремонт | JSON | PDF |\n|---|---|---|---|---|---|\n");
+    for n in &names {
+        let stem = n.trim_end_matches(".json");
+        let mut parts = stem.splitn(4, '_');
+        let (date, time, eng) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+        let intake = parts.next().unwrap_or("").trim_start_matches("приёмка");
+        let time_fmt = if time.len() == 6 { format!("{}:{}:{}", &time[0..2], &time[2..4], &time[4..6]) } else { time.to_string() };
+        let enc = |f: &str| urlencoding::encode(f).into_owned();
+        md.push_str(&format!(
+            "| {date} | {time_fmt} | {eng} | {intake} | [json]({}) | [pdf]({}) |\n",
+            enc(n),
+            enc(&format!("{stem}.pdf"))
+        ));
+    }
+    put_file(client, &format!("{dir}/index.md"), md.as_bytes(), &format!("Индекс отчётов: {serial}")).await
+}
+
+/// Строка списка отчётов для вкладки «История» (только админ).
+#[derive(Debug, serde::Serialize)]
+pub struct ReportRef {
+    pub path: String,
+    pub engineer: String,
+    pub date: String,
+    /// «<приёмка>_<серийник>» или «<серийник>»; для старых отчётов — из имени файла
+    pub device: String,
+    pub file: String,
+}
+
+/// Список отчётов из репозитория (одним запросом дерева). Копии в `_по_ноутбукам/` пропускаются.
+#[tauri::command(async)]
+pub async fn list_reports() -> Result<Vec<ReportRef>, String> {
+    if TOKEN.is_empty() {
+        return Err("В этой сборке нет токена доступа к отчётам".to_string());
+    }
+    let client = client()?;
+    let resp = client
+        .get(format!("https://api.github.com/repos/{REPO}/git/trees/main?recursive=1"))
+        .header("User-Agent", "echips-diagnostic-app")
+        .header("Accept", "application/vnd.github+json")
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .map_err(|e| format!("Нет связи: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(map_status(resp.status().as_u16()));
+    }
+    let tree: Value = resp.json().await.map_err(|e| e.to_string())?;
+    let mut out: Vec<ReportRef> = Vec::new();
+    for item in tree["tree"].as_array().cloned().unwrap_or_default() {
+        let path = match item["path"].as_str() { Some(p) => p, None => continue };
+        if !path.ends_with(".json") || path.starts_with("_по_ноутбукам/") {
+            continue;
+        }
+        let parts: Vec<&str> = path.split('/').collect();
+        let (engineer, date, device, file) = match parts.len() {
+            4 => (parts[0], parts[1], parts[2].to_string(), parts[3]),
+            3 => {
+                // старый формат: <инженер>/<дата>/<ЧЧММСС>_<серийник>[_вид].json
+                let f = parts[2].trim_end_matches(".json");
+                let dev = f.splitn(2, '_').nth(1).unwrap_or(f).to_string();
+                (parts[0], parts[1], dev, parts[2])
+            }
+            _ => continue,
+        };
+        out.push(ReportRef { path: path.to_string(), engineer: engineer.to_string(), date: date.to_string(), device, file: file.to_string() });
+    }
+    out.sort_by(|a, b| (b.date.as_str(), b.file.as_str()).cmp(&(a.date.as_str(), a.file.as_str())));
+    Ok(out)
+}
+
+/// Содержимое одного отчёта (JSON-конверт: kind, app_version, report).
+#[tauri::command(async)]
+pub async fn fetch_report(path: String) -> Result<Value, String> {
+    if TOKEN.is_empty() {
+        return Err("В этой сборке нет токена доступа к отчётам".to_string());
+    }
+    if path.contains("..") || !path.ends_with(".json") {
+        return Err("Некорректный путь отчёта".to_string());
+    }
+    let resp = client()?
+        .get(contents_url(&path))
+        .header("User-Agent", "echips-diagnostic-app")
+        .header("Accept", "application/vnd.github.raw+json")
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .map_err(|e| format!("Нет связи: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(map_status(resp.status().as_u16()));
+    }
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+    serde_json::from_str(&text).map_err(|e| format!("Отчёт повреждён: {e}"))
 }
 
 /// Отправляет накопленное в очереди; на первой же неудаче останавливается.

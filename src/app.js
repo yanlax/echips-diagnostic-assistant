@@ -474,6 +474,12 @@ var A = {
   autoStart:function(mode){
     // mode: 'express' — короткий набор проверок для входного контроля (P.expressTests), иначе полный
     S.autoMode = mode==='express' ? 'express' : 'full';
+    // «До/после ремонта» без номера приёмки: отчёты не свяжутся в пару (лежат в разных папках)
+    if (S.repairStage && !S.intake){
+      var okGo = true;
+      try { okGo = window.confirm('Выбран этап «'+(S.repairStage==='before' ? 'до ремонта' : 'после ремонта')+'», но номер приёмки не указан — отчёты «до» и «после» не свяжутся в пару.\n\nНачать без номера?'); } catch(e){}
+      if (!okGo) return;
+    }
     var listSrc = S.autoMode==='express' ? (profile().expressTests || profile().tests) : profile().tests;
     var ids = (listSrc||[]).filter(function(id){ return CATS.some(function(c){ return c.id===id; }); });
     if (!ids.length) return;
@@ -524,6 +530,13 @@ var A = {
   autoNext:function(){
     var a = S.auto; if (!a.on) return;
     if (a.timer) clearTimeout(a.timer);
+    // шаг закончился без вердикта и инженер нажал «Далее» — в отчёте остаётся «не проверен», но с пояснением почему
+    var prevId = a.ids[a.idx];
+    if (prevId && (!S.results[prevId] || S.results[prevId]==='idle')){
+      var pd = S.detail[prevId] || {}, pl = (pd.lines||[]).slice();
+      pl.push('Шаг пропущен: автопрогон перешёл дальше без результата теста'+(a.msg ? ' ('+a.msg+')' : '')+(S.st && S.st.err && prevId==='stress' ? ' · ошибка запуска: '+S.st.err : ''));
+      recordDetail(prevId, { lines:pl });
+    }
     a.idx++; a.stopped=false; a.waiting=false; a.msg=''; a.cls=''; a.stepT0=Date.now();   // a.detail держится на весь прогон
     if (a.idx >= a.ids.length){ A.autoReport(); return; }
     var nm = (CATS.filter(function(x){ return x.id===a.ids[a.idx]; })[0]||{}).name || a.ids[a.idx];
@@ -1416,6 +1429,7 @@ var A = {
     invoke('hwmon_start').catch(function(){});
     invoke('start_stress', { cfg:cfg }).catch(function(err){
       cleanup(); st.running=false; st.err = typeof err==='string' ? err : 'Не удалось запустить стресс-тест'; render();
+      recordDetail('stress', { lines:['Стресс-тест не запустился: '+st.err] });
       if (S.auto.on && S.cat==='stress') A.autoApply(null);
     });
   },

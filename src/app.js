@@ -4130,23 +4130,25 @@ function screenMb(){
    файл вручную — commit/push уже делает тот, кто добавляет инженера. */
 function screenTechAdmin(){
   var t = S.techadmin;
-  var tokenBlock = (t.hasToken
-    ? '<div class="dai"><div class="dah"><i class="ddot pass"></i><b>Токен сохранён</b></div><p>Токен GitHub зашифрован средствами Windows и хранится только на этом компьютере.</p></div><div class="dai"><button class="btn btn-ghost" onclick="echips.techadminClearToken()">Удалить токен</button></div>'
-    : '<div class="formfield"><label>Токен GitHub (вводится один раз, хранится только на этом компьютере)</label>'+
-      '<input type="password" value="'+esc(t.tokenInput)+'" oninput="echips.techadminField(\'tokenInput\',this.value)" placeholder="github_pat_…">'+
-      '<div class="hint" style="margin-top:6px">Fine-grained токен на репозитории echips-reports (список инженеров) и echips-diagnostic-assistant (профили моделей), право Contents: read and write.</div></div>'+
-      '<div class="headactions" style="margin-top:12px"><button class="btn btn-ghost" onclick="echips.techadminSaveToken()">Сохранить токен</button></div>')+
-    '<h3 style="margin-top:22px">Ключ подписи</h3>'+
-    (t.hasKey
-      ? '<div class="dai"><div class="dah"><i class="ddot pass"></i><b>Ключ подписи сохранён</b></div><p>Список инженеров подписывается этим ключом; без подписи другие ноутбуки его не примут. Ключ хранится зашифрованно (Windows) только на этом компьютере.</p></div><div class="dai"><button class="btn btn-ghost" onclick="echips.techadminClearKey()">Удалить ключ</button></div>'
-      : '<div class="formfield"><label>Ключ подписи (64 символа, один раз)</label>'+
-        '<input type="password" value="'+esc(t.keyInput)+'" oninput="echips.techadminField(\'keyInput\',this.value)" placeholder="0123abcd…">'+
-        '<div class="hint" style="margin-top:6px">Файл echips-signing-key.txt — вставьте его содержимое. Без ключа список изменить нельзя.</div></div>'+
-        '<div class="headactions" style="margin-top:12px"><button class="btn btn-ghost" onclick="echips.techadminSaveKey()">Сохранить ключ</button></div>');
+  var keyBlock = t.hasKey
+    ? '<div class="dai"><div class="dah"><i class="ddot pass"></i><b>Ключ подписи сохранён</b></div><p>Список инженеров подписывается этим ключом; без подписи другие ноутбуки его не примут. Ключ хранится зашифрованно (Windows) только на этом компьютере.</p></div><div class="dai"><button class="btn btn-ghost" onclick="echips.techadminClearKey()">Удалить ключ</button></div>'
+    : '<div class="formfield"><label>Вставьте ключ подписи</label>'+
+      '<input type="password" value="'+esc(t.keyInput)+'" oninput="echips.techadminField(\'keyInput\',this.value)" placeholder="ключ подписи">'+
+      '<div class="hint" style="margin-top:6px">Вводится один раз. Без ключа список инженеров изменить нельзя.</div></div>'+
+      '<div class="headactions" style="margin-top:12px"><button class="btn btn-ghost" onclick="echips.techadminSaveKey()">Сохранить ключ</button></div>';
+  // токен GitHub нужен только для сохранения профилей моделей (публичный репозиторий кода)
+  var tokenBlock = '<details style="margin-top:22px"><summary class="rs-mut" style="cursor:pointer">Токен для профилей моделей'+(t.hasToken?' · сохранён':'')+'</summary>'+
+    (t.hasToken
+      ? '<div class="dai" style="margin-top:10px"><p>Токен GitHub зашифрован средствами Windows и хранится только на этом компьютере.</p></div><div class="dai"><button class="btn btn-ghost" onclick="echips.techadminClearToken()">Удалить токен</button></div>'
+      : '<div class="formfield" style="margin-top:10px"><label>Токен GitHub (нужен только для сохранения эталонов моделей)</label>'+
+        '<input type="password" value="'+esc(t.tokenInput)+'" oninput="echips.techadminField(\'tokenInput\',this.value)" placeholder="github_pat_…">'+
+        '<div class="hint" style="margin-top:6px">Fine-grained токен на репозиторий echips-diagnostic-assistant, право Contents: read and write.</div></div>'+
+        '<div class="headactions" style="margin-top:12px"><button class="btn btn-ghost" onclick="echips.techadminSaveToken()">Сохранить токен</button></div>')+
+    '</details>';
   var rows = (S.lock.techs||[]).map(function(x){
     return '<tr><td><i class="av">'+esc(String(x.name||'?').charAt(0).toUpperCase())+'</i></td><td><b>'+esc(x.name)+'</b><div class="rr mono">'+esc(x.id)+'</div></td>'+
       '<td><span class="role'+(x.role==='admin'?' adm':'')+'">'+(x.role==='admin'?'Администратор':'Техник')+'</span></td>'+
-      '<td class="ra"><button class="lnk bad" '+(t.busy||!t.hasToken||!t.hasKey?'disabled':'')+' onclick="echips.techadminRemove(\''+esc(x.id)+'\')">Удалить</button></td></tr>';
+      '<td class="ra"><button class="lnk bad" '+(t.busy||!t.hasKey?'disabled':'')+' onclick="echips.techadminRemove(\''+esc(x.id)+'\')">Удалить</button></td></tr>';
   }).join('');
   return '<div class="pane te">'+
     '<div class="af-head"><div><div class="eyebrow">Только для администратора</div><h1 class="title">Инженеры</h1></div><button class="btn btn-ghost" onclick="echips.go(\'start\')">Закрыть</button></div>'+
@@ -4159,10 +4161,10 @@ function screenTechAdmin(){
         '<label>Роль<select onchange="echips.techadminField(\'role\',this.value)"><option value="tech"'+(t.role!=='admin'?' selected':'')+'>Техник</option><option value="admin"'+(t.role==='admin'?' selected':'')+'>Администратор</option></select></label></div>'+
         (t.err?'<div class="err" style="margin:10px 0 0">'+esc(t.err)+'</div>':'')+
         (t.msg?'<div class="infoline" style="margin:10px 0 0">'+esc(t.msg)+'</div>':'')+
-        '<div class="headactions" style="margin-top:14px">'+(t.hasToken && t.hasKey ? '<button class="btn btn-primary" '+(t.busy?'disabled':'')+' onclick="echips.techadminPublish()">'+(t.busy?'Сохраняю…':'Сохранить в список')+'</button>' : '')+
-        '<span class="rs-mut" style="margin-left:6px">'+(t.hasToken && t.hasKey ? '' : 'Для записи нужны токен и ключ подписи (справа).')+'</span></div>'+
+        '<div class="headactions" style="margin-top:14px">'+(t.hasKey ? '<button class="btn btn-primary" '+(t.busy?'disabled':'')+' onclick="echips.techadminPublish()">'+(t.busy?'Сохраняю…':'Сохранить в список')+'</button>' : '')+
+        '<span class="rs-mut" style="margin-left:6px">'+(t.hasKey ? '' : 'Для записи нужен ключ подписи (справа).')+'</span></div>'+
         '<p class="rs-mut" style="margin-top:12px">Список хранится подписанным в приватном репозитории и подхватывается на ноутбуках, когда они выходят в интернет; между обновлениями вход работает без сети. Если ноутбук не был в сети больше 7 суток — войти сможет только администратор. Тот же идентификатор с новым PIN заменяет запись.</p></div>'+
-    '</section><aside class="rp-side"><h3>Токен записи</h3>'+tokenBlock+'</aside></div></div>';
+    '</section><aside class="rp-side"><h3>Ключ подписи</h3>'+keyBlock+tokenBlock+'</aside></div></div>';
 }
 
 function screenReport(){

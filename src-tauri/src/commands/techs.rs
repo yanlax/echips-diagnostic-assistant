@@ -216,9 +216,9 @@ pub async fn fetch_techs() -> Result<TechList, String> {
 
 // ---------- управление списком из приложения (только администратор) ----------
 //
-// Нужны ДВА секрета, оба хранятся только на компьютере администратора (DPAPI, CurrentUser):
-//   * токен GitHub (fine-grained, Contents: write на yanlax/echips-reports) — запись файла;
-//   * ключ подписи (hex, 64 символа) — им подписывается список; без него остальные exe список не примут.
+// Для изменения списка админу нужен только ключ подписи (hex, 64 символа; хранится на компьютере админа,
+// DPAPI, CurrentUser): им подписывается список, без него остальные exe список не примут. Записывается файл
+// вшитым токеном отчётов. Токен админа (DPAPI) нужен только для сохранения профилей моделей в публичный репозиторий.
 // Запись — через GitHub Contents API (GET sha + содержимое, затем PUT с тем же sha: если файл успели
 // изменить, GitHub вернёт 409 и мы ничего не затрём).
 
@@ -398,7 +398,12 @@ async fn commit_list<F>(message: String, edit: F) -> Result<Vec<Tech>, String>
 where
     F: Send + FnOnce(&mut Vec<Tech>) -> Result<(), String>,
 {
-    let token = read_token().ok_or("Сначала введите GitHub-токен")?;
+    // Запись списка — вшитым токеном отчётов (у него Contents: write на echips-reports); токен админа — запасной вариант
+    let token = if !super::upload::report_token().is_empty() {
+        super::upload::report_token().to_string()
+    } else {
+        read_token().ok_or("В программу не вшит токен отчётов — введите GitHub-токен на экране «Инженеры»")?
+    };
     let key = read_signing_key().ok_or("Сначала импортируйте ключ подписи (экран «Инженеры»)")?;
     let client = reqwest::Client::new();
     let get = |accept: &'static str| {

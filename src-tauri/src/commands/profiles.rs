@@ -77,7 +77,7 @@ pub async fn profiles_save_model(key: String, profile: Value) -> Result<Profiles
     if !profile.is_object() {
         return Err("Профиль должен быть объектом".to_string());
     }
-    let token = read_token().ok_or("Сначала введите GitHub-токен на экране «Инженеры»")?;
+    let token = read_token().ok_or("Сначала введите GitHub-токен на экране «Инженеры» (раздел «Токен для профилей моделей»)")?;
     let client = reqwest::Client::new();
     let get = |accept: &'static str| {
         client

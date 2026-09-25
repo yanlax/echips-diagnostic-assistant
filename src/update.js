@@ -75,6 +75,11 @@
     });
   }
 
+  // связь появилась позже (ноутбук подключили к сети уже на экране PIN) — проверяем ещё раз; повторный баннер не создаётся
+  window.addEventListener("online", checkForUpdate);
+  // на экране PIN ноутбук может простоять долго — раз в 30 минут проверяем снова
+  setInterval(checkForUpdate, 30 * 60 * 1000);
+
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", checkForUpdate);
   } else {

@@ -4419,6 +4419,7 @@ function renderLock(){
   var host = document.getElementById('lock-overlay');
   if(!host) return;
   var L = S.lock, body;
+  document.body.classList.toggle('locked', L.phase!=='unlocked');   // баннер обновления поверх экрана PIN
   if(L.phase==='unlocked'){
     host.classList.add('closed');
     setTimeout(function(){ if(S.lock.phase==='unlocked') host.innerHTML=''; }, 400);

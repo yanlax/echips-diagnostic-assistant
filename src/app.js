@@ -2185,7 +2185,7 @@ function renderQueue(){
 }
 function refreshQueue(){ invoke('report_queue_info').then(function(q){ S.queue = q; renderQueue(); }).catch(function(){}); }
 function renderStageBtns(){
-  ['before','after'].forEach(function(k){ var b=document.getElementById('stage-'+k); if (b) b.classList.toggle('on', S.repairStage===k); });
+  ['before','after'].forEach(function(k){ var b=document.getElementById('stage-'+k); if (b){ b.classList.toggle('on', S.repairStage===k); b.setAttribute('aria-pressed', String(S.repairStage===k)); } });
 }
 function renderNav(){
   renderStageBtns(); renderQueue();

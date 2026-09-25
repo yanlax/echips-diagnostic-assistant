@@ -837,3 +837,7 @@ select.search-input{background-image:none;padding-left:12px}
 /* Баннер обновления виден и на экране PIN (поверх него): без обновления вход по новой схеме может не работать */
 body.locked .update-banner-slot{position:fixed;top:0;left:0;right:0;z-index:10000;box-shadow:0 8px 28px rgba(0,0,0,.45)}
 body.locked .update-banner{background-color:var(--bg);background-image:linear-gradient(var(--accent-soft),var(--accent-soft));border-bottom:2px solid var(--accent);font-size:13px;padding:12px 26px}
+
+/* Выбранный этап ремонта («До ремонта» / «После ремонта») — акцентным цветом, чтобы выбор был виден сразу */
+.stagebtns button.on{background:var(--accent);color:var(--accent-ink);font-weight:650;box-shadow:0 0 0 1px var(--accent-line)}
+.stagebtns button.on:hover{background:var(--accent-hover);color:var(--accent-ink)}

@@ -220,6 +220,17 @@ function deviceLabel(){
   return (cleanSmbios(S.device.manufacturer) + ' ' + cleanSmbios(S.device.model)).trim() || 'неизвестная модель';
 }
 function deviceSn(){ return S.device ? String(S.device.serial_number||'').trim() : ''; }
+/* Идентификатор устройства для отчёта и папок: серийник, а если он заглушка BIOS («To be filled by O.E.M.») —
+   серийник платы, потом начало UUID, потом «БезСН» + приёмка. Иначе все ноутбуки без серийника попадали в одну папку. */
+function deviceKey(){
+  function good(v){ v = String(v||'').trim(); return v && !isPlaceholder(v) && !/^(system serial number|not applicable|0+|—)$/i.test(v) ? v : ''; }
+  var sn = good(deviceSn()); if (sn) return sn;
+  var hw = S.hw || {};
+  var bsn = good(hw.board_serial); if (bsn) return bsn;
+  var u = String(hw.system_uuid||'').replace(/[^0-9a-f]/gi,'').toLowerCase();
+  if (u.length>=12 && !/^(0+|f+)$/.test(u) && u!=='03000200040005000006000700080009') return 'UUID-'+u.slice(0,12);
+  return 'БезСН'+(S.intake ? '-'+S.intake : '');
+}
 function isAdmin(){ return !!(S.engineer && S.engineer.role==='admin'); }
 
 /* ---------- окно: свернуть/закрыть ---------- */
@@ -671,6 +682,8 @@ var A = {
   },
   memAuto:function(){
     S.mem.size = 0; S.mem.passes = S.autoMode==='express' ? 1 : (profile().memPasses || 2); S.mem.res=null; S.mem.err=null;
+    // синие экраны в журнале (тест «Журнал сбоев» не пройден) — память проверяем дольше: 4 прохода вместо 2
+    if (S.results.crash==='fail' && S.autoMode!=='express'){ S.mem.passes = Math.max(S.mem.passes, 4); autoLogPush('Журнал сбоев не пройден — память проверяется 4 прохода'); }
     A.memStart();
   },
   sensorsAuto:function(){
@@ -788,7 +801,20 @@ var A = {
     var b = document.getElementById('queue-send'); if (b) b.textContent = '…';
     invoke('flush_report_queue').catch(function(){}).then(function(){ S.sentHash = null; A.reportSync('sync'); setTimeout(function(){ refreshQueue(); if (b) b.textContent = 'отправить'; }, 2500); });
   },
-  setStage:function(v){ S.repairStage = S.repairStage===v ? '' : v; renderStageBtns(); },
+  setStage:function(v){
+    var next = S.repairStage===v ? '' : v;
+    // Смена этапа после прогона раньше пересылала ТЕ ЖЕ результаты под другим этапом (пара «до/после» из одного прогона).
+    // Теперь смена этапа при уже собранных результатах начинает новую проверку (отчёт предыдущей уже отправлен).
+    var have = Object.keys(S.results).some(function(k){ return S.results[k] && S.results[k]!=='idle'; });
+    if (have){
+      var ok = true;
+      try { ok = window.confirm('Сменить этап ремонта?\n\nТекущие результаты будут сброшены — начнётся новая проверка. Отчёт по этой проверке уже отправлен (если очередь пуста), к нему вернуться можно будет через «Историю».'); } catch(e){}
+      if (!ok){ renderStageBtns(); return; }
+      A.reportSync('manual');
+      S.repairStage = next; A.reset(); return;
+    }
+    S.repairStage = next; renderStageBtns();
+  },
   setIntake:function(v){ S.intake = String(v||'').replace(/\D/g,'').slice(0,6); var el=document.getElementById('intake-input'); if(el && el.value!==S.intake) el.value=S.intake; },
   profKey:function(v){ (S.profSave = S.profSave || {}).key = v; },
   profBios:function(v){ (S.profSave = S.profSave || {}).bios = !!v; },
@@ -1593,7 +1619,7 @@ var A = {
     var testable = CATS;
     return {
       device_model: deviceLabel(),
-      device_serial: deviceSn(),
+      device_serial: deviceKey(),
       intake: S.intake || '',
       repair_stage: S.repairStage || '',
       run_mode: S.auto && S.auto.on ? (S.autoMode==='express' ? 'экспресс' : 'полный') : (S.autoMode ? (S.autoMode==='express' ? 'экспресс' : 'полный') : ''),

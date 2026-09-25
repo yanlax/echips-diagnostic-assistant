@@ -9,3 +9,5 @@ node_modules/
 # список инженеров, вшиваемый при сборке (CI скачивает из приватного репозитория)
 /src-tauri/assets/techs_baked.json
 /src-tauri/assets/profiles_baked.json
+__pycache__/
+*.pyc

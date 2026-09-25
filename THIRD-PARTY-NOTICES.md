@@ -46,3 +46,7 @@ Echips Hardware Check — внутренний инструмент инжене
 ## p256 / ecdsa (RustCrypto)
 
 Проверка и создание подписи списка инженеров (ECDSA P-256). Лицензия MIT OR Apache-2.0. https://github.com/RustCrypto/elliptic-curves
+
+## ecdsa (Python)
+
+Подпись аренды на сервере (ECDSA P-256). Лицензия MIT. https://github.com/tlsfuzzer/python-ecdsa

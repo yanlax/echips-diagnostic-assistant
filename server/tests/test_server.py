@@ -95,6 +95,20 @@ class T(unittest.TestCase):
             e = ev("GET", "/x"); e.update(extra)
             self.assertEqual(h.dispatch(self.s, e)["statusCode"], 200)
 
+    @unittest.skipIf(h.SigningKey is None, "нужен пакет ecdsa (pip install ecdsa)")
+    def test_lease(self):
+        os.environ["LEASE_KEY"] = "0101010101010101010101010101010101010101010101010101010101010101"
+        try:
+            c, b = self.login("1111")
+        finally:
+            del os.environ["LEASE_KEY"]
+        self.assertEqual(c, 200)
+        p = json.loads(b["lease"]["payload"])
+        self.assertEqual((p["sub"], p["role"], p["iters"]), ("alexey", "tech", h.LEASE_ITERS))
+        self.assertEqual(hashlib.pbkdf2_hmac("sha256", b"1111", bytes.fromhex(p["salt"]), p["iters"]).hex(), p["verifier"])
+        self.assertGreater(p["exp"] - p["iat"], 6 * 86400)
+        self.assertNotIn("lease", self.login("2222")[1])          # без ключа аренда не выдаётся
+
     def test_token_expiry_and_tamper(self):
         tok = self.login("1111")[1]["token"]
         bad = tok[:-2] + ("aa" if not tok.endswith("aa") else "bb")

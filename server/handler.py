@@ -12,6 +12,16 @@ import time
 
 from storage import S3Storage
 
+try:
+    from ecdsa import NIST256p, SigningKey
+    from ecdsa.util import sigencode_string
+except ImportError:      # без библиотеки аренды не выдаём (клиент просто не получит lease)
+    SigningKey = None
+
+MSK = 3 * 3600
+LEASE_TTL = 7 * 86400
+LEASE_ITERS = 200_000
+
 SESSION_TTL = 12 * 3600
 MAX_FAILS = 5
 FAIL_WINDOW = 15 * 60
@@ -88,10 +98,28 @@ def check_pin(user, pin):
     return hmac.compare_digest(hashlib.sha256((user["salt"] + ":" + pin).encode()).hexdigest(), user["pin_hash"])
 
 
+# ---------- аренда для входа без интернета ----------
+def make_lease(user, pin, machine_id):
+    """Подписанная аренда на 7 суток: клиент офлайн сверяет PIN с проверочным значением (PBKDF2), а подпись
+    (ECDSA P-256, ключ LEASE_KEY, публичная часть вшита в exe) не даёт подделать или продлить файл."""
+    key = os.environ.get("LEASE_KEY", "")
+    if not key or SigningKey is None:
+        return None
+    salt = secrets.token_hex(16)
+    verifier = hashlib.pbkdf2_hmac("sha256", pin.encode(), bytes.fromhex(salt), LEASE_ITERS).hex()
+    t = now()
+    payload = json.dumps({"sub": user["id"], "name": user["name"], "role": user["role"], "mid": machine_id, "iat": t,
+                          "exp": t + LEASE_TTL, "salt": salt, "iters": LEASE_ITERS, "verifier": verifier},
+                         ensure_ascii=False, separators=(",", ":"))
+    sk = SigningKey.from_string(bytes.fromhex(key), curve=NIST256p)
+    sig = sk.sign(payload.encode(), hashfunc=hashlib.sha256, sigencode=sigencode_string).hex()
+    return {"payload": payload, "sig": sig}
+
+
 # ---------- журнал ----------
 def log_event(store, typ, who, ip, data=None):
     t = time.time()
-    day = time.strftime("%Y-%m-%d", time.gmtime(t))
+    day = time.strftime("%Y-%m-%d", time.gmtime(t + MSK))   # дни журнала — по московскому времени
     ev = {"t": int(t), "type": typ, "user": who, "ip": ip, "data": data or {}}
     store.put("events/%s/%d-%s.json" % (day, int(t * 1000), secrets.token_hex(3)), json.dumps(ev, ensure_ascii=False).encode())
 
@@ -173,7 +201,11 @@ def route_login(store, event):
     mid = str(b.get("machine_id", ""))[:64]
     tok, payload = make_token(found, mid)
     log_event(store, "login", found["id"], ip, {"machine": mid, "name": str(b.get("machine_name", ""))[:64], "app": str(b.get("app_version", ""))[:16]})
-    return resp(200, {"token": tok, "exp": payload["exp"], "user": {"id": found["id"], "name": found["name"], "role": found["role"]}})
+    out = {"token": tok, "exp": payload["exp"], "user": {"id": found["id"], "name": found["name"], "role": found["role"]}}
+    lease = make_lease(found, pin, mid)
+    if lease:
+        out["lease"] = lease
+    return resp(200, out)
 
 
 def route_report(store, event):
@@ -296,7 +328,7 @@ def route_event(store, event):
 
 def route_events_list(store, event):
     auth(event, admin=True)
-    day = (event.get("queryStringParameters") or {}).get("date") or time.strftime("%Y-%m-%d", time.gmtime())
+    day = (event.get("queryStringParameters") or {}).get("date") or time.strftime("%Y-%m-%d", time.gmtime(time.time() + MSK))
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", day):
         raise HttpError(400, "Некорректная дата")
     out = []

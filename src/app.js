@@ -24,7 +24,11 @@ function invoke(cmd, args){
   if (S.adminPanelOpen) renderAdminPanel();
   var p = _rawInvoke(cmd, args);
   p.then(function(res){ entry.state='ok'; entry.result=res; if (S.adminPanelOpen) renderAdminPanel(); },
-         function(err){ entry.state='err'; entry.error=err; if (S.adminPanelOpen) renderAdminPanel(); });
+         function(err){
+           entry.state='err'; entry.error=err; if (S.adminPanelOpen) renderAdminPanel();
+           // сессия на сервере истекла — просим ввести PIN заново (данные и результаты остаются)
+           if (typeof err==='string' && /Сессия недействительна|Нет входа на сервере/.test(err)) relockSession();
+         });
   return p;
 }
 
@@ -149,7 +153,7 @@ var S = {
      (или error, если нет сети и нет кэша). */
   lock:{ phase:'boot', techs:null, err:'', techId:'', pin:'', shake:false },
   engineer:null,
-  techadmin:{ id:'', name:'', pin:'', role:'tech', err:'', result:'', hasToken:null, hasKey:null, tokenInput:'', keyInput:'', busy:false, msg:'' },
+  techadmin:{ id:'', name:'', pin:'', role:'tech', err:'', result:'', busy:false, msg:'' },
   adminLog:[], adminPanelOpen:false
 };
 
@@ -219,6 +223,8 @@ function deviceLabel(){
   if (!S.device) return 'определяется…';
   return (cleanSmbios(S.device.manufacturer) + ' ' + cleanSmbios(S.device.model)).trim() || 'неизвестная модель';
 }
+/* Событие в журнал сервера (контроль: начало и конец диагностики); без связи молча пропускается. */
+function srvEvent(kind, data){ if (FEATURE_PIN) invoke('srv_event', { kind:kind, data:data||{} }).catch(function(){}); }
 function deviceSn(){ return S.device ? String(S.device.serial_number||'').trim() : ''; }
 /* Идентификатор устройства для отчёта и папок: серийник, а если он заглушка BIOS («To be filled by O.E.M.») —
    серийник платы, потом начало UUID, потом «БезСН» + приёмка. Иначе все ноутбуки без серийника попадали в одну папку. */
@@ -261,8 +267,8 @@ function isAdmin(){ return !!(S.engineer && S.engineer.role==='admin'); }
 })();
 
 /* ---------- загрузка данных устройства при старте ---------- */
-/* Профили моделей из git (data/profiles.json, см. commands/profiles.rs): подмешиваются к ECHIPS_PROFILES —
-   новая модель добавляется правкой файла в репозитории, без пересборки exe. */
+/* Профили моделей с сервера (см. commands/profiles.rs): подмешиваются к ECHIPS_PROFILES —
+   новая модель добавляется кнопкой админа, без пересборки exe. */
 function applyRemoteProfiles(file){
   if (!file || !file.profiles) return;
   var P = window.ECHIPS_PROFILES = window.ECHIPS_PROFILES || { default:{ name:'Стандартный', tests:[], expect:{} }, models:{} };
@@ -312,7 +318,7 @@ var A = {
   go:function(screen,id){
     if(screen==='techadmin' && !isAdmin()) screen='start'; // экран только для администратора (см. isAdmin)
     if(screen==='mb' && !FEATURE_MB) screen='start';
-    if(screen==='history' && !isAdmin()) screen='start';   // история отчётов — только админ
+    if((screen==='history' || screen==='events') && !isAdmin()) screen='start';   // история отчётов и журнал — только админ
     stopSensorPoll(); stopCamera(); stopAudio();
     if (S.rm.timer){ clearInterval(S.rm.timer); S.rm.timer=null; }
     if (S.kbT){ clearInterval(S.kbT); S.kbT=null; }
@@ -335,6 +341,7 @@ var A = {
     if(screen==='mb'){ A.mbReset(); }
     if(screen==='sensors'){ A.sensorsStart(); }
     if(screen==='history'){ A.histLoad(); }
+    if(screen==='events'){ A.evLoad(); }
     render();
   },
   openCat:function(id){
@@ -482,6 +489,7 @@ var A = {
     S.results={}; S.comments={}; S.keys={}; S.snapshot=false; S.reportSummary='';
     S.startedAt = new Date().toISOString(); S.sentHash = null;
     S.auto = { on:true, ids:ids, idx:-1, stopped:false, waiting:false, msg:'', cls:'', timer:null, mode:S.autoMode };
+    srvEvent('auto_start', { mode:S.autoMode||'full', tests:ids.length, model:deviceLabel(), serial:deviceKey(), intake:S.intake||'', stage:S.repairStage||'' });
     S.autoTemps = []; S.autoLog = [];
     A.autoTempPoll(true);
     _icache = {};
@@ -510,9 +518,10 @@ var A = {
     tick(); S.autoTempT = setInterval(tick, 3000);
   },
   autoDetail:function(){ S.auto.detail = !S.auto.detail; render(); },
-  autoStop:function(){ A.autoOff(); A.go('dash'); },
+  autoStop:function(){ srvEvent('auto_abort', { at:S.auto.idx+1, of:S.auto.ids.length, test:(S.auto.ids[S.auto.idx]||'') }); A.autoOff(); A.go('dash'); },
   autoReport:function(){
     var wasAuto = S.auto.on;
+    if (wasAuto){ var cc = counts(); srvEvent('auto_end', { pass:cc.pass, fail:cc.fail, model:deviceLabel(), serial:deviceKey() }); }
     A.autoOff();
     if (wasAuto) A.reportSync('auto');
     A.go('report');
@@ -911,7 +920,26 @@ var A = {
       H.err = ''; H.msg = 'Список сохранён: '+path; render(); invoke('open_containing_folder', { path:path }).catch(function(){});
     }).catch(function(e){ H.err = typeof e==='string' ? e : 'Не удалось сохранить список'; render(); });
   },
-  histBack:function(){ S.hist.view = null; S.hist.cmp = null; render(); },
+  evLoad:function(){
+    var E = S.events = S.events || { date:evLocalDay(), list:null, loading:false, err:'' };
+    E.loading = true; E.err = ''; render();
+    invoke('srv_events', { date:E.date }).then(function(l){ E.list = l || []; }).catch(function(e){ E.err = typeof e==='string' ? e : 'Не удалось загрузить журнал'; E.list = []; })
+      .then(function(){ E.loading = false; render(); });
+  },
+  evDate:function(v){ if (/^\d{4}-\d{2}-\d{2}$/.test(v)){ (S.events = S.events || {}).date = v; A.evLoad(); } },
+  histBack:function(){ S.hist.view = null; S.hist.cmp = null; S.hist.open = {}; S.hist.saved = null; render(); },
+  /* Раскрыть/свернуть подробности теста в открытом отчёте (строки лога из отчёта) */
+  histToggle:function(id){ var H = S.hist; H.open = H.open || {}; H.open[id] = !H.open[id]; render(); },
+  /* Скачать открытый отчёт: PDF / JSON / TXT (тот же формат, что «Экспорт» после автопрогона) */
+  histSave:function(kind){
+    var H = S.hist; if (!H.view || H.saving) return;
+    var cmd = kind==='pdf' ? 'save_report_pdf' : kind==='json' ? 'save_report_json' : 'save_report_txt';
+    H.saving = kind; H.err = ''; render();
+    invoke(cmd, { report:H.view.env.report }).then(function(path){ H.saved = { kind:kind, path:path }; })
+      .catch(function(e){ H.err = typeof e==='string' ? e : 'Не удалось сохранить отчёт'; })
+      .then(function(){ H.saving = ''; render(); });
+  },
+  histReveal:function(){ if (S.hist.saved) invoke('open_containing_folder', { path:S.hist.saved.path }).catch(function(){}); },
   batLiveToggle:function(){
     var B = S.batLive;
     B.on = !B.on; clearTimeout(B.t);
@@ -1700,29 +1728,18 @@ var A = {
     if(!/^[a-z0-9_-]{2,32}$/i.test(id)){ t.err='Идентификатор: латиница/цифры/-/_, 2–32 символа.'; render(); return null; }
     if(!name){ t.err='Укажите ФИО.'; render(); return null; }
     if(!/^\d{4,12}$/.test(pin)){ t.err='PIN: только цифры, не меньше 4.'; render(); return null; }
-    var salt = randomHex(16);
-    return sha256Hex(salt+':'+pin).then(function(hash){ return { id:id, name:name, pin_hash:hash, salt:salt, role:role }; });
+    return { id:id, name:name, pin:pin, role:role };
   },
-  techadminGenerate:function(){
-    var p = A.techadminBuild(); if(!p) return;
-    p.then(function(entry){
-      S.techadmin.result = JSON.stringify(entry, null, 2) + ',';
-      S.techadmin.err=''; render();
-    });
-  },
-  /* Запись прямо в _config/techs.json (приватный echips-reports) в репозитории (токен админа, см. techs.rs).
-     Тот же id — заменяет запись (так меняется PIN/роль). */
+  /* Сохранение на сервере: PIN уходит по HTTPS и хэшируется там. Тот же id — заменяет запись (так меняется PIN/роль). */
   techadminPublish:function(){
     var t = S.techadmin;
     if(t.busy) return;
-    var p = A.techadminBuild(); if(!p) return;
+    var e = A.techadminBuild(); if(!e) return;
     t.busy=true; t.err=''; t.msg=''; render();
-    p.then(function(entry){
-      return invoke('techs_upsert', { tech: entry }).then(function(list){
-        S.lock.techs = list;
-        t.msg = 'Готово: «'+entry.name+'» сохранён и подписан. На других станциях появится, когда они выйдут в интернет (до тех пор действует прежний список).';
-        t.id=''; t.name=''; t.pin=''; t.role='tech'; t.result='';
-      });
+    invoke('techs_upsert', { id:e.id, name:e.name, pin:e.pin, role:e.role }).then(function(list){
+      S.lock.techs = list;
+      t.msg = 'Готово: «'+e.name+'» сохранён на сервере, вход с этим PIN работает сразу.';
+      t.id=''; t.name=''; t.pin=''; t.role='tech'; t.result='';
     }).catch(function(err){ t.err = typeof err==='string' ? err : 'Не удалось сохранить'; })
       .then(function(){ t.busy=false; render(); });
   },
@@ -1738,28 +1755,7 @@ var A = {
       .then(function(){ t.busy=false; render(); });
   },
   techadminInit:function(){
-    // список мог обновиться на GitHub после запуска — берём свежий
-    invoke('fetch_techs').then(function(res){ S.lock.techs = res.techs || []; render(); }).catch(function(){});
-    invoke('techs_token_status').then(function(v){ S.techadmin.hasToken=!!v; render(); }).catch(function(){ S.techadmin.hasToken=false; render(); });
-    invoke('techs_signing_status').then(function(v){ S.techadmin.hasKey=!!v; render(); }).catch(function(){ S.techadmin.hasKey=false; render(); });
-  },
-  techadminSaveToken:function(){
-    var t = S.techadmin;
-    invoke('techs_save_token', { token:t.tokenInput }).then(function(){
-      t.hasToken=true; t.tokenInput=''; t.err=''; render();
-    }).catch(function(err){ t.err = typeof err==='string' ? err : 'Не удалось сохранить токен'; render(); });
-  },
-  techadminSaveKey:function(){
-    var t = S.techadmin;
-    invoke('techs_save_signing_key', { key:t.keyInput }).then(function(){
-      t.hasKey=true; t.keyInput=''; t.err=''; render();
-    }).catch(function(err){ t.err = typeof err==='string' ? err : 'Не удалось сохранить ключ'; render(); });
-  },
-  techadminClearKey:function(){
-    invoke('techs_clear_signing_key').then(function(){ S.techadmin.hasKey=false; render(); });
-  },
-  techadminClearToken:function(){
-    invoke('techs_clear_token').then(function(){ S.techadmin.hasToken=false; render(); });
+    invoke('techs_list').then(function(list){ S.lock.techs = list || []; render(); }).catch(function(err){ S.techadmin.err = typeof err==='string' ? err : 'Не удалось загрузить список'; render(); });
   },
   techadminCopy:function(){
     var text = S.techadmin.result;
@@ -2160,7 +2156,7 @@ function renderStageBtns(){
 }
 function renderNav(){
   renderStageBtns(); renderQueue();
-  var active = { start:'start', drivers:'start', mb:'start', techadmin:'start', dash:'dash', test:'dash', sensors:'sensors', stress:'stress', report:'report', repdetail:'report', history:'history' }[S.screen];
+  var active = { start:'start', drivers:'start', mb:'start', techadmin:'start', dash:'dash', test:'dash', sensors:'sensors', stress:'stress', report:'report', repdetail:'report', history:'history', events:'events' }[S.screen];
   var c = counts();
   var items = [
     { k:'start', label:'Режим', meta:'' },
@@ -2170,6 +2166,7 @@ function renderNav(){
     { k:'report', label:'Отчёт', meta:'' }
   ];
   if (isAdmin()) items.push({ k:'history', label:'История', meta:'' });
+  if (isAdmin()) items.push({ k:'events', label:'Журнал', meta:'' });
   document.getElementById('steps').innerHTML = items.map(function(i){
     return '<div class="step'+(i.k===active?' active':'')+'" onclick="echips.go(\''+i.k+'\')">'+
       '<span class="dot"></span><span class="lbl">'+i.label+'</span><span class="meta">'+i.meta+'</span></div>';
@@ -2182,7 +2179,8 @@ function renderNav(){
   document.getElementById('techbox-add').style.display = isAdmin() ? '' : 'none';
   var av = document.getElementById('techbox-av'), rl = document.getElementById('techbox-role');
   if (av) av.textContent = S.engineer ? String(S.engineer.name||'?').charAt(0).toUpperCase() : '—';
-  if (rl) rl.textContent = isAdmin() ? 'админ' : '';
+  if (rl) rl.textContent = [isAdmin() ? 'админ' : '', S.engineer && S.engineer.offline ? 'без сети' : ''].filter(Boolean).join(' · ');
+  var tb = document.getElementById('techbox'); if (tb) tb.title = S.engineer && S.engineer.offline ? 'Вход по сохранённой аренде без связи с сервером: отчёты отправятся, когда появится интернет' : '';
 }
 
 /* ---------- экраны ---------- */
@@ -3506,17 +3504,104 @@ function histHeader(env){
     '<div class="s" style="margin-top:6px">пройдено '+c.pass+' · ошибок '+c.fail+' · не применимо '+c.na+' · не проверено '+c.idle+'</div>'+
     (r.summary_comment ? '<div class="s" style="margin-top:6px">Комментарий: '+esc(r.summary_comment)+'</div>' : '')+'</div>';
 }
+/* Читаемый отчёт для администратора — по образцу отчёта после автопрогона: итог, счётчики, проверки по областям
+   (клик по строке раскрывает подробности из отчёта), справа заключение инженера, сведения и скачивание. */
+var ST_LABEL = { pass:'пройден', fail:'не пройден', na:'не применимо', idle:'не проверялся' };
+function fmtDur(a, b){
+  var x = new Date(a).getTime(), y = new Date(b).getTime(); if (isNaN(x) || isNaN(y) || y<x) return '';
+  var m = Math.round((y-x)/60000); return m<60 ? m+' мин' : Math.floor(m/60)+' ч '+(m%60)+' мин';
+}
+function histReportView(H){
+  var env = H.view.env, r = env.report||{}, res = r.results||[], c = histSummary(r);
+  var inProf = res.filter(function(x){ return x.in_profile!==false; });
+  var pending = inProf.filter(function(x){ return x.status==='idle'; }).length;
+  var verdict = c.fail ? 'Нужен ремонт' : pending ? 'Проверка не завершена' : 'Годен';
+  var cls = c.fail ? 'fail' : pending ? 'idle' : 'pass';
+  var failed = res.filter(function(x){ return x.status==='fail'; });
+  var sub = failed.length ? failed.map(function(x){ return x.title+(x.auto_note||x.comment ? ': '+String(x.comment||x.auto_note).slice(0,90) : ''); }).slice(0,2).join('. ')+'.' : (pending ? 'Не проверено тестов профиля: '+pending+'.' : 'Все проверки профиля выполнены, ошибок нет.');
+  var byId = {}; res.forEach(function(x){ byId[x.id] = x; });
+  var used = {}, sections = DASH_AREAS.map(function(a){
+    var rows = a[1].map(function(id){ used[id] = 1; return byId[id]; }).filter(Boolean);
+    return [a[0], rows];
+  });
+  var rest = res.filter(function(x){ return !used[x.id]; });
+  if (rest.length) sections.push(['Прочее', rest]);
+  H.open = H.open || {};
+  function row(x){
+    var st = x.status, out = st==='idle' && x.in_profile===false, open = !!H.open[x.id];
+    var note = String(x.comment||x.auto_note||''), det = x.details||[];
+    var extra = open ? '<tr class="hv-d"><td></td><td colspan="3">'+
+      (x.override_reason ? '<div class="kbnote" style="color:var(--err)">Вердикт изменён инженером: '+esc(x.override_reason)+'</div>' : '')+
+      (x.auto_note && x.comment && x.comment!==x.auto_note ? '<div class="kbnote">Автооценка: '+esc(x.auto_note)+'</div>' : '')+
+      (note ? '<div class="kbnote" style="color:var(--text-2)">'+esc(note)+'</div>' : '')+
+      (det.length ? '<div class="log" style="margin-top:8px">'+det.map(function(t,i){ return '<div><span class="t">'+String(i+1).padStart(2,'0')+'</span><span style="white-space:pre-wrap">'+esc(t)+'</span></div>'; }).join('')+'</div>' : '<div class="kbnote">Подробностей в отчёте нет.</div>')+
+      (x.finished_at ? '<div class="kbnote" style="margin-top:6px">завершён '+esc(new Date(x.finished_at).toLocaleString('ru-RU'))+'</div>' : '')+
+      '</td></tr>' : '';
+    return '<tr class="'+st+' clickable" onclick="echips.histToggle(\''+esc(x.id)+'\')"><td><i class="ddot '+st+'"></i></td><td class="rn">'+esc(x.title)+'</td><td class="rl">'+(out?'вне профиля':ST_LABEL[st]||st)+'</td>'+
+      '<td class="rr">'+esc(note.length>110 ? note.slice(0,108)+'…' : note)+'</td></tr>'+extra;
+  }
+  var table = '<table class="rp-tb"><thead><tr><th></th><th>Проверка</th><th>Статус</th><th>Результат и комментарий</th></tr></thead><tbody>'+
+    sections.map(function(sec){ return '<tr class="hv-h"><td colspan="4">'+esc(sec[0])+'</td></tr>'+sec[1].map(row).join(''); }).join('')+'</tbody></table>';
+  var dur = fmtDur(r.started_at, r.finished_at);
+  var stage = r.repair_stage==='before' ? 'до ремонта' : r.repair_stage==='after' ? 'после ремонта' : '';
+  var kv = function(k, v){ return v ? '<div class="hv-kv"><span>'+k+'</span><b>'+esc(v)+'</b></div>' : ''; };
+  return '<div class="headactions" style="margin-bottom:12px"><button class="btn btn-ghost" onclick="echips.histBack()">← к списку</button></div>'+
+    '<div class="pane rp" style="padding:0">'+
+    '<div class="rp-head"><div class="rp-v '+cls+'"><p class="rp-k">'+esc(r.device_model||'Устройство')+' · SN '+esc(r.device_serial||'—')+'</p><h1>'+verdict+'</h1><p class="rp-sub">'+esc(sub)+'</p></div>'+
+      '<div class="rp-c"><div class="dst pass"><b>'+c.pass+'</b><span>пройдено</span></div><div class="dst fail"><b>'+c.fail+'</b><span>ошибка</span></div><div class="dst na"><b>'+c.na+'</b><span>не применимо</span></div></div>'+
+      '<div class="headactions"><button class="btn btn-ghost" onclick="echips.histSave(\'txt\')" '+(H.saving?'disabled':'')+'>TXT</button><button class="btn btn-ghost" onclick="echips.histSave(\'json\')" '+(H.saving?'disabled':'')+'>JSON</button><button class="btn btn-primary" onclick="echips.histSave(\'pdf\')" '+(H.saving?'disabled':'')+'>'+(H.saving==='pdf'?'Готовлю PDF…':'Скачать PDF')+'</button></div></div>'+
+    (H.err ? '<div class="kbnote" style="color:var(--err);margin-bottom:10px">'+esc(H.err)+'</div>' : '')+
+    (H.saved ? '<div class="infoline" style="margin:0 0 12px">Сохранён: <span class="mono">'+esc(H.saved.path)+'</span> <button class="btn-link" onclick="echips.histReveal()">показать в папке</button></div>' : '')+
+    '<div class="rp-wrap"><div>'+table+'</div><aside class="rp-side"><h3>Заключение инженера</h3>'+
+      (r.summary_comment ? '<p style="white-space:pre-wrap;margin:0 0 18px">'+esc(r.summary_comment)+'</p>' : '<p class="rs-mut">Инженер не оставил заключения.</p>')+
+      '<h3>Сведения</h3>'+kv('Инженер', r.engineer)+kv('Приёмка / ремонт', r.intake)+kv('Этап', stage)+kv('Режим', r.run_mode)+
+        kv('Начало', r.started_at ? new Date(r.started_at).toLocaleString('ru-RU') : '')+kv('Окончание', r.finished_at ? new Date(r.finished_at).toLocaleString('ru-RU') : '')+kv('Длительность', dur)+
+        kv('Версия программы', env.app_version)+kv('Отправка', env.kind==='auto' ? 'конец автопрогона' : env.kind==='manual' ? 'экспорт' : env.kind==='sync' ? 'автосохранение' : env.kind)+
+    '</aside></div></div>';
+}
+
+/* Журнал сервера (только админ): входы, начало и конец диагностики, кто и когда. Контроль: «начал и не закончил». */
+var EV_LABEL = { login:'вход', login_fail:'неверный PIN', login_blocked:'блокировка входа', report:'отчёт получен', auto_start:'старт автопрогона', auto_end:'автопрогон завершён', auto_abort:'автопрогон прерван', user_save:'инженер сохранён', user_delete:'инженер удалён', profile_save:'профиль сохранён' };
+function evTime(t){ var d = new Date(t*1000); return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0'); }
+/* Дни журнала считаются по московскому времени (UTC+3) — так же группирует события сервер */
+function evLocalDay(){ return new Date(Date.now()+3*3600e3).toISOString().slice(0,10); }
+function screenEvents(){
+  var E = S.events = S.events || { date:evLocalDay(), list:null, loading:false, err:'' };
+  var list = E.list || [], names = {}, byUser = {};
+  list.forEach(function(e){ if (e.type==='login' && e.data && e.data.machine) names[e.data.machine] = e.data.name || ''; });
+  list.forEach(function(e){
+    var u = byUser[e.user||'—'] = byUser[e.user||'—'] || { login:0, start:0, end:0, abort:0, reports:0, fail:0 };
+    if (e.type==='login') u.login++; else if (e.type==='auto_start') u.start++; else if (e.type==='auto_end') u.end++; else if (e.type==='auto_abort') u.abort++; else if (e.type==='report') u.reports++; else if (e.type==='login_fail') u.fail++;
+  });
+  var sum = Object.keys(byUser).map(function(k){
+    var u = byUser[k], lost = Math.max(0, u.start-u.end-u.abort);
+    return '<tr><td class="rn">'+esc(k)+'</td><td class="mono">'+u.login+'</td><td class="mono">'+u.start+'</td><td class="mono">'+u.end+'</td><td class="mono">'+u.abort+'</td><td class="mono">'+u.reports+'</td><td class="mono">'+(lost ? '<b style="color:var(--err)">'+lost+'</b>' : '0')+'</td></tr>';
+  }).join('');
+  var rows = list.slice().reverse().map(function(e){
+    var d = e.data||{}, det = [];
+    if (d.machine) det.push('ПК: '+(names[d.machine] || d.machine));
+    if (d.model) det.push(d.model); if (d.serial) det.push('SN '+d.serial);
+    if (d.mode) det.push(d.mode==='express' ? 'экспресс' : 'полный'); if (d.pass!==undefined) det.push('✓'+d.pass+' ✗'+d.fail);
+    if (d.at) det.push('на шаге '+d.at+' из '+d.of); if (d.path) det.push(d.path); if (d.id) det.push(d.id);
+    var bad = e.type==='login_fail' || e.type==='login_blocked' || e.type==='auto_abort';
+    return '<tr'+(bad?' class="fail"':'')+'><td class="mono rl">'+evTime(e.t)+'</td><td class="rn">'+esc(EV_LABEL[e.type]||e.type)+'</td><td>'+esc(e.user||'—')+'</td><td class="rr">'+esc(det.join(' · '))+'</td><td class="mono rl">'+esc(e.ip||'')+'</td></tr>';
+  }).join('');
+  return '<div class="pane te"><div class="af-head"><div><div class="eyebrow">Только для администратора</div><h1 class="title">Журнал</h1></div>'+
+    '<div class="headactions"><input type="date" class="search-input" style="max-width:170px" value="'+esc(E.date)+'" onchange="echips.evDate(this.value)"><button class="btn btn-ghost" onclick="echips.evLoad()" '+(E.loading?'disabled':'')+'>Обновить</button></div></div>'+
+    (E.err ? '<div class="kbnote" style="color:var(--err);margin-bottom:10px">'+esc(E.err)+'</div>' : '')+
+    (E.loading ? '<div class="kbnote">загрузка…</div>' : !list.length ? '<p class="rs-mut">За этот день событий нет.</p>' :
+      '<h3 style="margin:6px 0 10px">По инженерам</h3><table class="rp-tb"><thead><tr><th>Инженер</th><th>Входов</th><th>Стартов</th><th>Завершено</th><th>Прервано</th><th>Отчётов</th><th title="Начал автопрогон, но не завершил и не прервал (закрыл программу, выключился ПК)">Не закончено</th></tr></thead><tbody>'+sum+'</tbody></table>'+
+      '<h3 style="margin:22px 0 10px">Все события</h3><table class="rp-tb"><thead><tr><th>Время</th><th>Событие</th><th>Инженер</th><th>Подробности</th><th>IP</th></tr></thead><tbody>'+rows+'</tbody></table>')+
+    '</div>';
+}
+
 function screenHistory(){
   var H = S.hist || { list:null, loading:false, err:'', q:'', sel:[], view:null, cmp:null, busy:false, sum:{}, sumBusy:false, fModel:'', fMode:'', fErr:false };
   var body;
   if (H.busy){
     body = hexSpinner('ЗАГРУЗКА ОТЧЁТА');
   } else if (H.view){
-    var r = H.view.env.report||{};
-    body = '<div class="headactions" style="margin-bottom:12px"><button class="btn btn-ghost" onclick="echips.histBack()">← к списку</button></div>'+histHeader(H.view.env)+
-      '<div class="smtable" style="margin-top:12px">'+(r.results||[]).filter(function(x){ return x.status!=='idle'; }).map(function(x){
-        return '<div class="smr nv"><span>'+esc(x.title)+'</span><span class="mono">'+HIST_ST[x.status]+(x.auto_note||x.comment ? ' · '+esc(String(x.comment||x.auto_note).slice(0,140)) : '')+'</span></div>';
-      }).join('')+'</div>';
+    body = histReportView(H);
   } else if (H.cmp){
     var A_ = H.cmp.a.env, B_ = H.cmp.b.env, ra = A_.report||{}, rb = B_.report||{}, byId = {};
     (ra.results||[]).forEach(function(x){ byId[x.id] = { a:x }; });
@@ -4130,16 +4215,10 @@ function screenMb(){
    файл вручную — commit/push уже делает тот, кто добавляет инженера. */
 function screenTechAdmin(){
   var t = S.techadmin;
-  var keyBlock = t.hasKey
-    ? '<div class="dai"><div class="dah"><i class="ddot pass"></i><b>Ключ подписи сохранён</b></div><p>Список инженеров подписывается этим ключом; без подписи другие ноутбуки его не примут. Ключ хранится зашифрованно (Windows) только на этом компьютере.</p></div><div class="dai"><button class="btn btn-ghost" onclick="echips.techadminClearKey()">Удалить ключ</button></div>'
-    : '<div class="formfield"><label>Вставьте ключ подписи</label>'+
-      '<input type="password" value="'+esc(t.keyInput)+'" oninput="echips.techadminField(\'keyInput\',this.value)" placeholder="ключ подписи">'+
-      '<div class="hint" style="margin-top:6px">Вводится один раз. Без ключа список инженеров изменить нельзя.</div></div>'+
-      '<div class="headactions" style="margin-top:12px"><button class="btn btn-ghost" onclick="echips.techadminSaveKey()">Сохранить ключ</button></div>';
   var rows = (S.lock.techs||[]).map(function(x){
     return '<tr><td><i class="av">'+esc(String(x.name||'?').charAt(0).toUpperCase())+'</i></td><td><b>'+esc(x.name)+'</b><div class="rr mono">'+esc(x.id)+'</div></td>'+
       '<td><span class="role'+(x.role==='admin'?' adm':'')+'">'+(x.role==='admin'?'Администратор':'Техник')+'</span></td>'+
-      '<td class="ra"><button class="lnk bad" '+(t.busy||!t.hasKey?'disabled':'')+' onclick="echips.techadminRemove(\''+esc(x.id)+'\')">Удалить</button></td></tr>';
+      '<td class="ra"><button class="lnk bad" '+(t.busy?'disabled':'')+' onclick="echips.techadminRemove(\''+esc(x.id)+'\')">Удалить</button></td></tr>';
   }).join('');
   return '<div class="pane te">'+
     '<div class="af-head"><div><div class="eyebrow">Только для администратора</div><h1 class="title">Инженеры</h1></div><button class="btn btn-ghost" onclick="echips.go(\'start\')">Закрыть</button></div>'+
@@ -4152,10 +4231,10 @@ function screenTechAdmin(){
         '<label>Роль<select onchange="echips.techadminField(\'role\',this.value)"><option value="tech"'+(t.role!=='admin'?' selected':'')+'>Техник</option><option value="admin"'+(t.role==='admin'?' selected':'')+'>Администратор</option></select></label></div>'+
         (t.err?'<div class="err" style="margin:10px 0 0">'+esc(t.err)+'</div>':'')+
         (t.msg?'<div class="infoline" style="margin:10px 0 0">'+esc(t.msg)+'</div>':'')+
-        '<div class="headactions" style="margin-top:14px">'+(t.hasKey ? '<button class="btn btn-primary" '+(t.busy?'disabled':'')+' onclick="echips.techadminPublish()">'+(t.busy?'Сохраняю…':'Сохранить в список')+'</button>' : '')+
-        '<span class="rs-mut" style="margin-left:6px">'+(t.hasKey ? '' : 'Для записи нужен ключ подписи (справа).')+'</span></div>'+
-        '<p class="rs-mut" style="margin-top:12px">Список хранится подписанным в приватном репозитории и подхватывается на ноутбуках, когда они выходят в интернет; между обновлениями вход работает без сети. Если ноутбук не был в сети больше 7 суток — войти сможет только администратор. Тот же идентификатор с новым PIN заменяет запись.</p></div>'+
-    '</section><aside class="rp-side"><h3>Ключ подписи</h3>'+keyBlock+'</aside></div></div>';
+        '<div class="headactions" style="margin-top:14px"><button class="btn btn-primary" '+(t.busy?'disabled':'')+' onclick="echips.techadminPublish()">'+(t.busy?'Сохраняю…':'Сохранить в список')+'</button>'+
+        '</div>'+
+        '<p class="rs-mut" style="margin-top:12px">Инженеры хранятся на сервере: изменения действуют сразу на всех ноутбуках. Тот же идентификатор с новым PIN заменяет запись. Все входы и неудачные попытки попадают в журнал сервера.</p></div>'+
+    '</section><aside class="rp-side"><h3>Как это работает</h3><p class="rs-mut">PIN проверяется на сервере, на ноутбуке он не хранится. Сессия действует 12 часов. Пять неверных PIN подряд блокируют вход с этого адреса на 15 минут.</p></aside></div></div>';
 }
 
 function screenReport(){
@@ -4227,6 +4306,7 @@ function render(){
     : S.screen==='repdetail' ? screenRepDetail()
     : S.screen==='sensors' ? (autoSensorsFocusActive() ? screenAutoFocusSensors() : screenSensors())
     : S.screen==='stress' ? (autoStressFocusActive() ? screenAutoFocusStress() : screenStress())
+    : S.screen==='events' ? screenEvents()
     : S.screen==='history' ? screenHistory() : screenReport();
   if (isNewView && host.firstElementChild) host.firstElementChild.classList.add('enter');
   if(sel!==null){
@@ -4263,61 +4343,48 @@ function padPoint(e, move){
   }
 })();
 
-/* ---------- вход по PIN при запуске (см. CLAUDE.md, задача №2) ----------
-   Список инженеров — _config/techs.json (приватный echips-reports) в публичном репозитории (только
-   SHA-256(salt+":"+pin), см. commands/techs.rs), подтягивается заново при
-   каждом запуске. Экран поверх всего приложения (#lock-overlay в
+/* ---------- вход по PIN при запуске ----------
+   PIN проверяет сервер Echips (commands/srv.rs). Экран поверх всего приложения (#lock-overlay в
    index.html, вне #screen — render() его не трогает). */
 function lockInit(){
-  S.lock = { phase:'boot', techs:null, err:'', pin:'', shake:false, note:'', expired:false, ageDays:-1 };
+  S.lock = { phase:'pin', techs:null, err:'', pin:'', shake:false, note:'' };
   renderLock();
-  invoke('fetch_techs').then(function(res){
-    S.lock.techs = res.techs || [];
-    S.lock.note = res.source!=='github' ? (res.note || 'Список не из GitHub') : '';
-    S.lock.expired = !!res.expired; S.lock.ageDays = res.age_days;
-    if (res.expired && !S.lock.note) S.lock.note = 'Список инженеров давно не обновлялся.';
-    S.lock.phase = 'pin';
-    renderLock();
-  }).catch(function(err){
-    S.lock.phase = 'error';
-    S.lock.err = typeof err==='string' ? err : 'Не удалось загрузить список инженеров';
-    renderLock();
-  });
+  // связи с сервером нет — предупреждаем сразу, а не после ввода PIN
+  invoke('srv_ping').then(function(ok){
+    if (!ok){ S.lock.note = 'Нет связи с сервером Echips. Вход без интернета возможен, если вы входили на этом ноутбуке с интернетом за последние 7 суток.'; renderLock(); }
+  }).catch(function(){});
 }
-/* Экрана выбора имени нет — вводится только PIN, инженер определяется
-   перебором _config/techs.json (приватный echips-reports) по совпадению хэша (имя показывается уже
-   после успешного входа). Список короткий (несколько человек), поэтому
-   последовательный перебор с ожиданием каждого хэша не проблема. */
-function lockFindMatch(pin){
-  var chain = Promise.resolve(null);
-  (S.lock.techs||[]).forEach(function(t){
-    chain = chain.then(function(found){
-      if(found) return found;
-      return sha256Hex(t.salt+':'+pin).then(function(hash){ return hash===t.pin_hash ? t : null; });
-    });
-  });
-  return chain;
-}
+/* Вход: PIN уходит на сервер (commands/srv.rs), он же выдаёт сессию на 12 часов и ведёт журнал входов. */
 function lockTrySubmit(){
   var L = S.lock;
   if(!L.pin){ L.err='Введите PIN.'; renderLock(); return; }
   L.phase='verifying'; renderLock();
-  lockFindMatch(L.pin).then(function(tech){
-    if(tech && L.expired && tech.role!=='admin'){
-      // список не подтверждали в сети больше 7 суток — обычным инженерам вход закрыт до обновления
-      L.phase='pin'; L.pin=''; L.err='Список инженеров не обновлялся более 7 суток. Подключите ноутбук к интернету (нажмите «Обновить») или войдите администратором.'; L.shake=true; renderLock();
-      setTimeout(function(){ L.shake=false; renderLock(); }, 400);
-      return;
-    }
-    if(tech){
-      S.engineer = { id:tech.id, name:tech.name, role:tech.role||'tech' };
-      L.phase='ok'; renderLock(); render();
+  invoke('srv_login', { pin:L.pin }).then(function(res){
+    if (res && res.ok){
+      S.engineer = { id:res.id, name:res.name, role:res.role||'tech', offline:!!res.offline_mode };
+      L.note = ''; L.phase='ok'; renderLock(); render();
+      afterLogin();
       setTimeout(function(){ L.phase='unlocked'; renderLock(); }, 650);
     } else {
-      L.phase='pin'; L.pin=''; L.err='Неверный PIN.'; L.shake=true; renderLock();
+      L.phase='pin'; L.pin='';
+      L.err = res && res.offline ? (res.message || 'Нет связи с сервером. Проверьте интернет и повторите.') : ((res && res.message) || 'Неверный PIN.');
+      L.shake=true; renderLock();
       setTimeout(function(){ L.shake=false; renderLock(); }, 400);
     }
+  }).catch(function(err){
+    L.phase='pin'; L.pin=''; L.err = typeof err==='string' ? err : 'Не удалось войти'; renderLock();
   });
+}
+/* После входа: профили моделей, очередь неотправленных отчётов, статус. */
+function afterLogin(){
+  loadProfiles();
+  invoke('flush_report_queue').catch(function(){}).then(refreshQueue);
+}
+/* Сессия на сервере истекла (12 ч) — снова показываем экран PIN, результаты проверки остаются. */
+function relockSession(){
+  if (!FEATURE_PIN || S.lock.phase!=='unlocked') return;
+  S.lock.phase='pin'; S.lock.pin=''; S.lock.err='Сессия истекла — введите PIN снова, результаты проверки сохранены.';
+  renderLock();
 }
 function dotsHtml(n){
   var out = '';
@@ -4422,11 +4489,17 @@ document.addEventListener('DOMContentLoaded', function(){
     S.lock.phase = 'unlocked';
     var ov = document.getElementById('lock-overlay');
     if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
-    // список инженеров нужен только экрану «+ добавить инженера»; ошибки (нет сети) молча игнорируем
-    invoke('fetch_techs').then(function(res){ S.lock.techs = res.techs || []; render(); }).catch(function(){});
     render();
   }
   invoke('flush_report_queue').catch(function(){}).then(refreshQueue);
+  // сессия на сервере живёт 12 часов: когда истечёт — просим PIN заново
+  setInterval(function(){
+    if (FEATURE_PIN && S.lock.phase==='unlocked') invoke('srv_whoami').then(function(w){
+      if (!w){ relockSession(); return; }
+      // связь появилась (или пропала) — обновляем метку «без сети»
+      if (S.engineer && !!S.engineer.offline !== !!w.offline){ S.engineer.offline = !!w.offline; renderNav(); refreshQueue(); }
+    }).catch(function(){});
+  }, 60000);
   setInterval(function(){ if (!S.auto.on) A.reportSync('sync'); refreshQueue(); }, 10000);
   // Отчёты, накопленные без сети, досылаем сами: раз в 3 минуты и сразу при появлении связи.
   setInterval(function(){ invoke('flush_report_queue').catch(function(){}); }, 60000);

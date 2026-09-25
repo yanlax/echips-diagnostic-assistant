@@ -675,7 +675,7 @@ h1.title{font-family:var(--grotesk);font-size:27px;font-weight:600;color:var(--t
 
 /* узкие окна: верхняя панель сжимается по приоритету */
 @media (max-width:1240px){.brand .bn .s{display:none}.step{padding:0 11px}.step .meta{display:none}.techbox .eng em{display:none}}
-@media (max-width:1120px){.brand .bn{display:none}.queuebox .ok{display:none}.queuebox .ok+.bad,.queuebox .bad{display:inline}.titlebar.topbar{gap:12px}}
+@media (max-width:1320px){.brand .bn{display:none}.queuebox .ok{display:none}.queuebox .ok+.bad,.queuebox .bad{display:inline}.titlebar.topbar{gap:12px}}
 
 /* ================= Дизайн «Стенд» (вариант B): слой поверх базовых стилей ================= */
 html,body{background:var(--page)}
@@ -827,3 +827,9 @@ select.search-input{background-image:none;padding-left:12px}
 .mbx .formgrid{max-width:none;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
 @media (max-width:1100px){.mbx .formgrid{grid-template-columns:1fr}}
 .mbx .formfield input{width:100%}.mb-hint{font-size:13.5px;color:var(--mute)}
+
+/* Отчёт в «Истории» и журнал */
+.rp-tb tr.hv-h td{background:var(--glass-hover);color:var(--mute);font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding:8px 14px;border-top:1px solid var(--line)}
+.rp-tb tr.hv-d td{background:var(--glass-hover);padding:10px 14px 14px}
+.hv-kv{display:flex;justify-content:space-between;gap:14px;padding:7px 0;border-top:1px solid var(--line);font-size:13px}.hv-kv:first-of-type{border-top:0}
+.hv-kv span{color:var(--mute)}.hv-kv b{font-weight:550;text-align:right;overflow-wrap:anywhere}

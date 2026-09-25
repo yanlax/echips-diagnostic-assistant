@@ -2132,56 +2132,70 @@ function renderNav(){
 
 /* ---------- экраны ---------- */
 function screenStart(){
-  var modes = [
-    { tag:'DRV', title:'Установка драйверов', desc:'Определение модели, выбор пакетов и установка с точкой восстановления.', meta:'та же логика, что в Driver Assistant', badge:'ГОТОВО', hot:false, go:'drivers' },
-    { tag:'AUTO', title:'Автопрогон · полный', desc:'Последовательная проверка по профилю модели: сверка железа, диски, память, стресс-тест 2 мин, автоматические вердикты.', meta:'профиль: '+profile().name+' · '+(profile().tests||[]).length+' тестов', badge:'ПОЛНЫЙ', hot:true, act:'echips.autoStart()' },
-    { tag:'FAST', title:'Автопрогон · экспресс', desc:'Короткий входной контроль (около 5 минут): система, диск и SMART, сеть, аккумулятор, клавиатура, матрица, камера, звук, память.', meta:'профиль: '+profile().name+' · '+(profile().expressTests||profile().tests||[]).length+' тестов', badge:'ЭКСПРЕСС', hot:false, act:'echips.autoStart(\'express\')' },
-    { tag:'DIA', title:'Диагностика оборудования', desc:CATS.length+' категорий тестов, датчики (где доступны), стресс-тест и отчёт.', meta:CATS.length+' категорий · TXT / JSON', badge:'РУЧНОЙ', hot:false, go:'dash' },
-    { tag:'MB', title:'Замена платы', desc:'Гарантийный случай: чтение и запись SN/UUID заводской утилитой (AMI/Insyde), аудит-лог.', meta:'проверка чтением обратно', badge:'ГОТОВО', hot:false, go:'mb' }
-  ].filter(function(m){ return FEATURE_MB || m.go!=='mb'; });
-  var detected = S.device
-    ? deviceLabel() + (S.device.bios_version ? ' · BIOS ' + esc(S.device.bios_version) : '') + (S.device.os_version ? ' · ' + esc(S.device.os_version) : '')
-    : (S.deviceError ? 'Не удалось определить устройство: ' + esc(S.deviceError) : 'определяется…');
-  return '<div class="pane">'+
-    markerBanner()+
-    '<div class="eyebrow">Режим работы</div>'+
-    '<h1 class="title">Что делаем с ноутбуком</h1>'+
-    '<p class="lede" style="margin:7px 0 24px">Выберите режим — драйверы, автопрогон или полная проверка оборудования.</p>'+
-    '<div class="modes">'+ modes.map(function(m){
-      return '<div class="mode'+(m.hot?' is-new':'')+'" onclick="'+(m.act || "echips.go('"+m.go+"')")+'">'+
-        '<div class="row"><div class="ic">'+m.tag+'</div><span class="badge'+(m.hot?' hot':'')+'">'+m.badge+'</span></div>'+
-        '<h3>'+m.title+'</h3><p>'+m.desc+'</p><div class="foot">'+m.meta+'</div></div>';
-    }).join('') +'</div>'+
-    '<div class="detected"><span class="pulse'+(S.device?' anim':'')+'"></span>Определено: '+detected+'</div>'+
-  '</div>';
+  var d = S.device || {}, hw = S.hw || null;
+  var mm = String(d.model||'').match(/\[([^\]]+)\]/), codeName = mm ? mm[1] : (cleanSmbios(d.model) || 'Ноутбук');
+  var maker = cleanSmbios(d.manufacturer) + (mm ? ' · ' + String(d.model).replace(/\s*\[[^\]]+\]\s*/,'').trim() : '');
+  var rows = [
+    ['Процессор', hw && hw.cpu ? cpuShort(hw.cpu.name)+' · '+hw.cpu.cores+' ядер' : (d.cpu || '—')],
+    ['Память', hw ? Math.round(hw.ram_total_gb)+' ГБ' : (d.ram_total_gb ? Math.round(d.ram_total_gb)+' ГБ' : '—')],
+    ['Накопитель', hw && hw.disks && hw.disks.length ? hw.disks.filter(function(x){ return x.is_system; }).concat(hw.disks)[0].model+' · '+hw.disks.filter(function(x){ return x.is_system; }).concat(hw.disks)[0].size_gb+' ГБ' : '—'],
+    ['BIOS', d.bios_version || '—'],
+    ['Система', d.os_version || '—'],
+    ['Серийный номер', d.serial_number || '—']
+  ];
+  var spec = rows.map(function(r){ return '<div><dt>'+r[0]+'</dt><dd>'+esc(r[1])+'</dd></div>'; }).join('');
+  var status = S.device ? '<span class="pulse anim"></span>Устройство определено' : (S.deviceError ? 'Не удалось определить устройство: '+esc(S.deviceError) : '<span class="pulse"></span>Определяем устройство…');
+  var tiles = [
+    { t:'Экспресс', d:'Входной контроль, около 5 минут', act:"echips.autoStart('express')" },
+    { t:'Драйверы', d:'Модель и пакеты с точкой восстановления', act:"echips.go('drivers')" },
+    { t:'Диагностика', d:CATS.length+' проверок вручную', act:"echips.go('dash')" }
+  ];
+  if (FEATURE_MB) tiles.push({ t:'Замена платы', d:'Серийный номер и UUID', act:"echips.go('mb')" });
+  return '<div class="pane">'+markerBanner()+
+    '<div class="st-split"><section class="st-sheet"><p class="st-k">Подключено</p><h1 class="st-model">'+esc(codeName)+'</h1><p class="st-maker">'+esc(maker||'Устройство')+'</p>'+
+      '<dl class="st-spec">'+spec+'</dl><div class="st-ok">'+status+'</div></section>'+
+    '<section class="st-launch"><a class="st-hero" onclick="echips.autoStart()"><span class="st-hb"><b>Полный автопрогон</b><span>'+(profile().tests||[]).length+' проверок, отчёт уйдёт сам. Профиль: '+esc(profile().name)+'.</span></span><span class="st-go">Запустить</span></a>'+
+      '<div class="st-tiles">'+tiles.map(function(x){ return '<a class="st-tile" onclick="'+x.act+'"><b>'+x.t+'</b><span>'+x.d+'</span></a>'; }).join('')+'</div></section></div></div>';
 }
 
+var DASH_AREAS = [
+  ['Система', ['sys','ident','winact','drv']],
+  ['Накопители', ['disk','crash','rem']],
+  ['Сеть и порты', ['usb','bt','wifi','lan']],
+  ['Ввод и экран', ['kb','lcd','ext','bright','cam','pad','fp','headset','touch','snd']],
+  ['Питание, охлаждение, нагрузка', ['bat','fans','sens','mem','stress']]
+];
+function dashNote(id){
+  var d = S.detail[id], a = d && d.auto;
+  var t = (a && a.note) || S.comments[id] || '';
+  return String(t).length>70 ? String(t).slice(0,68)+'…' : String(t);
+}
 function screenDash(){
-  var c = counts();
+  var c = counts(), na = 0, idle = 0, failed = [];
+  CATS.forEach(function(x){ var st = statusOf(x.id); if (st==='na') na++; else if (st==='idle') idle++; else if (st==='fail') failed.push(x); });
+  function tile(id){
+    var x = CATS.filter(function(k){ return k.id===id; })[0]; if (!x) return '';
+    if (x.group){
+      var g = GROUPS[x.group], gs = groupStatus(x.group);
+      return '<a class="dt '+STATUS[gs.st].cls+'" onclick="echips.openCat(\''+groupTests(x.group)[0].id+'\')"><span class="dn">'+g.name+'</span><span class="dr">'+gs.done+' из '+gs.total+' · '+STATUS[gs.st].label+'</span></a>';
+    }
+    var st = statusOf(x.id), live = x.kind==='sensors', out = st==='idle' && !inProfile(x.id);
+    var note = dashNote(x.id) || (live ? 'мониторинг' : (out ? 'вне профиля' : STATUS[st].label));
+    return '<a class="dt '+(live?'live ':'')+STATUS[st].cls+'" onclick="echips.openCat(\''+x.id+'\')"><span class="dn">'+x.name+'</span><span class="dr">'+esc(note)+'</span></a>';
+  }
+  var areas = DASH_AREAS.map(function(ar){
+    return '<div class="da"><h3>'+ar[0]+'</h3><div class="dts">'+ar[1].map(tile).join('')+'</div></div>';
+  }).join('');
+  var attn = failed.length ? failed.map(function(x){
+    var h = hintFor(x.id);
+    return '<div class="dai"><div class="dah"><i class="ddot fail"></i><b>'+x.name+'</b></div><p>'+esc(dashNote(x.id)||'ошибка')+'</p>'+(h?'<p class="do">'+esc(h)+'</p>':'')+'</div>';
+  }).join('') : '<div class="dai"><div class="dah"><i class="ddot pass"></i><b>Ошибок нет</b></div><p>Все выполненные проверки пройдены или не применимы.</p></div>';
+  var waiting = CATS.filter(function(x){ return statusOf(x.id)==='idle' && inProfile(x.id); }).map(function(x){ return x.name; });
   return '<div class="pane">'+
-    '<div class="head"><div><div class="eyebrow">Диагностика оборудования</div><h1 class="title">Категории тестов</h1></div>'+
-    '<div class="headactions">'+
-      '<button class="btn btn-ghost" onclick="echips.reset()">Сбросить</button>'+
-      '<button class="btn btn-primary" onclick="echips.autoStart()">Автопрогон · полный</button>'+'<button class="btn btn-ghost" onclick="echips.autoStart(\'express\')">Экспресс</button>'+
-      '<button class="btn btn-primary" onclick="echips.go(\'report\')">К отчёту</button>'+
-    '</div></div>'+
-    '<div class="progrow"><div class="bar"><div class="fill" style="width:'+(c.checked/CATS.length*100).toFixed(0)+'%"></div></div>'+
-    '<div class="lbl">проверено '+c.checked+' из '+CATS.length+' · пройдено '+c.pass+' · ошибок '+c.fail+'</div></div>'+
-    '<div class="cats">'+ CATS.map(function(x){
-      if (x.group){
-        if (groupTests(x.group)[0].id!==x.id) return '';
-        var g = GROUPS[x.group], gs = groupStatus(x.group);
-        return '<div class="cat '+STATUS[gs.st].cls+'" onclick="echips.openCat(\''+x.id+'\')">'+
-          '<div class="row"><span class="tag">'+g.tag+'</span><span class="name">'+g.name+'</span><span class="sdot"></span></div>'+
-          '<div class="method">'+g.method+'</div>'+
-          '<div class="foot"><span class="st">'+gs.done+' из '+gs.total+' · '+STATUS[gs.st].label+'</span><span>'+g.impl+'</span></div></div>';
-      }
-      var st = statusOf(x.id), live = x.kind==='sensors';
-      return '<div class="cat '+(live?'live ':'')+STATUS[st].cls+'" onclick="echips.openCat(\''+x.id+'\')">'+
-        '<div class="row"><span class="tag">'+x.tag+'</span><span class="name">'+x.name+'</span><span class="sdot"></span></div>'+
-        '<div class="method">'+x.method+'</div>'+
-        '<div class="foot"><span class="st">'+(live?'мониторинг':STATUS[st].label)+'</span><span>'+x.impl+'</span></div></div>';
-    }).join('') +'</div></div>';
+    '<div class="dstats"><div class="dst pass"><b>'+c.pass+'</b><span>пройдено</span></div><div class="dst fail"><b>'+c.fail+'</b><span>ошибка</span></div><div class="dst na"><b>'+na+'</b><span>не применимо</span></div><div class="dst idle"><b>'+idle+'</b><span>ждут проверки</span></div>'+
+    '<div class="headactions dacts"><button class="btn btn-ghost" onclick="echips.reset()">Сбросить</button><button class="btn btn-ghost" onclick="echips.autoStart(\'express\')">Экспресс</button><button class="btn btn-primary" onclick="echips.autoStart()">Автопрогон · полный</button><button class="btn btn-primary" onclick="echips.go(\'report\')">К отчёту</button></div></div>'+
+    '<div class="dwrap"><section class="dmap">'+areas+'</section><aside class="dattn"><h3>Требует внимания</h3>'+attn+
+      (waiting.length ? '<div class="dai"><div class="dah"><i class="ddot idle"></i><b>Не проверено</b></div><p>'+esc(waiting.slice(0,8).join(', '))+(waiting.length>8?' и ещё '+(waiting.length-8):'')+'.</p></div>' : '')+'</aside></div></div>';
 }
 
 /* Соответствие KeyboardEvent.code позициям клавиш в раскладке KEYROWS. */
@@ -3988,79 +4002,57 @@ function screenMb(){
 function screenTechAdmin(){
   var t = S.techadmin;
   var tokenBlock = t.hasToken
-    ? '<div class="infoline" style="margin:0 0 16px;max-width:560px">Токен GitHub сохранён на этом компьютере. '+
-      '<button class="btn-link" onclick="echips.techadminClearToken()">Удалить токен</button></div>'
-    : '<div class="formgrid" style="margin-bottom:16px"><div class="formfield"><label>Токен GitHub (вводится один раз, хранится только на этом компьютере)</label>'+
+    ? '<div class="dai"><div class="dah"><i class="ddot pass"></i><b>Токен сохранён</b></div><p>Токен GitHub зашифрован средствами Windows и хранится только на этом компьютере.</p></div><div class="dai"><button class="btn btn-ghost" onclick="echips.techadminClearToken()">Удалить токен</button></div>'
+    : '<div class="formfield"><label>Токен GitHub (вводится один раз, хранится только на этом компьютере)</label>'+
       '<input type="password" value="'+esc(t.tokenInput)+'" oninput="echips.techadminField(\'tokenInput\',this.value)" placeholder="github_pat_…">'+
       '<div class="hint" style="margin-top:6px">Fine-grained токен на репозиторий echips-diagnostic-assistant, право Contents: read and write.</div></div>'+
-      '<div class="headactions"><button class="btn btn-ghost" onclick="echips.techadminSaveToken()">Сохранить токен</button></div></div>';
-  var list = (S.lock.techs||[]).map(function(x){
-    return '<div class="row"><span class="lbl">'+esc(x.name)+' · '+esc(x.id)+(x.role==='admin'?' · админ':'')+'</span>'+
-      '<span class="val"><button class="btn-link" '+(t.busy||!t.hasToken?'disabled':'')+' onclick="echips.techadminRemove(\''+esc(x.id)+'\')">Удалить</button></span></div>';
+      '<div class="headactions" style="margin-top:12px"><button class="btn btn-ghost" onclick="echips.techadminSaveToken()">Сохранить токен</button></div>';
+  var rows = (S.lock.techs||[]).map(function(x){
+    return '<tr><td><i class="av">'+esc(String(x.name||'?').charAt(0).toUpperCase())+'</i></td><td><b>'+esc(x.name)+'</b><div class="rr mono">'+esc(x.id)+'</div></td>'+
+      '<td><span class="role'+(x.role==='admin'?' adm':'')+'">'+(x.role==='admin'?'Администратор':'Техник')+'</span></td>'+
+      '<td class="ra"><button class="lnk bad" '+(t.busy||!t.hasToken?'disabled':'')+' onclick="echips.techadminRemove(\''+esc(x.id)+'\')">Удалить</button></td></tr>';
   }).join('');
-  return '<div class="pane">'+
-    '<div class="crumbs"><button class="btn-link" onclick="echips.go(\'start\')">← режимы</button>'+
-    '<span class="idx">инженеры</span></div>'+
-    '<div class="testhead"><div><h2>Инженеры</h2>'+
-    '<div class="hint">Изменения сохраняются прямо в data/techs.json в репозитории и подхватываются на всех станциях при следующем запуске. '+
-    'Тот же идентификатор с новым PIN — заменяет запись.</div></div></div>'+
-    '<div style="margin-top:16px">'+tokenBlock+'</div>'+
-    (list ? '<div class="devlist2" style="max-width:560px;margin-bottom:18px">'+list+'</div>' : '')+
-    '<div class="formgrid">'+
-    '<div class="formfield"><label>Идентификатор (латиницей)</label><input value="'+esc(t.id)+'" oninput="echips.techadminField(\'id\',this.value)" placeholder="sidorov"></div>'+
-    '<div class="formfield"><label>ФИО</label><input value="'+esc(t.name)+'" oninput="echips.techadminField(\'name\',this.value)" placeholder="Сидоров С.С."></div>'+
-    '<div class="formfield"><label>PIN (6 и более цифр)</label><input type="password" value="'+esc(t.pin)+'" oninput="echips.techadminField(\'pin\',this.value)" placeholder="••••••"></div>'+
-    '<div class="formfield"><label>Роль</label><select onchange="echips.techadminField(\'role\',this.value)">'+
-      '<option value="tech"'+(t.role!=='admin'?' selected':'')+'>Техник</option>'+
-      '<option value="admin"'+(t.role==='admin'?' selected':'')+'>Администратор</option>'+
-    '</select></div>'+
-    (t.err?'<div class="err" style="margin:-6px 0 12px">'+esc(t.err)+'</div>':'')+
-    (t.msg?'<div class="infoline" style="margin:0 0 12px">'+esc(t.msg)+'</div>':'')+
-    '</div>'+
-    '<div class="headactions">'+
-      (t.hasToken ? '<button class="btn btn-primary" '+(t.busy?'disabled':'')+' onclick="echips.techadminPublish()">'+(t.busy?'Сохраняю…':'Сохранить в репозиторий')+'</button>' : '')+
-      '<button class="btn btn-ghost" onclick="echips.techadminGenerate()">Только сгенерировать запись</button></div>'+
-    (t.result ?
-      '<div class="card" style="margin-top:18px;max-width:560px"><div class="k">Вставить в data/techs.json вручную</div>'+
-      '<pre class="techjson" style="margin-top:10px">'+esc(t.result)+'</pre>'+
-      '<div class="headactions" style="margin-top:10px"><button class="btn btn-ghost" onclick="echips.techadminCopy()">Скопировать</button></div></div>'
-      : '')+
-    '</div>';
+  return '<div class="pane te">'+
+    '<div class="af-head"><div><div class="eyebrow">Только для администратора</div><h1 class="title">Инженеры</h1></div><button class="btn btn-ghost" onclick="echips.go(\'start\')">Закрыть</button></div>'+
+    '<div class="rp-wrap"><section>'+
+      (rows ? '<table class="rp-tb te-tb"><thead><tr><th></th><th>Имя</th><th>Роль</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>' : '<p class="rs-mut">Список пуст или не загружен.</p>')+
+      '<div class="te-form"><h3>Новый инженер или смена PIN</h3><div class="te-frm">'+
+        '<label>Идентификатор латиницей<input value="'+esc(t.id)+'" oninput="echips.techadminField(\'id\',this.value)" placeholder="sidorov"></label>'+
+        '<label>ФИО<input value="'+esc(t.name)+'" oninput="echips.techadminField(\'name\',this.value)" placeholder="Сидоров С.С."></label>'+
+        '<label>PIN, 6 и более цифр<input type="password" value="'+esc(t.pin)+'" oninput="echips.techadminField(\'pin\',this.value)" placeholder="••••••"></label>'+
+        '<label>Роль<select onchange="echips.techadminField(\'role\',this.value)"><option value="tech"'+(t.role!=='admin'?' selected':'')+'>Техник</option><option value="admin"'+(t.role==='admin'?' selected':'')+'>Администратор</option></select></label></div>'+
+        (t.err?'<div class="err" style="margin:10px 0 0">'+esc(t.err)+'</div>':'')+
+        (t.msg?'<div class="infoline" style="margin:10px 0 0">'+esc(t.msg)+'</div>':'')+
+        '<div class="headactions" style="margin-top:14px">'+(t.hasToken ? '<button class="btn btn-primary" '+(t.busy?'disabled':'')+' onclick="echips.techadminPublish()">'+(t.busy?'Сохраняю…':'Сохранить в список')+'</button>' : '')+
+        '<button class="btn btn-ghost" onclick="echips.techadminGenerate()">Только сгенерировать запись</button></div>'+
+        '<p class="rs-mut" style="margin-top:12px">Список хранится в репозитории (data/techs.json) и подхватывается на всех ноутбуках при следующем запуске. Тот же идентификатор с новым PIN заменяет запись.</p></div>'+
+      (t.result ? '<div class="te-form"><h3>Вставить в data/techs.json вручную</h3><pre class="techjson">'+esc(t.result)+'</pre><div class="headactions" style="margin-top:10px"><button class="btn btn-ghost" onclick="echips.techadminCopy()">Скопировать</button></div></div>' : '')+
+    '</section><aside class="rp-side"><h3>Токен записи</h3>'+tokenBlock+'</aside></div></div>';
 }
 
 function screenReport(){
-  var c = counts(), full = (profile().tests||[]).every(function(id){ return statusOf(id)!=='idle'; });
-  var verdict = c.fail ? 'в ремонт' : full ? 'годен' : 'не завершено';
-  return '<div class="pane">'+
-    '<div class="head"><div><div class="eyebrow">Итог прогона</div><h1 class="title">Отчёт</h1></div>'+
-    '<div class="headactions">'+
-      '<button class="btn btn-ghost" onclick="echips.exp(\'json\')">Экспорт JSON</button>'+
-      '<button class="btn btn-ghost" onclick="echips.exp(\'txt\')">Экспорт TXT</button>'+
-      '<button class="btn btn-primary" onclick="echips.exp(\'pdf\')">Экспорт PDF</button>'+
-    '</div></div>'+
-    '<div style="margin-bottom:16px"><label style="display:block;font-size:12px;color:var(--dim);margin-bottom:6px">Общий комментарий инженера (попадёт в TXT/JSON/PDF)</label>'+
-    '<textarea class="repsummary" rows="3" style="resize:vertical" placeholder="Итог по устройству, что сделано, на что обратить внимание клиенту/сервису…" oninput="echips.reportSummary(this.value)">'+esc(S.reportSummary||'')+'</textarea></div>'+
-    '<div class="repstats">'+
-      '<div class="repstat ok"><div class="k">пройдено</div><div class="v ok">'+c.pass+'</div></div>'+
-      '<div class="repstat'+(c.fail?' err':'')+'"><div class="k">ошибки</div><div class="v '+(c.fail?'err':'dim')+'">'+c.fail+'</div></div>'+
-      '<div class="repstat"><div class="k">не проверено</div><div class="v dim">'+(profile().tests||[]).filter(function(id){ return statusOf(id)==='idle'; }).length+'</div></div>'+
-      '<div class="repstat"><div class="k">вердикт</div><div class="v '+(c.fail?'err':full?'ok':'dim')+'" style="font-size:'+(verdict.length>8?'19px':'25px')+'">'+verdict+'</div></div>'+
-    '</div>'+
-    '<div class="table"><div class="th"><span class="c-num">№</span><span class="c-name">Компонент</span>'+
-      '<span class="c-impl">Метод</span><span class="c-st">Статус</span><span class="c-cm">Комментарий техника</span></div>'+
-      '<div class="tb">'+ CATS.map(function(x,i){
+  var c = counts(), tests = profile().tests||[], full = tests.every(function(id){ return statusOf(id)!=='idle'; });
+  var verdict = c.fail ? 'Нужен ремонт' : full ? 'Годен' : 'Проверка не завершена';
+  var cls = c.fail ? 'fail' : full ? 'pass' : 'idle';
+  var na = 0, idle = tests.filter(function(id){ return statusOf(id)==='idle'; }).length;
+  CATS.forEach(function(x){ if (statusOf(x.id)==='na') na++; });
+  var failed = CATS.filter(function(x){ return statusOf(x.id)==='fail'; });
+  var sub = failed.length ? failed.map(function(x){ return x.name+(dashNote(x.id)?': '+dashNote(x.id):''); }).slice(0,2).join('. ')+'.' : (full ? 'Все проверки профиля выполнены, ошибок нет.' : 'Часть проверок профиля ещё не выполнена.');
+  var send = S.reportSend==='sent' ? '<p class="rs-ok">Отчёт отправлен администратору.</p>' : S.reportSend==='queued' ? '<p class="rs-q">Отчёт в очереди: уйдёт при появлении связи.</p>' : '<p class="rs-mut">Отчёт уйдёт после автопрогона или экспорта.</p>';
+  return '<div class="pane rp">'+
+    '<div class="rp-head"><div class="rp-v '+cls+'"><p class="rp-k">Итог проверки</p><h1>'+verdict+'</h1><p class="rp-sub">'+esc(sub)+'</p></div>'+
+      '<div class="rp-c"><div class="dst pass"><b>'+c.pass+'</b><span>пройдено</span></div><div class="dst fail"><b>'+c.fail+'</b><span>ошибка</span></div><div class="dst na"><b>'+na+'</b><span>не применимо</span></div><div class="dst idle"><b>'+idle+'</b><span>не проверено</span></div></div>'+
+      '<div class="headactions"><button class="btn btn-ghost" onclick="echips.exp(\'txt\')">TXT</button><button class="btn btn-ghost" onclick="echips.exp(\'json\')">JSON</button><button class="btn btn-primary" onclick="echips.exp(\'pdf\')">Сохранить PDF</button></div></div>'+
+    '<div class="rp-wrap"><table class="rp-tb"><thead><tr><th></th><th>Проверка</th><th>Статус</th><th>Результат и комментарий</th></tr></thead><tbody>'+
+      CATS.map(function(x){
         var st = statusOf(x.id), out = st==='idle' && !inProfile(x.id);
-        var cm = S.comments[x.id] || (x.id==='sens' && S.snapshot ? 'приложен снимок датчиков' : '—');
-        return '<div class="tr clickable" onclick="echips.repOpen(\''+x.id+'\')" title="Открыть подробности"><span class="c-num">'+String(i+1).padStart(2,'0')+'</span>'+
-          '<span class="c-name">'+x.name+'</span><span class="c-impl">'+x.impl+'</span>'+
-          '<span class="c-st"><span class="pill '+STATUS[st].cls+'"><i></i>'+(out?'вне профиля':STATUS[st].label)+'</span></span>'+
-          '<span class="c-cm">'+esc(cm)+'</span></div>';
-      }).join('') +'</div></div>'+
-    '<div class="footrow"><span class="mono">'+esc(deviceLabel())+' · SN '+esc(deviceSn())+'</span>'+
-    '<span class="exp'+(S.exported?' done':'')+'" style="font-family:var(--mono);font-size:10.5px">'+
-    (S.exported ? esc(S.exported.path) + ' сохранён' : 'экспорт: TXT для акта, JSON для базы, PDF для клиента')+
-    (S.reportSend==='sent' ? ' · отчёт отправлен администратору' : S.reportSend==='queued' ? ' · отчёт в очереди на отправку (уйдёт при появлении связи)' : '')+
-    '</span></div></div>';
+        var cm = S.comments[x.id] || (x.id==='sens' && S.snapshot ? 'приложен снимок датчиков' : dashNote(x.id) || '');
+        return '<tr class="'+st+' clickable" onclick="echips.repOpen(\''+x.id+'\')" title="Открыть подробности"><td><i class="ddot '+st+'"></i></td><td class="rn">'+x.name+'</td><td class="rl">'+(out?'вне профиля':STATUS[st].label)+'</td><td class="rr">'+esc(cm)+'</td></tr>';
+      }).join('')+'</tbody></table>'+
+    '<aside class="rp-side"><h3>Заключение инженера</h3><textarea class="repsummary" rows="6" placeholder="Итог по устройству, что сделано, на что обратить внимание клиенту или сервису…" oninput="echips.reportSummary(this.value)">'+esc(S.reportSummary||'')+'</textarea>'+
+      '<h3>Отправка</h3>'+send+
+      (S.exported ? '<p class="rs-mut">'+esc(S.exported.path)+' сохранён</p>' : '<p class="rs-mut">TXT для акта, JSON для базы, PDF для клиента.</p>')+
+      '<h3>Устройство</h3><p class="rs-dev">'+esc(deviceLabel())+'<br><span class="mono">SN '+esc(deviceSn())+'</span></p></aside></div></div>';
 }
 
 /* ---------- рендер ---------- */

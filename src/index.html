@@ -13,59 +13,45 @@
 <div class="admin-panel" id="admin-panel"></div>
 
 <div class="app">
-  <header class="titlebar">
-    <div class="t">ECHIPS HARDWARE CHECK</div>
-    <button class="winbtn" type="button" id="win-minimize" title="Свернуть" aria-label="Свернуть">
-      <svg viewBox="0 0 10 10"><line x1="1" y1="5" x2="9" y2="5"></line></svg>
-    </button>
-    <button class="winbtn" type="button" id="win-maximize" title="Развернуть / восстановить (двойной клик по заголовку)" aria-label="Развернуть или восстановить">
-      <svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" fill="none"></rect></svg>
-    </button>
-    <button class="winbtn close" type="button" id="win-close" title="Закрыть" aria-label="Закрыть">
-      <svg viewBox="0 0 10 10"><line x1="1" y1="1" x2="9" y2="9"></line><line x1="9" y1="1" x2="1" y2="9"></line></svg>
-    </button>
-  </header>
-
-  <div class="main">
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="mark logo"><img src="logo.png" alt="Echips"></div>
-        <div>
-          <div class="h">Echips Hardware<br>Check</div>
-          <div class="s">v0.46.1 · ОТК / сервис</div>
+  <header class="titlebar topbar">
+    <div class="brand">
+      <div class="mark logo"><img src="logo.png" alt="Echips"></div>
+      <div class="bn"><div class="h">Echips Hardware Check</div><div class="s">v0.47.0 · ОТК / сервис</div></div>
+    </div>
+    <nav class="steps" id="steps"></nav>
+    <div class="top-r">
+      <div class="queuebox" id="queuebox"><span id="queue-text">Отчёты: —</span> <button type="button" class="btn-link" id="queue-send" onclick="echips.sendNow()">отправить</button></div>
+      <div class="theme-toggle-slot" id="theme-toggle-slot"></div>
+      <div class="techbox" id="techbox" tabindex="0">
+        <div class="eng"><i class="av" id="techbox-av">—</i><span id="techbox-name">—</span><em id="techbox-role"></em><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div>
+        <div class="menu">
+          <button type="button" class="menu-i" id="techbox-add" onclick="echips.go('techadmin')">Добавить инженера</button>
+          <a href="#" class="menu-i" id="site-link">Сайт echips.ru</a>
         </div>
       </div>
-
-      <nav class="steps" id="steps"></nav>
-
-      <div class="theme-toggle-slot" id="theme-toggle-slot"></div>
-
-      <div class="techbox intakebox">
-        <div class="k">Номер приёмки / ремонта</div>
-        <input type="text" id="intake-input" class="intake-input" inputmode="numeric" maxlength="6" placeholder="до 6 цифр" autocomplete="off" oninput="echips.setIntake(this.value)">
-        <div class="stagebtns"><button type="button" id="stage-before" onclick="echips.setStage('before')">До ремонта</button><button type="button" id="stage-after" onclick="echips.setStage('after')">После ремонта</button></div>
+      <div class="winbtns">
+        <button class="winbtn" type="button" id="win-minimize" title="Свернуть" aria-label="Свернуть">
+          <svg viewBox="0 0 10 10"><line x1="1" y1="5" x2="9" y2="5"></line></svg>
+        </button>
+        <button class="winbtn" type="button" id="win-maximize" title="Развернуть / восстановить (двойной клик по заголовку)" aria-label="Развернуть или восстановить">
+          <svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" fill="none"></rect></svg>
+        </button>
+        <button class="winbtn close" type="button" id="win-close" title="Закрыть" aria-label="Закрыть">
+          <svg viewBox="0 0 10 10"><line x1="1" y1="1" x2="9" y2="9"></line><line x1="9" y1="1" x2="1" y2="9"></line></svg>
+        </button>
       </div>
+    </div>
+  </header>
 
-      <div class="techbox" id="techbox">
-        <div class="k">Инженер</div>
-        <div class="n" id="techbox-name">—</div>
-        <button type="button" class="btn-link" id="techbox-add" onclick="echips.go('techadmin')">+ добавить инженера</button>
-      </div>
+  <div class="ctxbar">
+    <div class="devbox" id="devbox"><b class="n" id="devbox-name">определяется…</b><span class="sn" id="devbox-sn"></span></div>
+    <div class="ctx-r">
+      <label class="intake">Приёмка или ремонт <input type="text" id="intake-input" class="intake-input" inputmode="numeric" maxlength="6" placeholder="до 6 цифр" autocomplete="off" oninput="echips.setIntake(this.value)"></label>
+      <div class="stagebtns"><button type="button" id="stage-before" onclick="echips.setStage('before')">До ремонта</button><button type="button" id="stage-after" onclick="echips.setStage('after')">После ремонта</button></div>
+    </div>
+  </div>
 
-      <div class="queuebox" id="queuebox"><span id="queue-text">Отчёты: —</span> <button type="button" class="btn-link" id="queue-send" onclick="echips.sendNow()">отправить</button></div>
-
-      <div class="devbox" id="devbox">
-        <div class="k">Устройство</div>
-        <div class="n" id="devbox-name">определяется…</div>
-        <div class="sn" id="devbox-sn"></div>
-      </div>
-
-      <div class="sidefoot">
-        <span class="c">© Echips</span>
-        <a href="#" id="site-link">echips.ru</a>
-      </div>
-    </aside>
-
+  <div class="main">
     <div class="content"><div class="update-banner-slot" id="update-banner-slot"></div><div class="screen" id="screen"></div></div>
   </div>
 </div>

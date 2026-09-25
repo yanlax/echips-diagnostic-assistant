@@ -233,7 +233,7 @@ function isAdmin(){ return !!(S.engineer && S.engineer.role==='admin'); }
   }
   if (maxBtn) maxBtn.addEventListener('click', toggleMax);
   var tb = document.querySelector('.titlebar');
-  if (tb) tb.addEventListener('dblclick', function(e){ if (!e.target.closest('.winbtn')) toggleMax(); });
+  if (tb) tb.addEventListener('dblclick', function(e){ if (!e.target.closest('.winbtn,button,a,input,.step,.techbox,.theme-toggle,.queuebox')) toggleMax(); });
   document.addEventListener('keydown', function(e){
     if (e.key==='F11' && !document.getElementById('fill-overlay')){ e.preventDefault(); toggleFs(); }
   });
@@ -2074,11 +2074,11 @@ function fmtClock(iso){ var d = new Date(iso); return isNaN(d) ? '' : String(d.g
 function renderQueue(){
   var el = document.getElementById('queue-text'), btn = document.getElementById('queue-send'); if (!el) return;
   var q = S.queue;
-  if (!q){ el.textContent = 'Отчёты: —'; return; }
-  var ok = q.last_ok ? '<span class="ok">отправлены '+esc(fmtClock(q.last_ok))+'</span>' : 'ещё не отправлялись';
-  var wait = q.count>0 ? ' · <span class="bad">в очереди: '+q.count+'</span>' : '';
-  var err = q.last_err && q.count>0 ? '<br><span class="bad">'+esc(String(q.last_err).slice(0,80))+'</span>' : '';
-  el.innerHTML = 'Отчёты: '+ok+wait+err;
+  if (!q){ el.textContent = ''; return; }
+  var ok = q.last_ok ? '<span class="ok">Отправлено '+esc(fmtClock(q.last_ok))+'</span>' : 'Ещё не отправлялись';
+  var wait = q.count>0 ? ' <span class="bad">В очереди: '+q.count+'</span>' : '';
+  el.innerHTML = ok+wait;
+  el.title = q.last_err ? String(q.last_err).slice(0,160) : '';
   if (btn) btn.style.display = (q.count>0 || q.last_err) ? '' : 'none';
 }
 function refreshQueue(){ invoke('report_queue_info').then(function(q){ S.queue = q; renderQueue(); }).catch(function(){}); }
@@ -2107,6 +2107,9 @@ function renderNav(){
   var ii=document.getElementById('intake-input'); if (ii && document.activeElement!==ii && ii.value!==(S.intake||'')) ii.value=S.intake||'';
   document.getElementById('techbox-name').textContent = S.engineer ? S.engineer.name : '—';
   document.getElementById('techbox-add').style.display = isAdmin() ? '' : 'none';
+  var av = document.getElementById('techbox-av'), rl = document.getElementById('techbox-role');
+  if (av) av.textContent = S.engineer ? String(S.engineer.name||'?').charAt(0).toUpperCase() : '—';
+  if (rl) rl.textContent = isAdmin() ? 'админ' : '';
 }
 
 /* ---------- экраны ---------- */
@@ -3801,7 +3804,7 @@ function screenMb(){
       '<div class="runrow" style="margin-top:10px"><button class="btn btn-ghost" onclick="echips.mbSaveIdentity()">Сохранить значения в файл</button>'+
       '<button class="btn btn-ghost" onclick="echips.mbChooseFile()">Выбрать файл и подставить…</button>'+
       '<input type="file" id="mb-file" accept=".json,.txt,.cfg,text/plain,application/json" style="display:none" onchange="echips.mbPickFile(this)">'+
-      '<span class="n">перед заменой платы: файл сохранится, папка откроется; после замены значения можно подставить из файла</span></div>'+
+      '<span class="kbnote">Перед заменой платы значения сохранятся в файл, папка откроется. После замены их можно подставить из файла.</span></div>'+
       (m.idMsg ? '<div class="kbnote" style="margin-top:8px;color:var(--ok)">'+esc(m.idMsg)+'</div>' : '')+
       (m.idErr ? '<div class="kbnote" style="margin-top:8px;color:var(--err)">'+esc(m.idErr)+'</div>' : '')+'</div>'+
       ((m.saved||[]).length ? '<div class="card" style="margin-top:12px"><div class="k">Сохранённые значения — подставить в форму</div><div class="smtable" style="margin-top:8px">'+m.saved.slice(0,8).map(function(x,i){

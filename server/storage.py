@@ -82,6 +82,27 @@ class S3Storage:
             if e.code != 404:
                 raise
 
+    def list_meta(self, prefix=""):
+        """Как list(), но с размером и ETag каждого объекта: [{"key", "size", "etag"}]."""
+        out, token = [], None
+        while True:
+            q = "list-type=2&max-keys=1000&prefix=" + urllib.parse.quote(prefix, safe="")
+            if token:
+                q += "&continuation-token=" + urllib.parse.quote(token, safe="")
+            with self._req("GET", self._url("", q)) as r:
+                root = ET.fromstring(r.read())
+            ns = {"s": root.tag.split("}")[0].strip("{")} if "}" in root.tag else {}
+            pre = "s:" if ns else ""
+            for c in root.findall(pre + "Contents", ns):
+                out.append({"key": c.find(pre + "Key", ns).text, "size": int(c.find(pre + "Size", ns).text),
+                            "etag": (c.find(pre + "ETag", ns).text or "").strip('"')})
+            trunc = root.find(pre + "IsTruncated", ns)
+            if trunc is not None and trunc.text == "true":
+                token = root.find(pre + "NextContinuationToken", ns).text
+            else:
+                break
+        return out
+
     def list(self, prefix):
         out, token = [], None
         while True:

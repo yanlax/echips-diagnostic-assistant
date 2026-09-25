@@ -350,6 +350,7 @@ var A = {
     A.go(c.kind==='sensors'?'sensors':c.kind==='stress'?'stress':'test', id);
     if (c.kind==='camera') A.camStart();
     if (c.kind==='headset' || c.kind==='touch') A.inputProbe(c);
+    if (c.kind==='touchpad') A.padProbe(c);
     if (S.auto.on){
       if (c.kind==='runner') A.run();
       else if (c.kind==='diskread') A.drAuto();
@@ -1137,14 +1138,35 @@ var A = {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
       S.runError='Камера недоступна в этом окне (getUserMedia не поддерживается webview).'; render(); return;
     }
-    navigator.mediaDevices.getUserMedia({ video:true }).then(function(stream){
-      S.camStream = stream; render();
-      var v = document.getElementById('cam-preview');
-      if (v) v.srcObject = stream;
-    }).catch(function(err){
-      S.runError = 'Нет доступа к камере: ' + (err && err.message ? err.message : err);
-      render();
+    // Камеры нет вообще — в автопрогоне сами ставим «не применимо» и идём дальше (ноутбук: напоминаем проверить)
+    function noCamera(){
+      var lap = S.hw && S.hw.is_laptop;
+      var note = 'Камера не обнаружена в системе — не применимо' + (lap ? ' (на ноутбуке проверьте, должна ли она быть)' : '');
+      S.runError = 'Камера не обнаружена в системе. Отметьте «Не применимо».';
+      if (S.auto.on && S.cat==='cam') A.autoApply({ status:'na', note:note }); else render();
+    }
+    var enumP = navigator.mediaDevices.enumerateDevices ? navigator.mediaDevices.enumerateDevices().catch(function(){ return null; }) : Promise.resolve(null);
+    enumP.then(function(list){
+      if (list && !list.some(function(d){ return d.kind==='videoinput'; })){ noCamera(); return; }
+      navigator.mediaDevices.getUserMedia({ video:true }).then(function(stream){
+        S.camStream = stream; render();
+        var v = document.getElementById('cam-preview');
+        if (v) v.srcObject = stream;
+      }).catch(function(err){
+        if (err && (err.name==='NotFoundError' || err.name==='DevicesNotFoundError')){ noCamera(); return; }
+        S.runError = 'Нет доступа к камере: ' + (err && err.message ? err.message : err);
+        render();
+      });
     });
+  },
+  /* Тачпад: на настольном ПК (не ноутбук и нет батареи) его нет — в автопрогоне ставим «не применимо» и идём дальше.
+     На ноутбуках тест всегда идёт вручную: тачпад там должен быть, его отсутствие — возможная неисправность. */
+  padProbe:function(c){
+    if (!S.auto.on) return;
+    invokeCached('get_battery_info', {}, 30000).then(function(b){
+      var laptop = (S.hw && S.hw.is_laptop) || (b && b.present);
+      if (!laptop && S.auto.on && S.cat===c.id) A.autoApply({ status:'na', note:'Настольный ПК (нет батареи) — тачпада нет, не применимо' });
+    }).catch(function(){});
   },
 
   /* ---- звук ---- */

@@ -42,3 +42,7 @@ Echips Hardware Check — внутренний инструмент инжене
   Insyde Software Corp.
 - Драйвер AMI 2014 года; современный Windows (Защитник/HVCI) может отказаться
   его загружать — тогда запись на плате с AMI не сработает.
+
+## p256 / ecdsa (RustCrypto)
+
+Проверка и создание подписи списка инженеров (ECDSA P-256). Лицензия MIT OR Apache-2.0. https://github.com/RustCrypto/elliptic-curves

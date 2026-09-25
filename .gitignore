@@ -6,3 +6,5 @@ node_modules/
 /helper/EchipsSensors/bin/
 /helper/EchipsSensors/obj/
 /src-tauri/helper/
+# список инженеров, вшиваемый при сборке (CI скачивает из приватного репозитория)
+/src-tauri/assets/techs_baked.json

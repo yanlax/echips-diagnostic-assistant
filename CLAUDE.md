@@ -90,7 +90,7 @@ USB/BT/Wi-Fi/LAN, отпечаток, камера/звук, клавиатур�
 автопрогон по профилю, датчики+вентиляторы (LibreHardwareMonitor/PawnIO),
 стресс-тест (CPU/FPU/кэш/память/диск/GPU + троттлинг), USB-порт (класс
 USB 2.0/3.x), экспорт TXT/JSON/PDF (тема «Графит»), автообновление, **вход по
-PIN с ролями** (`data/techs.json`, админ Максим; ВРЕМЕННО ВЫКЛЮЧЕН флагом `FEATURE_PIN=false` в `app.js`, автовход под Максимом), **запись SN/UUID заводскими
+PIN с ролями** (подписанный список `_config/techs.json` в приватном `echips-reports`, админ Максим; работает без интернета, срок 7 суток — см. `commands/techs.rs`, `techs_sign.rs`; флаг `FEATURE_PIN` в `app.js`), **запись SN/UUID заводскими
 утилитами** (AMI/Insyde; вкладка включена флагом `FEATURE_MB=true` с v0.38.0 — новая AMIDEWINx64 2020 г. от завода; проверить на железе), **отправка отчётов в приватный `echips-reports`**,
 запуск в WinPE (переносимый WebView2).
 
@@ -98,7 +98,7 @@ PIN с ролями** (`data/techs.json`, админ Максим; ВРЕМЕН�
 - Дизайн (с v0.47.0) — «Стенд»: верхняя панель `.titlebar.topbar` (`#steps`, `#queuebox`, `#theme-toggle-slot`, `#techbox`) + полоса `.ctxbar` (`#devbox`, `#intake-input`, `#stage-*`); id из `index.html` не переименовывать (на них опирается `app.js`). Токены обеих тем — начало `style.css`, слой оформления — конец файла. Макеты и скриншоты всех состояний: `~/Desktop/Projects/echips-design-export`.
 - Профили моделей — `data/profiles.json` в git (скачивается при запуске, `commands/profiles.rs`), поверх `src/profiles.js`; админ сохраняет эталон кнопкой в тесте «Системная информация». Автопрогон: режимы «полный»/«экспресс» (`expressTests`). Вкладка «История» — только админ (`list_reports`/`fetch_report`).
 - Отчёты: путь `<инженер>/<дата>/[<приёмка>_]<серийник>/<время>` + копия в `_по_ноутбукам/<серийник>/`; поле `intake` (цифры ≤6) — `S.intake` в `app.js`.
-- Инженеры и PIN — только `data/techs.json` (хэши; читаются через GitHub API → raw → кэш, `fetch_techs` возвращает источник); админские функции — под
+- Инженеры и PIN — только подписанный `_config/techs.json` в приватном `echips-reports` (хэши). Подпись ECDSA P-256: публичный ключ `data/techs_pub.txt` вшит в exe, приватный (hex) есть только у админа (DPAPI); список берётся из GitHub → файл рядом с exe/`%LOCALAPPDATA%` → вшитый при сборке (`src-tauri/assets/techs_baked.json` качает CI, в git не хранится). Просрочка 7 суток → вход только админам. Админские функции — под
   `isAdmin()` в `app.js`. Токен админа хранится DPAPI-зашифрованным.
 - Отчёты уходят через `commands/upload.rs`; JS зовёт `A.reportSync(kind)`
   (дедупликация по хэшу содержимого). Токен — секрет Actions
@@ -106,7 +106,7 @@ PIN с ролями** (`data/techs.json`, админ Максим; ВРЕМЕН�
 - Сторонние утилиты записи SMBIOS лежат в `src-tauri/assets/smbios` (вшиты,
   разрешение завода) — упомянуты в THIRD-PARTY-NOTICES.md.
 - `git push`: сначала `git pull --rebase` — приложение само коммитит
-  `data/techs.json`.
+  `data/profiles.json` (профили моделей).
 
 ## Приоритетные открытые задачи
 

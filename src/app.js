@@ -111,10 +111,10 @@ var MANIFEST_PUBLIC_URL = "https://disk.360.yandex.ru/d/79yQHBN93UDZGg";
    check_supported() покажет причину; выключить функцию: FEATURE_MB = false. */
 var FEATURE_MB = true;
 
-/* Вход по PIN ВРЕМЕННО ВЫКЛЮЧЕН (по просьбе пользователя, на время тестирования): программа сразу
-   открывается под администратором Максимом и не обращается к интернету при запуске. Вернуть вход
-   для всех сервисов: FEATURE_PIN = true (экран входа, проверка хэшей, вшитый список — весь код на месте). */
-var FEATURE_PIN = false;
+/* Вход по PIN включён (с v0.50.0): список инженеров подписан администратором, работает без интернета
+   (вшитый + файл на флешке + обновление из приватного репозитория), просрочка 7 суток — только админ.
+   Автовход под Максимом для тестов: FEATURE_PIN = false. */
+var FEATURE_PIN = true;
 var FEATURE_PAWNIO_UNINSTALL = false; // кнопка «Удалить драйвер PawnIO» скрыта по просьбе пользователя (код сохранён)
 
 var S = {
@@ -144,12 +144,12 @@ var S = {
   drv:{ step:'idle' },
   mb:{ step:'reading', techId:'', techName:'', pin:'', pinErr:'', ticket:'', serial:'', uuid:'', formErr:'', before:null, writeError:null },
   /* Общий вход по PIN при запуске (см. CLAUDE.md, задача №2). Список техников —
-     data/techs.json в публичном репозитории (подтягивается lockInit, только
+     _config/techs.json (приватный echips-reports) в публичном репозитории (подтягивается lockInit, только
      хэши PIN, см. commands/techs.rs). phase: boot → pin → verifying → ok → unlocked
      (или error, если нет сети и нет кэша). */
   lock:{ phase:'boot', techs:null, err:'', techId:'', pin:'', shake:false },
   engineer:null,
-  techadmin:{ id:'', name:'', pin:'', role:'tech', err:'', result:'', hasToken:null, tokenInput:'', busy:false, msg:'' },
+  techadmin:{ id:'', name:'', pin:'', role:'tech', err:'', result:'', hasToken:null, hasKey:null, tokenInput:'', keyInput:'', busy:false, msg:'' },
   adminLog:[], adminPanelOpen:false
 };
 
@@ -171,7 +171,7 @@ function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').rep
 
 /* Хэш PIN — SHA-256(salt+":"+pin) через Web Crypto (доступен в WebView2,
    secure context). Используется и на входе (lockSubmit сравнивает с
-   pin_hash из data/techs.json), и в генераторе (techadminGenerate) — один
+   pin_hash из _config/techs.json (приватный echips-reports)), и в генераторе (techadminGenerate) — один
    и тот же код с обеих сторон, поэтому дублировать алгоритм в Rust не нужно. */
 function sha256Hex(text){
   var bytes = new TextEncoder().encode(text);
@@ -1679,7 +1679,7 @@ var A = {
 
   /* ---- вход по PIN (см. lockInit/renderLock ниже) ----
      Экран имени убран по запросу — только PIN; кто ввёл, определяется
-     перебором data/techs.json (совпадение хэша), имя показывается уже
+     перебором _config/techs.json (приватный echips-reports) (совпадение хэша), имя показывается уже
      после успешного входа (сайдбар, отчёт), а не запрашивается заранее. */
   lockDigit:function(d){
     var L = S.lock;
@@ -1690,7 +1690,7 @@ var A = {
   lockSubmit:function(){ lockTrySubmit(); },
   lockRetry:function(){ lockInit(); },
 
-  /* ---- добавление инженера (генератор записи для data/techs.json) ----
+  /* ---- добавление инженера (генератор записи для _config/techs.json (приватный echips-reports)) ----
      Доступно только администратору (S.engineer.role==='admin', см.
      renderNav/go) — сейчас это аккаунт Максима. */
   techadminField:function(k,v){ S.techadmin[k]=v; S.techadmin.err=''; },
@@ -1699,7 +1699,7 @@ var A = {
     var id = (t.id||'').trim(), name = (t.name||'').trim(), pin = (t.pin||'').trim(), role = t.role==='admin' ? 'admin' : 'tech';
     if(!/^[a-z0-9_-]{2,32}$/i.test(id)){ t.err='Идентификатор: латиница/цифры/-/_, 2–32 символа.'; render(); return null; }
     if(!name){ t.err='Укажите ФИО.'; render(); return null; }
-    if(!/^\d{6,12}$/.test(pin)){ t.err='PIN: только цифры, не меньше 6.'; render(); return null; }
+    if(!/^\d{4,12}$/.test(pin)){ t.err='PIN: только цифры, не меньше 4.'; render(); return null; }
     var salt = randomHex(16);
     return sha256Hex(salt+':'+pin).then(function(hash){ return { id:id, name:name, pin_hash:hash, salt:salt, role:role }; });
   },
@@ -1710,7 +1710,7 @@ var A = {
       S.techadmin.err=''; render();
     });
   },
-  /* Запись прямо в data/techs.json в репозитории (токен админа, см. techs.rs).
+  /* Запись прямо в _config/techs.json (приватный echips-reports) в репозитории (токен админа, см. techs.rs).
      Тот же id — заменяет запись (так меняется PIN/роль). */
   techadminPublish:function(){
     var t = S.techadmin;
@@ -1720,7 +1720,7 @@ var A = {
     p.then(function(entry){
       return invoke('techs_upsert', { tech: entry }).then(function(list){
         S.lock.techs = list;
-        t.msg = 'Готово: «'+entry.name+'» сохранён в репозитории, на других станциях появится при следующем запуске.';
+        t.msg = 'Готово: «'+entry.name+'» сохранён и подписан. На других станциях появится, когда они выйдут в интернет (до тех пор действует прежний список).';
         t.id=''; t.name=''; t.pin=''; t.role='tech'; t.result='';
       });
     }).catch(function(err){ t.err = typeof err==='string' ? err : 'Не удалось сохранить'; })
@@ -1741,12 +1741,22 @@ var A = {
     // список мог обновиться на GitHub после запуска — берём свежий
     invoke('fetch_techs').then(function(res){ S.lock.techs = res.techs || []; render(); }).catch(function(){});
     invoke('techs_token_status').then(function(v){ S.techadmin.hasToken=!!v; render(); }).catch(function(){ S.techadmin.hasToken=false; render(); });
+    invoke('techs_signing_status').then(function(v){ S.techadmin.hasKey=!!v; render(); }).catch(function(){ S.techadmin.hasKey=false; render(); });
   },
   techadminSaveToken:function(){
     var t = S.techadmin;
     invoke('techs_save_token', { token:t.tokenInput }).then(function(){
       t.hasToken=true; t.tokenInput=''; t.err=''; render();
     }).catch(function(err){ t.err = typeof err==='string' ? err : 'Не удалось сохранить токен'; render(); });
+  },
+  techadminSaveKey:function(){
+    var t = S.techadmin;
+    invoke('techs_save_signing_key', { key:t.keyInput }).then(function(){
+      t.hasKey=true; t.keyInput=''; t.err=''; render();
+    }).catch(function(err){ t.err = typeof err==='string' ? err : 'Не удалось сохранить ключ'; render(); });
+  },
+  techadminClearKey:function(){
+    invoke('techs_clear_signing_key').then(function(){ S.techadmin.hasKey=false; render(); });
   },
   techadminClearToken:function(){
     invoke('techs_clear_token').then(function(){ S.techadmin.hasToken=false; render(); });
@@ -4112,7 +4122,7 @@ function screenMb(){
 }
 
 /* ---------- добавление инженера ----------
-   Список инженеров живёт в data/techs.json публичного репозитория (см.
+   Список инженеров живёт в _config/techs.json (приватный echips-reports) публичного репозитория (см.
    commands/techs.rs) — этот экран не пишет туда напрямую (для этого
    понадобился бы токен на запись в репозиторий, у приложения его нет и не
    должно быть), а только считает PIN так же, как это потом сделает вход
@@ -4120,16 +4130,23 @@ function screenMb(){
    файл вручную — commit/push уже делает тот, кто добавляет инженера. */
 function screenTechAdmin(){
   var t = S.techadmin;
-  var tokenBlock = t.hasToken
+  var tokenBlock = (t.hasToken
     ? '<div class="dai"><div class="dah"><i class="ddot pass"></i><b>Токен сохранён</b></div><p>Токен GitHub зашифрован средствами Windows и хранится только на этом компьютере.</p></div><div class="dai"><button class="btn btn-ghost" onclick="echips.techadminClearToken()">Удалить токен</button></div>'
     : '<div class="formfield"><label>Токен GitHub (вводится один раз, хранится только на этом компьютере)</label>'+
       '<input type="password" value="'+esc(t.tokenInput)+'" oninput="echips.techadminField(\'tokenInput\',this.value)" placeholder="github_pat_…">'+
-      '<div class="hint" style="margin-top:6px">Fine-grained токен на репозиторий echips-diagnostic-assistant, право Contents: read and write.</div></div>'+
-      '<div class="headactions" style="margin-top:12px"><button class="btn btn-ghost" onclick="echips.techadminSaveToken()">Сохранить токен</button></div>';
+      '<div class="hint" style="margin-top:6px">Fine-grained токен на репозитории echips-reports (список инженеров) и echips-diagnostic-assistant (профили моделей), право Contents: read and write.</div></div>'+
+      '<div class="headactions" style="margin-top:12px"><button class="btn btn-ghost" onclick="echips.techadminSaveToken()">Сохранить токен</button></div>')+
+    '<h3 style="margin-top:22px">Ключ подписи</h3>'+
+    (t.hasKey
+      ? '<div class="dai"><div class="dah"><i class="ddot pass"></i><b>Ключ подписи сохранён</b></div><p>Список инженеров подписывается этим ключом; без подписи другие ноутбуки его не примут. Ключ хранится зашифрованно (Windows) только на этом компьютере.</p></div><div class="dai"><button class="btn btn-ghost" onclick="echips.techadminClearKey()">Удалить ключ</button></div>'
+      : '<div class="formfield"><label>Ключ подписи (64 символа, один раз)</label>'+
+        '<input type="password" value="'+esc(t.keyInput)+'" oninput="echips.techadminField(\'keyInput\',this.value)" placeholder="0123abcd…">'+
+        '<div class="hint" style="margin-top:6px">Файл echips-signing-key.txt — вставьте его содержимое. Без ключа список изменить нельзя.</div></div>'+
+        '<div class="headactions" style="margin-top:12px"><button class="btn btn-ghost" onclick="echips.techadminSaveKey()">Сохранить ключ</button></div>');
   var rows = (S.lock.techs||[]).map(function(x){
     return '<tr><td><i class="av">'+esc(String(x.name||'?').charAt(0).toUpperCase())+'</i></td><td><b>'+esc(x.name)+'</b><div class="rr mono">'+esc(x.id)+'</div></td>'+
       '<td><span class="role'+(x.role==='admin'?' adm':'')+'">'+(x.role==='admin'?'Администратор':'Техник')+'</span></td>'+
-      '<td class="ra"><button class="lnk bad" '+(t.busy||!t.hasToken?'disabled':'')+' onclick="echips.techadminRemove(\''+esc(x.id)+'\')">Удалить</button></td></tr>';
+      '<td class="ra"><button class="lnk bad" '+(t.busy||!t.hasToken||!t.hasKey?'disabled':'')+' onclick="echips.techadminRemove(\''+esc(x.id)+'\')">Удалить</button></td></tr>';
   }).join('');
   return '<div class="pane te">'+
     '<div class="af-head"><div><div class="eyebrow">Только для администратора</div><h1 class="title">Инженеры</h1></div><button class="btn btn-ghost" onclick="echips.go(\'start\')">Закрыть</button></div>'+
@@ -4138,14 +4155,13 @@ function screenTechAdmin(){
       '<div class="te-form"><h3>Новый инженер или смена PIN</h3><div class="te-frm">'+
         '<label>Идентификатор латиницей<input value="'+esc(t.id)+'" oninput="echips.techadminField(\'id\',this.value)" placeholder="sidorov"></label>'+
         '<label>ФИО<input value="'+esc(t.name)+'" oninput="echips.techadminField(\'name\',this.value)" placeholder="Сидоров С.С."></label>'+
-        '<label>PIN, 6 и более цифр<input type="password" value="'+esc(t.pin)+'" oninput="echips.techadminField(\'pin\',this.value)" placeholder="••••••"></label>'+
+        '<label>PIN, от 4 цифр<input type="password" value="'+esc(t.pin)+'" oninput="echips.techadminField(\'pin\',this.value)" placeholder="••••••"></label>'+
         '<label>Роль<select onchange="echips.techadminField(\'role\',this.value)"><option value="tech"'+(t.role!=='admin'?' selected':'')+'>Техник</option><option value="admin"'+(t.role==='admin'?' selected':'')+'>Администратор</option></select></label></div>'+
         (t.err?'<div class="err" style="margin:10px 0 0">'+esc(t.err)+'</div>':'')+
         (t.msg?'<div class="infoline" style="margin:10px 0 0">'+esc(t.msg)+'</div>':'')+
-        '<div class="headactions" style="margin-top:14px">'+(t.hasToken ? '<button class="btn btn-primary" '+(t.busy?'disabled':'')+' onclick="echips.techadminPublish()">'+(t.busy?'Сохраняю…':'Сохранить в список')+'</button>' : '')+
-        '<button class="btn btn-ghost" onclick="echips.techadminGenerate()">Только сгенерировать запись</button></div>'+
-        '<p class="rs-mut" style="margin-top:12px">Список хранится в репозитории (data/techs.json) и подхватывается на всех ноутбуках при следующем запуске. Тот же идентификатор с новым PIN заменяет запись.</p></div>'+
-      (t.result ? '<div class="te-form"><h3>Вставить в data/techs.json вручную</h3><pre class="techjson">'+esc(t.result)+'</pre><div class="headactions" style="margin-top:10px"><button class="btn btn-ghost" onclick="echips.techadminCopy()">Скопировать</button></div></div>' : '')+
+        '<div class="headactions" style="margin-top:14px">'+(t.hasToken && t.hasKey ? '<button class="btn btn-primary" '+(t.busy?'disabled':'')+' onclick="echips.techadminPublish()">'+(t.busy?'Сохраняю…':'Сохранить в список')+'</button>' : '')+
+        '<span class="rs-mut" style="margin-left:6px">'+(t.hasToken && t.hasKey ? '' : 'Для записи нужны токен и ключ подписи (справа).')+'</span></div>'+
+        '<p class="rs-mut" style="margin-top:12px">Список хранится подписанным в приватном репозитории и подхватывается на ноутбуках, когда они выходят в интернет; между обновлениями вход работает без сети. Если ноутбук не был в сети больше 7 суток — войти сможет только администратор. Тот же идентификатор с новым PIN заменяет запись.</p></div>'+
     '</section><aside class="rp-side"><h3>Токен записи</h3>'+tokenBlock+'</aside></div></div>';
 }
 
@@ -4255,16 +4271,18 @@ function padPoint(e, move){
 })();
 
 /* ---------- вход по PIN при запуске (см. CLAUDE.md, задача №2) ----------
-   Список инженеров — data/techs.json в публичном репозитории (только
+   Список инженеров — _config/techs.json (приватный echips-reports) в публичном репозитории (только
    SHA-256(salt+":"+pin), см. commands/techs.rs), подтягивается заново при
    каждом запуске. Экран поверх всего приложения (#lock-overlay в
    index.html, вне #screen — render() его не трогает). */
 function lockInit(){
-  S.lock = { phase:'boot', techs:null, err:'', pin:'', shake:false, note:'' };
+  S.lock = { phase:'boot', techs:null, err:'', pin:'', shake:false, note:'', expired:false, ageDays:-1 };
   renderLock();
   invoke('fetch_techs').then(function(res){
     S.lock.techs = res.techs || [];
-    S.lock.note = (res.source==='cache' || res.source==='builtin') ? (res.note || 'Список не из GitHub') : '';
+    S.lock.note = res.source!=='github' ? (res.note || 'Список не из GitHub') : '';
+    S.lock.expired = !!res.expired; S.lock.ageDays = res.age_days;
+    if (res.expired && !S.lock.note) S.lock.note = 'Список инженеров давно не обновлялся.';
     S.lock.phase = 'pin';
     renderLock();
   }).catch(function(err){
@@ -4274,7 +4292,7 @@ function lockInit(){
   });
 }
 /* Экрана выбора имени нет — вводится только PIN, инженер определяется
-   перебором data/techs.json по совпадению хэша (имя показывается уже
+   перебором _config/techs.json (приватный echips-reports) по совпадению хэша (имя показывается уже
    после успешного входа). Список короткий (несколько человек), поэтому
    последовательный перебор с ожиданием каждого хэша не проблема. */
 function lockFindMatch(pin){
@@ -4292,6 +4310,12 @@ function lockTrySubmit(){
   if(!L.pin){ L.err='Введите PIN.'; renderLock(); return; }
   L.phase='verifying'; renderLock();
   lockFindMatch(L.pin).then(function(tech){
+    if(tech && L.expired && tech.role!=='admin'){
+      // список не подтверждали в сети больше 7 суток — обычным инженерам вход закрыт до обновления
+      L.phase='pin'; L.pin=''; L.err='Список инженеров не обновлялся более 7 суток. Подключите ноутбук к интернету (нажмите «Обновить») или войдите администратором.'; L.shake=true; renderLock();
+      setTimeout(function(){ L.shake=false; renderLock(); }, 400);
+      return;
+    }
     if(tech){
       S.engineer = { id:tech.id, name:tech.name, role:tech.role||'tech' };
       L.phase='ok'; renderLock(); render();
@@ -4363,7 +4387,7 @@ document.addEventListener('keydown', function(e){
 /* ---------- админ-панель (Shift+F10) ----------
    Идея пользователя: список всех IPC-вызовов (invoke → Rust) с результатом,
    для диагностики на месте. Доступно только role==='admin' (сейчас — только
-   аккаунт Максима, см. isAdmin/data/techs.json) и не во время теста
+   аккаунт Максима, см. isAdmin/_config/techs.json (приватный echips-reports)) и не во время теста
    клавиатуры (там F10 — часть проверяемой раскладки, ловить его нельзя). */
 function renderAdminPanel(){
   var host = document.getElementById('admin-panel');

@@ -28,6 +28,11 @@ const TOKEN: &str = match option_env!("ECHIPS_REPORTS_TOKEN") {
     None => "",
 };
 
+/// Вшитый токен (для чтения подписанного списка инженеров, см. techs.rs).
+pub(crate) fn report_token() -> &'static str {
+    TOKEN
+}
+
 fn queue_dir() -> PathBuf {
     // В WinPE %LOCALAPPDATA% — диск X: в ОЗУ: очередь пропала бы при перезагрузке, а отчёт без
     // сети как раз и ждёт следующей загрузки. Там кладём рядом с exe (флешка).

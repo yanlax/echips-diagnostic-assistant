@@ -1,34 +1,27 @@
-// Общий PIN-экран при запуске программы (см. CLAUDE.md, задача №2): список
-// инженеров и хэшей их PIN лежит не в коде, а в публичном репозитории
-// (data/techs.json на GitHub) — тот же принцип, что уже работает для
-// авто-обновления (см. update.rs): правка файла в репозитории вместо
-// пересборки и релиза приложения. Список подтягивается заново при каждом
-// запуске, так что новый инженер (или изменённый PIN) появляется сразу на
-// всех станциях без обновления .exe.
+// Вход по PIN (см. CLAUDE.md): список инженеров и хэшей PIN хранится в ПРИВАТНОМ репозитории
+// отчётов (yanlax/echips-reports, файл _config/techs.json) и ПОДПИСАН администратором
+// (ECDSA P-256, см. techs_sign.rs). Публичный ключ вшит в exe, приватный есть только у админа.
 //
-// Здесь — только скачивание и кэширование списка. Сам PIN нигде не хранится
-// и не передаётся в открытом виде: только SHA-256(salt+":"+pin), сравнение
-// введённого PIN с хэшем происходит на стороне JS (src/app.js, sha256Hex +
-// lockSubmit) через Web Crypto API — тем же способом, каким этот хэш и
-// генерируется на экране "Добавить инженера" (app.js, techadminGenerate),
-// поэтому дублировать алгоритм хэширования в Rust не нужно.
+// Вход работает без интернета. Источники списка (берётся самая свежая версия с верной подписью):
+//   1) GitHub — при запуске, если есть сеть (читается вшитым токеном отчётов);
+//   2) файл techs_signed.json рядом с exe (на флешке — переезжает вместе с программой)
+//      и копия в %LOCALAPPDATA%\Echips\HardwareCheck;
+//   3) список, вшитый в exe при сборке (CI скачивает его из репозитория, src-tauri/assets/techs_baked.json).
+// Подмена файла на флешке бессмысленна: без приватного ключа подпись не сделать.
 //
-// Файл в репозитории — публичный, как и сами релизы. Это осознанный выбор
-// (см. обсуждение с пользователем): PIN нужен только как экран входа для
-// сервисной станции, а не как криптографическая защита данных, поэтому
-// достаточно, чтобы сам PIN нельзя было восстановить из хэша (соль + SHA-256
-// делают перебор по радужным таблицам бессмысленным; для реальной защиты от
-// прямого перебора PIN должен быть длиннее 4 цифр — см. пример в data/techs.json).
+// Срок годности: если список не подтверждали в сети (и exe собран) больше 7 суток, войти могут
+// только администраторы — уволенный инженер не остаётся в допуске навсегда. Сравнение PIN с хэшем
+// делает JS (app.js, sha256Hex + lockSubmit), тем же способом, что и генерация хэша на экране «Инженеры».
 
+use super::techs_sign as sig;
 use serde::{Deserialize, Serialize};
 
 fn default_role() -> String {
     "tech".to_string()
 }
 
-/// role: "tech" (по умолчанию, если поля нет в старой записи/кэше — обратная
-/// совместимость) или "admin" — админские фичи (например, панель команд по
-/// Shift+F10) показываются только при role=="admin", см. app.js.
+/// role: "tech" (по умолчанию) или "admin" — админские вкладки («История», «Инженеры»),
+/// панель команд по Shift+F10 показываются только при role=="admin", см. app.js.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Tech {
     pub id: String,
@@ -39,127 +32,195 @@ pub struct Tech {
     pub role: String,
 }
 
-const TECHS_URL: &str =
-    "https://raw.githubusercontent.com/yanlax/echips-diagnostic-assistant/main/data/techs.json";
-
-fn cache_path() -> std::path::PathBuf {
-    let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into());
-    std::path::PathBuf::from(base)
-        .join("Echips")
-        .join("HardwareCheck")
-        .join("techs_cache.json")
+/// Содержимое подписанного файла (строка payload внутри {"payload":..., "sig":...}).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct Payload {
+    version: u64,
+    issued_at: String,
+    techs: Vec<Tech>,
 }
 
-/// Список инженеров на момент сборки (хэши PIN, как в репозитории) — запасной вариант входа без сети.
-const BUILTIN_TECHS: &str = include_str!("../../../data/techs.json");
-/// Выключить (false) при выпуске программы всем сервисам: тогда без сети и без кэша войти нельзя.
-const ALLOW_BUILTIN_TECHS: bool = true;
+/// Публичный ключ подписи (data/techs_pub.txt, hex, SEC1) и список на момент сборки.
+const PUB_HEX: &str = include_str!("../../../data/techs_pub.txt");
+const BAKED: &str = include_str!("../../assets/techs_baked.json");
+/// Время сборки (unix-секунды) — CI задаёт ECHIPS_BUILD_UNIX; без него вшитый список считается «без даты».
+const BAKED_AT: &str = match option_env!("ECHIPS_BUILD_UNIX") {
+    Some(v) => v,
+    None => "0",
+};
+const REPO: &str = "yanlax/echips-reports";
+const LIST_PATH: &str = "_config/techs.json";
+const LIST_FILE: &str = "techs_signed.json";
+const STAMP_FILE: &str = "techs_sync.json";
 
-/// Список + откуда он взят — экран входа показывает предупреждение, если это
-/// кэш (иначе «новый инженер не виден, а почему — непонятно»).
+fn local_dir() -> std::path::PathBuf {
+    let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into());
+    std::path::PathBuf::from(base).join("Echips").join("HardwareCheck")
+}
+
+fn exe_dir() -> Option<std::path::PathBuf> {
+    std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf()))
+}
+
+/// Где хранить копии: рядом с exe (флешка) и в %LOCALAPPDATA%.
+fn store_dirs() -> Vec<std::path::PathBuf> {
+    let mut v = Vec::new();
+    if let Some(d) = exe_dir() {
+        v.push(d);
+    }
+    v.push(local_dir());
+    v
+}
+
+/// Разбор и проверка подписи; None — файл повреждён или подписан не нашим ключом.
+fn parse_signed(text: &str) -> Option<Payload> {
+    let s: sig::Signed = serde_json::from_str(text).ok()?;
+    if !sig::verify(PUB_HEX.trim(), &s.payload, &s.sig) {
+        return None;
+    }
+    serde_json::from_str::<Payload>(&s.payload).ok()
+}
+
+fn now_unix() -> i64 {
+    chrono::Utc::now().timestamp()
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct Stamp {
+    #[serde(default)]
+    last_ok: i64,
+    #[serde(default)]
+    max_seen: i64,
+}
+
+fn read_stamps() -> Vec<Stamp> {
+    store_dirs()
+        .iter()
+        .filter_map(|d| std::fs::read_to_string(d.join(STAMP_FILE)).ok())
+        .filter_map(|t| serde_json::from_str::<Stamp>(&t).ok())
+        .collect()
+}
+
+/// Обновляет метки: max_seen (максимум виденного времени, защита от отката часов) и, если
+/// список только что подтверждён в сети, last_ok.
+fn write_stamps(old: &[Stamp], now: i64, online: bool) {
+    let max_seen = old.iter().map(|s| s.max_seen).chain(std::iter::once(now)).max().unwrap_or(now);
+    let last_ok = if online { now } else { old.iter().map(|s| s.last_ok).filter(|t| *t <= now + 86400).max().unwrap_or(0) };
+    let text = serde_json::to_string(&Stamp { last_ok, max_seen }).unwrap_or_default();
+    for d in store_dirs() {
+        let _ = std::fs::create_dir_all(&d);
+        let _ = std::fs::write(d.join(STAMP_FILE), &text);
+    }
+}
+
+fn write_list_copies(text: &str) {
+    for d in store_dirs() {
+        let _ = std::fs::create_dir_all(&d);
+        let _ = std::fs::write(d.join(LIST_FILE), text);
+    }
+}
+
+/// Список + откуда он взят и не просрочен ли (экран входа).
 #[derive(Debug, Serialize, Clone)]
 pub struct TechList {
     pub techs: Vec<Tech>,
-    /// "api" | "raw" | "cache" | "builtin"
+    /// "github" | "cache" | "builtin"
     pub source: String,
     pub note: String,
+    /// Список не подтверждали в сети более 7 суток (или часы откатывали): войти могут только админы.
+    pub expired: bool,
+    /// Сколько полных суток назад список подтверждён (-1 — неизвестно).
+    pub age_days: i64,
+    pub version: u64,
 }
 
-async fn get_list(client: &reqwest::Client, url: &str, accept: &str) -> Option<(Vec<Tech>, String)> {
+async fn fetch_remote(token: &str) -> Option<String> {
+    if token.is_empty() {
+        return None;
+    }
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(3))
+        .timeout(std::time::Duration::from_secs(6))
+        .build()
+        .ok()?;
     let resp = client
-        .get(url)
+        .get(format!("https://api.github.com/repos/{REPO}/contents/{LIST_PATH}"))
         .header("Cache-Control", "no-cache")
         .header("User-Agent", "echips-diagnostic-app")
-        .header("Accept", accept)
+        .header("Accept", "application/vnd.github.raw+json")
+        .bearer_auth(token)
         .send()
         .await
         .ok()?;
     if !resp.status().is_success() {
         return None;
     }
-    let text = resp.text().await.ok()?;
-    let list = serde_json::from_str::<Vec<Tech>>(&text).ok()?;
-    Some((list, text))
+    resp.text().await.ok()
 }
 
-/// Порядок источников: 1) GitHub API — тот же хост, через который приложение
-/// само записывает список, всегда свежая версия (без токена лимит 60
-/// запросов/час на IP); 2) raw.githubusercontent.com с уникальным параметром
-/// (обход его 5-минутного кэша; в части сетей этот хост недоступен, а
-/// api.github.com работает); 3) локальный кэш последнего успешного чтения.
-/// У каждого запроса таймаут — раньше при недоступном хосте загрузка висела.
 #[tauri::command(async)]
 pub async fn fetch_techs() -> Result<TechList, String> {
-    // Без интернета вход не должен ждать долго: connect 3 с, запрос 6 с (два источника — до ~12 с).
-    let client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(3))
-        .timeout(std::time::Duration::from_secs(6))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let stamp = chrono::Utc::now().timestamp_millis();
+    let now = now_unix();
+    let stamps = read_stamps();
 
-    let fresh = match get_list(
-        &client,
-        &format!("{API_URL}?ref=main&t={stamp}"),
-        "application/vnd.github.raw+json",
-    )
-    .await
-    {
-        Some(r) => Some((r, "api")),
-        None => get_list(&client, &format!("{TECHS_URL}?nocache={stamp}"), "*/*").await.map(|r| (r, "raw")),
-    };
-
-    if let Some(((list, text), source)) = fresh {
-        if let Some(parent) = cache_path().parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::write(cache_path(), &text);
-        return Ok(TechList { techs: list, source: source.to_string(), note: String::new() });
+    // (версия, приоритет источника, источник, payload, исходный текст)
+    let mut cands: Vec<(u64, u8, &'static str, Payload, String)> = Vec::new();
+    if let Some(p) = parse_signed(BAKED) {
+        cands.push((p.version, 0, "builtin", p, BAKED.to_string()));
     }
-
-    // Без сети: вшитый список (пока ALLOW_BUILTIN_TECHS) ОБЪЕДИНЯЕТСЯ с кэшем с диска — записи кэша
-    // перекрывают вшитые с тем же id. Раньше кэш полностью подменял вшитый список: устаревший кэш
-    // от старого онлайн-запуска (без нужных инженеров) не пускал никого, хотя вшитый список был верным.
-    let cached: Option<Vec<Tech>> = std::fs::read_to_string(cache_path())
-        .ok()
-        .and_then(|t| serde_json::from_str::<Vec<Tech>>(&t).ok());
-    // Вшитый список на момент сборки (data/techs.json). ВРЕМЕННО, на время тестирования двумя
-    // инженерами — для выпуска всем сервисам с чётким контролем доступа выключить:
-    // ALLOW_BUILTIN_TECHS = false.
-    let builtin: Option<Vec<Tech>> = if ALLOW_BUILTIN_TECHS { serde_json::from_str::<Vec<Tech>>(BUILTIN_TECHS).ok() } else { None };
-
-    if cached.is_some() || builtin.is_some() {
-        let mut list = builtin.clone().unwrap_or_default();
-        if let Some(c) = &cached {
-            for t in c {
-                match list.iter_mut().find(|x| x.id == t.id) {
-                    Some(existing) => *existing = t.clone(),
-                    None => list.push(t.clone()),
-                }
+    for d in store_dirs() {
+        if let Ok(t) = std::fs::read_to_string(d.join(LIST_FILE)) {
+            if let Some(p) = parse_signed(&t) {
+                cands.push((p.version, 1, "cache", p, t));
             }
         }
-        let (source, note) = if cached.is_some() {
-            ("cache", "Нет связи с GitHub — использован сохранённый список (вместе со вшитым); недавно добавленных инженеров в нём может не быть.")
-        } else {
-            ("builtin", "Нет связи с GitHub и нет сохранённого списка — использован список, вшитый в программу; новые инженеры появятся при подключении к интернету.")
-        };
-        return Ok(TechList { techs: list, source: source.to_string(), note: note.to_string() });
     }
-    Err("Нет сети и нет ранее сохранённого списка инженеров. Подключите станцию к интернету хотя бы один раз.".to_string())
+    let online = match fetch_remote(super::upload::report_token()).await {
+        Some(t) => match parse_signed(&t) {
+            Some(p) => {
+                cands.push((p.version, 2, "github", p, t));
+                true
+            }
+            None => false,
+        },
+        None => false,
+    };
+
+    cands.sort_by_key(|c| (c.0, c.1));
+    let (version, _, source, payload, text) = cands.pop().ok_or(
+        "Нет списка инженеров с верной подписью. Подключите станцию к интернету или обновите программу.".to_string(),
+    )?;
+    if online {
+        write_list_copies(&text);
+    }
+    let baked_at = BAKED_AT.trim().parse::<i64>().unwrap_or(0);
+    let fr = sig::freshness(
+        now,
+        &stamps.iter().map(|s| s.last_ok).chain(if online { Some(now) } else { None }).collect::<Vec<_>>(),
+        &stamps.iter().map(|s| s.max_seen).collect::<Vec<_>>(),
+        baked_at,
+    );
+    write_stamps(&stamps, now, online);
+
+    let note = if source == "github" {
+        String::new()
+    } else if fr.clock_rollback {
+        "Часы компьютера сдвинуты назад — войти может только администратор.".to_string()
+    } else if source == "builtin" {
+        "Нет связи с GitHub — использован список, вшитый в программу; изменения появятся при подключении к интернету.".to_string()
+    } else {
+        "Нет связи с GitHub — использован сохранённый список; изменения появятся при подключении к интернету.".to_string()
+    };
+    Ok(TechList { techs: payload.techs, source: source.to_string(), note, expired: fr.expired, age_days: fr.age_days, version })
 }
 
 // ---------- управление списком из приложения (только администратор) ----------
 //
-// Токен GitHub (fine-grained, один репозиторий, Contents: write) админ вводит
-// один раз — он хранится локально в %LOCALAPPDATA%\Echips\HardwareCheck\
-// admin_token.dat (зашифрован DPAPI, см. ниже) и в exe/репозиторий не попадает. Обычные техники токена не
-// имеют, поэтому писать в data/techs.json могут только с машины админа.
-// Запись — через GitHub Contents API (GET sha + текущее содержимое, затем PUT
-// с новым содержимым и тем же sha: если файл успели изменить, GitHub вернёт
-// 409 и мы ничего не затрём).
-
-const API_URL: &str =
-    "https://api.github.com/repos/yanlax/echips-diagnostic-assistant/contents/data/techs.json";
+// Нужны ДВА секрета, оба хранятся только на компьютере администратора (DPAPI, CurrentUser):
+//   * токен GitHub (fine-grained, Contents: write на yanlax/echips-reports) — запись файла;
+//   * ключ подписи (hex, 64 символа) — им подписывается список; без него остальные exe список не примут.
+// Запись — через GitHub Contents API (GET sha + содержимое, затем PUT с тем же sha: если файл успели
+// изменить, GitHub вернёт 409 и мы ничего не затрём).
 
 fn token_dir() -> std::path::PathBuf {
     let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into());
@@ -284,27 +345,65 @@ fn b64_decode(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+
+// ---------- ключ подписи ----------
+
+fn signing_key_path() -> std::path::PathBuf {
+    token_dir().join("signing_key.dat")
+}
+
+fn read_signing_key() -> Option<String> {
+    let cipher = std::fs::read_to_string(signing_key_path()).ok()?;
+    let plain_b64 = dpapi(false, cipher.trim()).ok()?;
+    let bytes = b64_decode(&plain_b64)?;
+    String::from_utf8(bytes).ok().filter(|t| !t.trim().is_empty())
+}
+
+#[tauri::command]
+pub fn techs_signing_status() -> bool {
+    signing_key_path().exists()
+}
+
+#[tauri::command]
+pub fn techs_save_signing_key(key: String) -> Result<(), String> {
+    let k = key.trim().to_lowercase();
+    let public = sig::public_of(&k)?;
+    if public != PUB_HEX.trim().to_lowercase() {
+        return Err("Этот ключ не подходит к публичному ключу, вшитому в программу".to_string());
+    }
+    let cipher = dpapi(true, &b64_encode(k.as_bytes()))?;
+    std::fs::create_dir_all(token_dir()).map_err(|e| e.to_string())?;
+    std::fs::write(signing_key_path(), cipher).map_err(|e| format!("Не удалось сохранить ключ: {e}"))
+}
+
+#[tauri::command]
+pub fn techs_clear_signing_key() {
+    let _ = std::fs::remove_file(signing_key_path());
+}
+
+const API_URL_FMT: &str = "https://api.github.com/repos/yanlax/echips-reports/contents/_config/techs.json";
+
 pub(crate) fn gh_error(status: reqwest::StatusCode) -> String {
     match status.as_u16() {
         401 => "Токен недействителен или истёк — введите новый".to_string(),
-        403 | 404 => "Нет доступа к репозиторию: у токена должно быть право Contents: write на yanlax/echips-diagnostic-assistant".to_string(),
+        403 | 404 => "Нет доступа к репозиторию: у токена должно быть право Contents: write на yanlax/echips-reports".to_string(),
         409 | 422 => "Файл в репозитории изменили параллельно — повторите действие".to_string(),
         s => format!("GitHub вернул ошибку {s}"),
     }
 }
 
-/// Читает актуальный список и sha, применяет правку, коммитит. Возвращает
-/// новый список (чтобы приложение сразу показало его, не дожидаясь CDN raw).
+/// Читает актуальный список и sha, применяет правку, подписывает и коммитит. Возвращает
+/// новый список (чтобы приложение сразу показало его).
 async fn commit_list<F>(message: String, edit: F) -> Result<Vec<Tech>, String>
 where
     F: Send + FnOnce(&mut Vec<Tech>) -> Result<(), String>,
 {
     let token = read_token().ok_or("Сначала введите GitHub-токен")?;
+    let key = read_signing_key().ok_or("Сначала импортируйте ключ подписи (экран «Инженеры»)")?;
     let client = reqwest::Client::new();
     let get = |accept: &'static str| {
         client
-            .get(API_URL)
-            .query(&[("ref", "main")])
+            .get(API_URL_FMT)
             .header("User-Agent", "echips-diagnostic-app")
             .header("Accept", accept)
             .bearer_auth(&token)
@@ -327,15 +426,19 @@ where
     if !raw.status().is_success() {
         return Err(gh_error(raw.status()));
     }
-    let mut list: Vec<Tech> = serde_json::from_str(&raw.text().await.map_err(|e| e.to_string())?)
-        .map_err(|e| format!("techs.json в репозитории повреждён: {e}"))?;
+    let mut cur = parse_signed(&raw.text().await.map_err(|e| e.to_string())?)
+        .ok_or("Список в репозитории повреждён или подписан другим ключом — правка отменена")?;
 
-    edit(&mut list)?;
+    edit(&mut cur.techs)?;
+    cur.version += 1;
+    cur.issued_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
-    let mut body = serde_json::to_string_pretty(&list).map_err(|e| e.to_string())?;
+    let payload = serde_json::to_string(&cur).map_err(|e| e.to_string())?;
+    let sig_hex = sig::sign(&key, &payload)?;
+    let mut body = serde_json::to_string_pretty(&sig::Signed { payload, sig: sig_hex }).map_err(|e| e.to_string())?;
     body.push('\n');
     let put = client
-        .put(API_URL)
+        .put(API_URL_FMT)
         .header("User-Agent", "echips-diagnostic-app")
         .header("Accept", "application/vnd.github+json")
         .bearer_auth(&token)
@@ -343,7 +446,6 @@ where
             "message": message,
             "content": b64_encode(body.as_bytes()),
             "sha": sha,
-            "branch": "main",
         }))
         .send()
         .await
@@ -351,8 +453,9 @@ where
     if !put.status().is_success() {
         return Err(gh_error(put.status()));
     }
-    let _ = std::fs::write(cache_path(), &body);
-    Ok(list)
+    write_list_copies(&body);
+    write_stamps(&read_stamps(), now_unix(), true);
+    Ok(cur.techs)
 }
 
 /// Добавляет инженера или (если id уже есть) заменяет запись — так же меняется PIN.

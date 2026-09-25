@@ -437,14 +437,8 @@ var A = {
       }
       recordDetail(id, { override:{ from:auto.status, to:v, reason:cm } });
     } else if (d.override){ recordDetail(id, { override:null }); }
-    if (cat().kind==='keyboard' && v==='pass'){
-      var reqIds = kbAllIds().filter(function(i){ return !kbOptional(i); }), total = reqIds.length;
-      var pressed = reqIds.filter(function(i){ return S.keys[i]; }).length;
-      if (pressed < total*0.6 && !(S.comments[id]||'').trim()){
-        S.markErr = { id:id, text:'Нажато только '+pressed+' из '+total+' клавиш. Нажмите остальные или допишите в комментарии, почему тест засчитан (например, нет цифрового блока).' };
-        render(); return;
-      }
-    }
+    // «Пройден» для клавиатуры ставится и без нажатия всех клавиш (нет цифрового блока, клавиша не нужна и т. п.):
+    // какие клавиши нажаты, а какие нет, остаётся в подробностях отчёта (kbSummaryLines)
     if (cat().kind==='runner' && S.runError && v==='pass' && !(S.comments[id]||'').trim()){
       // проверка упала с ошибкой (нет данных) — «пройден» без объяснения давал в отчёте пустую строку «pass»
       S.markErr = { id:id, text:'Проверка не выполнилась ('+S.runError+'). Чтобы засчитать «пройден» без данных, допишите в комментарии, почему.' };

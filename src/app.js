@@ -1727,8 +1727,11 @@ var A = {
      после успешного входа (сайдбар, отчёт), а не запрашивается заранее. */
   lockDigit:function(d){
     var L = S.lock;
-    if(L.pin.length>=12) return; // генератор допускает PIN до 12 цифр
+    if(L.pin.length>=12 || L.busy) return; // PIN до 12 цифр; во время проверки ввод не принимаем
     L.err=''; L.pin += d; renderLock();
+    // Кнопку «Войти» нажимать не нужно: как только введено столько цифр, сколько было в успешных входах на этом
+    // ноутбуке (сначала 4), PIN проверяется сам; при неудаче ввод не сбрасывается — можно продолжить набор.
+    if (pinLens().indexOf(L.pin.length)>=0) lockTrySubmit(true);
   },
   lockBackspace:function(){ S.lock.pin = S.lock.pin.slice(0,-1); S.lock.err=''; renderLock(); },
   lockSubmit:function(){ lockTrySubmit(); },
@@ -2948,6 +2951,9 @@ function subTabs(c){
 }
 
 /* ---------- экран «Идёт проверка» автопрогона ---------- */
+/* Кнопки экрана «Идёт проверка» и баннера автопрогона срабатывают по нажатию (pointerdown), а не по клику: во время записи на диск
+   и других тестов экран перерисовывается каждую секунду и по событиям прогресса, кнопка успевала замениться между нажатием и
+   отпусканием, и клик пропадал. Клавиатурная активация (Enter/Space, event.detail===0) обрабатывается через onclick. */
 function autoLogPush(text){
   var d = new Date(), t = String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0');
   (S.autoLog = S.autoLog || []).push({ t:t, text:text }); if (S.autoLog.length>40) S.autoLog.shift();
@@ -3016,7 +3022,7 @@ function screenAutoFocusSensors(){
   var modeName = a.mode==='express' ? 'Экспресс' : 'Полный автопрогон';
   return '<div class="pane af">'+
     '<div class="af-head"><div><div class="eyebrow">'+modeName+' · шаг '+(a.idx+1)+' из '+n+'</div><h1 class="title">Датчики</h1></div>'+
-    '<div class="headactions"><button class="btn btn-ghost" onclick="echips.autoDetail()">Подробности теста</button><button class="btn btn-ghost" onclick="echips.autoStop()">Прервать автопрогон</button></div></div>'+
+    '<div class="headactions"><button class="btn btn-ghost" onpointerdown="echips.autoDetail()" onclick="if(event.detail===0)echips.autoDetail()">Подробности теста</button><button class="btn btn-ghost" onpointerdown="echips.autoStop()" onclick="if(event.detail===0)echips.autoStop()">Прервать автопрогон</button></div></div>'+
     '<div class="af-ticks">'+afTicksHtml()+'</div>'+
     '<div class="af-grid">'+
       '<section class="af-pan af-big"><h3>Снимаем показания температурных датчиков</h3><div class="af-pct">'+Math.round(pct)+'<small>%</small></div><div class="bar"><div class="fill" style="width:'+pct.toFixed(0)+'%"></div></div>'+
@@ -3073,7 +3079,7 @@ function screenAutoFocusStress(){
   var modeName = a.mode==='express' ? 'Экспресс' : 'Полный автопрогон';
   return '<div class="pane af">'+
     '<div class="af-head"><div><div class="eyebrow">'+modeName+' · шаг '+(a.idx+1)+' из '+n+'</div><h1 class="title">Стресс-тест</h1></div>'+
-    '<div class="headactions"><button class="btn btn-ghost" onclick="echips.autoDetail()">Подробности теста</button><button class="btn btn-ghost" onclick="echips.autoStop()">Прервать автопрогон</button></div></div>'+
+    '<div class="headactions"><button class="btn btn-ghost" onpointerdown="echips.autoDetail()" onclick="if(event.detail===0)echips.autoDetail()">Подробности теста</button><button class="btn btn-ghost" onpointerdown="echips.autoStop()" onclick="if(event.detail===0)echips.autoStop()">Прервать автопрогон</button></div></div>'+
     '<div class="af-ticks">'+afTicksHtml()+'</div>'+
     '<div class="af-grid">'+
       '<section class="af-pan af-big"><h3>Нагрузка на процессор'+(st.cfg.gpu?' и видеокарту':'')+' — проверка охлаждения и троттлинга</h3>'+
@@ -3104,7 +3110,7 @@ function screenAutoFocus(){
   var modeName = a.mode==='express' ? 'Экспресс' : 'Полный автопрогон';
   return '<div class="pane af">'+
     '<div class="af-head"><div><div class="eyebrow">'+modeName+' · шаг '+(a.idx+1)+' из '+n+'</div><h1 class="title">'+esc(c.name)+'</h1></div>'+
-    '<div class="headactions"><button class="btn btn-ghost" onclick="echips.autoDetail()">Подробности теста</button><button class="btn btn-ghost" onclick="echips.autoStop()">Прервать автопрогон</button></div></div>'+
+    '<div class="headactions"><button class="btn btn-ghost" onpointerdown="echips.autoDetail()" onclick="if(event.detail===0)echips.autoDetail()">Подробности теста</button><button class="btn btn-ghost" onpointerdown="echips.autoStop()" onclick="if(event.detail===0)echips.autoStop()">Прервать автопрогон</button></div></div>'+
     '<div class="af-ticks">'+ticks+'</div>'+
     '<div class="af-grid">'+
       '<section class="af-pan af-big"><h3>'+esc(c.method)+'</h3>'+
@@ -3120,10 +3126,10 @@ setInterval(function(){ if (autoFocusActive() || autoSensorsFocusActive()) rende
 function autoBanner(){
   var a = S.auto; if (!a.on) return '';
   var n = a.ids.length;
-  var btns = '<button class="btn btn-ghost" onclick="echips.autoStop()">Прервать автопрогон</button>';
-  if (a.detail && !a.waiting && !a.stopped && !isInteractive(S.cat)) btns = '<button class="btn btn-ghost" onclick="echips.autoDetail()">Обзор</button>'+btns;
-  if (a.stopped) btns = '<button class="btn btn-ghost" onclick="echips.autoNext()">Продолжить</button><button class="btn btn-primary" onclick="echips.autoReport()">К отчёту</button>';
-  else if (a.waiting) btns = '<button class="btn btn-primary" onclick="echips.autoNext()">Далее</button>' + btns;
+  var btns = '<button class="btn btn-ghost" onpointerdown="echips.autoStop()" onclick="if(event.detail===0)echips.autoStop()">Прервать автопрогон</button>';
+  if (a.detail && !a.waiting && !a.stopped && !isInteractive(S.cat)) btns = '<button class="btn btn-ghost" onpointerdown="echips.autoDetail()" onclick="if(event.detail===0)echips.autoDetail()">Обзор</button>'+btns;
+  if (a.stopped) btns = '<button class="btn btn-ghost" onpointerdown="echips.autoNext()" onclick="if(event.detail===0)echips.autoNext()">Продолжить</button><button class="btn btn-primary" onpointerdown="echips.autoReport()" onclick="if(event.detail===0)echips.autoReport()">К отчёту</button>';
+  else if (a.waiting) btns = '<button class="btn btn-primary" onpointerdown="echips.autoNext()" onclick="if(event.detail===0)echips.autoNext()">Далее</button>' + btns;
   return '<div class="autobar"><div class="ab-top"><span class="eyebrow">Автопрогон · профиль «'+esc(profile().name)+'»</span>'+
     '<span class="idx">шаг '+(a.idx+1)+' из '+n+'</span></div>'+
     '<div class="bar"><div class="fill" style="width:'+(a.idx/n*100).toFixed(0)+'%"></div></div>'+
@@ -4363,7 +4369,7 @@ function padPoint(e, move){
    PIN проверяет сервер Echips (commands/srv.rs). Экран поверх всего приложения (#lock-overlay в
    index.html, вне #screen — render() его не трогает). */
 function lockInit(){
-  S.lock = { phase:'pin', techs:null, err:'', pin:'', shake:false, note:'' };
+  S.lock = { phase:'pin', techs:null, err:'', pin:'', shake:false, note:'', busy:false };
   renderLock();
   // связи с сервером нет — предупреждаем сразу, а не после ввода PIN
   invoke('srv_ping').then(function(ok){
@@ -4371,23 +4377,40 @@ function lockInit(){
   }).catch(function(){});
 }
 /* Вход: PIN уходит на сервер (commands/srv.rs), он же выдаёт сессию на 12 часов и ведёт журнал входов. */
-function lockTrySubmit(){
+/* Длины PIN, с которыми уже входили на этом ноутбуке (для автовхода); по умолчанию 4 */
+function pinLens(){
+  try { var a = JSON.parse(localStorage.getItem('echips-pin-lens')||'[]'); if (a.length) return a; } catch(e){}
+  return [4];
+}
+function rememberPinLen(n){
+  try { var a = pinLens(); if (a.indexOf(n)<0){ a.push(n); localStorage.setItem('echips-pin-lens', JSON.stringify(a)); } } catch(e){}
+}
+function lockTrySubmit(auto){
   var L = S.lock;
+  if(L.busy) return;
   if(!L.pin){ L.err='Введите PIN.'; renderLock(); return; }
-  L.phase='verifying'; renderLock();
-  invoke('srv_login', { pin:L.pin }).then(function(res){
+  var sent = L.pin;
+  if (auto) L.busy = true;                      // автопроверка идёт тихо: без экрана «проверка» и без мигания
+  else { L.phase='verifying'; renderLock(); }
+  invoke('srv_login', { pin:sent }).then(function(res){
+    L.busy = false;
     if (res && res.ok){
+      rememberPinLen(sent.length);
       S.engineer = { id:res.id, name:res.name, role:res.role||'tech', offline:!!res.offline_mode };
       L.note = ''; L.phase='ok'; renderLock(); render();
       afterLogin();
       setTimeout(function(){ L.phase='unlocked'; renderLock(); }, 650);
-    } else {
-      L.phase='pin'; L.pin='';
-      L.err = res && res.offline ? (res.message || 'Нет связи с сервером. Проверьте интернет и повторите.') : ((res && res.message) || 'Неверный PIN.');
-      L.shake=true; renderLock();
-      setTimeout(function(){ L.shake=false; renderLock(); }, 400);
+      return;
     }
+    L.err = res && res.offline ? (res.message || 'Нет связи с сервером. Проверьте интернет и повторите.') : ((res && res.message) || 'Неверный PIN.');
+    // автопроверка на длине короче самого длинного известного PIN — ввод не трогаем, человек может набирать дальше
+    var partial = auto && L.pin===sent && sent.length < Math.max.apply(null, pinLens());
+    if (auto && L.pin!==sent){ L.err=''; renderLock(); return; }        // пока шла проверка, набор продолжился
+    if (!partial) L.pin='';
+    L.phase='pin'; L.shake=true; renderLock();
+    setTimeout(function(){ L.shake=false; renderLock(); }, 400);
   }).catch(function(err){
+    L.busy = false;
     L.phase='pin'; L.pin=''; L.err = typeof err==='string' ? err : 'Не удалось войти'; renderLock();
   });
 }

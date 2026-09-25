@@ -1013,7 +1013,7 @@ dependencies = [
 
 [[package]]
 name = "echips-diagnostic-app"
-version = "0.51.4"
+version = "0.51.5"
 dependencies = [
  "chrono",
  "futures-util",

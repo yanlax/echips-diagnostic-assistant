@@ -717,3 +717,25 @@ h1.title{font-size:38px;letter-spacing:-.03em;line-height:1.08;margin:5px 0 0}
 /* таблицы и терминал */
 .log,.spectrum{background:var(--term)}
 .step .dot{display:none}
+
+/* ---- экран «Идёт проверка» автопрогона ---- */
+.af-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:20px}
+.af-ticks{display:flex;gap:4px;margin-bottom:22px}
+.af-tk{flex:1;height:10px;border-radius:3px;background:var(--line)}
+.af-tk.pass{background:var(--ok)}.af-tk.fail{background:var(--err)}.af-tk.na{background:var(--na)}.af-tk.run{background:var(--accent)}
+.af-grid{display:grid;grid-template-columns:1.35fr 1fr 1fr;gap:18px}
+.af-pan{background:var(--glass);border:1px solid var(--line);border-radius:16px;padding:22px;min-width:0}
+.af-pan h3{font-size:12.5px;font-weight:600;color:var(--mute);margin:0 0 12px;font-family:var(--font)}
+.af-big{background:linear-gradient(160deg,var(--glass-hover),var(--glass))}
+.af-pct{font:600 92px/1 var(--grotesk);letter-spacing:-.04em;color:var(--accent)}
+.af-pct small{font-size:34px;color:var(--mute)}.af-wait{font-size:40px;letter-spacing:-.02em;color:var(--text-hi);padding:14px 0 6px}
+.af-big .bar{margin-top:14px;height:10px;border-radius:9px}
+.bar.ind .fill{width:35%;animation:afInd 1.6s ease-in-out infinite}
+@keyframes afInd{0%{margin-left:-35%}100%{margin-left:100%}}
+.af-mut{color:var(--mute);margin:10px 0 0;font-size:13px}
+.af-mini{display:flex;gap:26px;margin-top:20px}.af-mini.af-col{flex-direction:column;gap:14px;margin-top:16px}
+.af-mini b{display:block;font:600 22px var(--grotesk);color:var(--text-hi)}.af-mini span{color:var(--mute);font-size:12.5px}
+.af-tv{font:600 44px/1 var(--grotesk);letter-spacing:-.02em;color:var(--text-hi)}.af-tv small{font-size:20px;color:var(--mute)}
+.af-chart{width:100%;height:96px;margin-top:12px;display:block}
+.af-log{margin-top:18px;background:var(--term);font:400 12.5px/1.8 var(--mono);color:#B8C4CF}.af-log h3{color:#8796A5}.af-log div span{color:#5C6B7A;margin-right:14px}
+@media (max-width:1100px){.af-grid{grid-template-columns:1fr 1fr}.af-big{grid-column:1/-1}}

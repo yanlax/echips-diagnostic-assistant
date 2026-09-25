@@ -466,14 +466,29 @@ var A = {
     S.results={}; S.comments={}; S.keys={}; S.snapshot=false; S.reportSummary='';
     S.startedAt = new Date().toISOString(); S.sentHash = null;
     S.auto = { on:true, ids:ids, idx:-1, stopped:false, waiting:false, msg:'', cls:'', timer:null, mode:S.autoMode };
+    S.autoTemps = []; S.autoLog = [];
+    A.autoTempPoll(true);
     A.autoNext();
   },
   autoOff:function(){
+    A.autoTempPoll(false);
     if (S.auto.timer) clearTimeout(S.auto.timer);
     if (S.auto.probe) clearTimeout(S.auto.probe);
     if (S.st.running) invoke('stop_stress').catch(function(){});
     S.auto = { on:false, ids:[], idx:-1, stopped:false, waiting:false, msg:'', cls:'' };
   },
+  /* Живая температура процессора на время автопрогона (для экрана «Идёт проверка»): опрос раз в 3 с, без полной перерисовки */
+  autoTempPoll:function(on){
+    if (S.autoTempT){ clearInterval(S.autoTempT); S.autoTempT = null; }
+    if (!on) return;
+    function tick(){
+      invoke('get_thermal_reading').then(function(r){
+        if (r && r.available && r.cpu_temp_c!=null){ S.autoTemps.push(r.cpu_temp_c); if (S.autoTemps.length>60) S.autoTemps.shift(); autoPaintTemp(); }
+      }).catch(function(){});
+    }
+    tick(); S.autoTempT = setInterval(tick, 3000);
+  },
+  autoDetail:function(){ S.auto.detail = !S.auto.detail; render(); },
   autoStop:function(){ A.autoOff(); A.go('dash'); },
   autoReport:function(){
     var wasAuto = S.auto.on;
@@ -484,8 +499,10 @@ var A = {
   autoNext:function(){
     var a = S.auto; if (!a.on) return;
     if (a.timer) clearTimeout(a.timer);
-    a.idx++; a.stopped=false; a.waiting=false; a.msg=''; a.cls='';
+    a.idx++; a.stopped=false; a.waiting=false; a.msg=''; a.cls=''; a.detail=false; a.stepT0=Date.now();
     if (a.idx >= a.ids.length){ A.autoReport(); return; }
+    var nm = (CATS.filter(function(x){ return x.id===a.ids[a.idx]; })[0]||{}).name || a.ids[a.idx];
+    autoLogPush(nm+' — запуск');
     A.openCat(a.ids[a.idx]);
   },
   /* Итог шага: пройден/не применимо — идём дальше сами, ошибка — ждём техника. */
@@ -499,6 +516,7 @@ var A = {
     if (!v || !v.status){ a.waiting=true; a.msg='Автооценка невозможна — отметьте результат вручную.'; a.cls=''; render(); return; }
     S.results[S.cat]=v.status; S.comments[S.cat]=v.note; renderNav();
     recordDetail(S.cat, { auto: { status:v.status, note:v.note } });
+    autoLogPush(cat().name+' — '+(v.status==='fail'?'не пройден':v.status==='na'?'не применимо':'пройден')+': '+v.note);
     var at = a.idx;
     if (v.status==='fail'){
       if (profile().stopAtFail){ a.stopped=true; a.msg='Не пройден: '+v.note+' — автопрогон остановлен.'; a.cls='err'; }
@@ -2843,10 +2861,70 @@ function subTabs(c){
   }).join('') +'</div>';
 }
 
+/* ---------- экран «Идёт проверка» автопрогона ---------- */
+function autoLogPush(text){
+  var d = new Date(), t = String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0');
+  (S.autoLog = S.autoLog || []).push({ t:t, text:text }); if (S.autoLog.length>40) S.autoLog.shift();
+}
+function autoFocusActive(){
+  var a = S.auto;
+  return !!(a && a.on && !a.waiting && !a.stopped && !a.detail && S.screen==='test' && !isInteractive(S.cat));
+}
+function autoProgress(c){
+  // доля выполнения текущего теста (0–100) или null, если тест не сообщает прогресс
+  if (c.kind==='memtest' && S.mem.running) return { pct:S.mem.pct, sub:'Проход '+S.mem.pass+' · '+(S.mem.pattern||'подготовка')+' · ошибок '+S.mem.errors };
+  if (c.kind==='diskread' && S.dr.running) return { pct:S.dr.pct, sub:S.dr.mbps.toFixed(0)+' МБ/с' };
+  if (c.kind==='diskwrite' && S.dw.running) return { pct:S.dw.pct, sub:(S.dw.phase==='read'?'Чтение обратно':'Запись')+' · '+S.dw.mbps.toFixed(0)+' МБ/с' };
+  if (c.kind==='surface' && S.sf.running && S.sf.total>0) return { pct:S.sf.pos/S.sf.total*100, sub:S.sf.mbps.toFixed(0)+' МБ/с · '+(S.sf.pos/1024).toFixed(1)+' из '+(S.sf.total/1024).toFixed(1)+' ГБ' };
+  return null;
+}
+function autoTempSvg(){
+  var t = S.autoTemps || [];
+  if (t.length<2) return '<svg viewBox="0 0 480 120" preserveAspectRatio="none" class="af-chart" id="auto-temp-svg"></svg>';
+  var lo = Math.min.apply(null,t)-3, hi = Math.max(Math.max.apply(null,t)+3, lo+12), lim = profile().maxTempC||95;
+  var pts = t.map(function(v,i){ return (i/(t.length-1)*480).toFixed(1)+','+(112-(v-lo)/(hi-lo)*104).toFixed(1); }).join(' ');
+  return '<svg viewBox="0 0 480 120" preserveAspectRatio="none" class="af-chart" id="auto-temp-svg"><polyline points="'+pts+'" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke"/>'+
+    (lim<hi ? '<line x1="0" x2="480" y1="'+(112-(lim-lo)/(hi-lo)*104).toFixed(1)+'" y2="'+(112-(lim-lo)/(hi-lo)*104).toFixed(1)+'" stroke="var(--err)" stroke-dasharray="4 4" opacity=".6"/>' : '')+'</svg>';
+}
+function autoPaintTemp(){
+  var v = document.getElementById('auto-temp-v'), svg = document.getElementById('auto-temp-svg');
+  if (!v || !S.autoTemps || !S.autoTemps.length) return;
+  v.innerHTML = Math.round(S.autoTemps[S.autoTemps.length-1])+'<small> °C</small>';
+  if (svg) svg.outerHTML = autoTempSvg();
+}
+function screenAutoFocus(){
+  var a = S.auto, c = cat(), n = a.ids.length;
+  var pr = autoProgress(c);
+  var cnt = { pass:0, fail:0, na:0 }; a.ids.forEach(function(id){ var r = S.results[id]; if (cnt[r]!==undefined) cnt[r]++; });
+  var ticks = a.ids.map(function(id,i){
+    var r = S.results[id], cl = i===a.idx ? 'run' : (r==='pass'||r==='fail'||r==='na') ? r : (i<a.idx ? 'na' : '');
+    var nm = (CATS.filter(function(x){ return x.id===id; })[0]||{}).name || id;
+    return '<i class="af-tk '+cl+'" title="'+esc(nm)+'"></i>';
+  }).join('');
+  var el = Math.max(0, Math.round((Date.now()-(a.stepT0||Date.now()))/1000));
+  var last = S.autoTemps && S.autoTemps.length ? Math.round(S.autoTemps[S.autoTemps.length-1]) : null;
+  var log = (S.autoLog||[]).slice(-7).map(function(l){ return '<div><span>'+esc(l.t)+'</span>'+esc(l.text)+'</div>'; }).join('') || '<div><span></span>Ждём результатов первых проверок…</div>';
+  var modeName = a.mode==='express' ? 'Экспресс' : 'Полный автопрогон';
+  return '<div class="pane af">'+
+    '<div class="af-head"><div><div class="eyebrow">'+modeName+' · шаг '+(a.idx+1)+' из '+n+'</div><h1 class="title">'+esc(c.name)+'</h1></div>'+
+    '<div class="headactions"><button class="btn btn-ghost" onclick="echips.autoDetail()">Подробности теста</button><button class="btn btn-ghost" onclick="echips.autoStop()">Прервать автопрогон</button></div></div>'+
+    '<div class="af-ticks">'+ticks+'</div>'+
+    '<div class="af-grid">'+
+      '<section class="af-pan af-big"><h3>'+esc(c.method)+'</h3>'+
+        (pr ? '<div class="af-pct">'+Math.round(pr.pct)+'<small>%</small></div><div class="bar"><div class="fill" style="width:'+pr.pct.toFixed(0)+'%"></div></div><p class="af-mut">'+esc(pr.sub)+'</p>'
+            : '<div class="af-pct af-wait">Идёт проверка</div><div class="bar ind"><div class="fill"></div></div><p class="af-mut">'+esc(a.msg || 'Идёт проверка')+'</p>')+
+        '<div class="af-mini"><div><b>'+fmtTime(el)+'</b><span>идёт этот тест</span></div><div><b>'+cnt.pass+'</b><span>пройдено</span></div><div><b>'+cnt.fail+'</b><span>ошибок</span></div></div></section>'+
+      '<section class="af-pan"><h3>Температура процессора</h3><div class="af-tv" id="auto-temp-v">'+(last!=null ? last+'<small> °C</small>' : '—')+'</div>'+autoTempSvg()+'<p class="af-mut">порог '+(profile().maxTempC||95)+' °C</p></section>'+
+      '<section class="af-pan"><h3>Ход автопрогона</h3><div class="af-tv">'+(a.idx+1)+'<small> из '+n+'</small></div><div class="af-mini af-col"><div><b>'+(n-a.idx-1)+'</b><span>осталось тестов</span></div><div><b>'+cnt.na+'</b><span>не применимо</span></div></div></section>'+
+    '</div>'+
+    '<section class="af-pan af-log"><h3>Журнал</h3>'+log+'</section></div>';
+}
+setInterval(function(){ if (autoFocusActive()) render(); }, 1000);   // тикает время шага на экране «Идёт проверка»
 function autoBanner(){
   var a = S.auto; if (!a.on) return '';
   var n = a.ids.length;
   var btns = '<button class="btn btn-ghost" onclick="echips.autoStop()">Прервать автопрогон</button>';
+  if (a.detail && !a.waiting && !a.stopped && !isInteractive(S.cat)) btns = '<button class="btn btn-ghost" onclick="echips.autoDetail()">Обзор</button>'+btns;
   if (a.stopped) btns = '<button class="btn btn-ghost" onclick="echips.autoNext()">Продолжить</button><button class="btn btn-primary" onclick="echips.autoReport()">К отчёту</button>';
   else if (a.waiting) btns = '<button class="btn btn-primary" onclick="echips.autoNext()">Далее</button>' + btns;
   return '<div class="autobar"><div class="ab-top"><span class="eyebrow">Автопрогон · профиль «'+esc(profile().name)+'»</span>'+
@@ -3013,6 +3091,7 @@ function hintBox(id){
   return t ? '<div class="hintbox"><b>Что делать:</b> '+esc(t)+'</div>' : '';
 }
 function screenTest(){
+  if (autoFocusActive()) return screenAutoFocus();
   var c = cat(), field = '';
   if(c.kind==='keyboard') field = fieldKeyboard();
   else if(c.kind==='display') field = fieldDisplay();

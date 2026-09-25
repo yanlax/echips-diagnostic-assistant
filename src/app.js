@@ -327,11 +327,11 @@ var A = {
     S.fan.abort = true; S.fan.manual = {};
     if (S.fan.touched){ invoke('hwmon_fan_default_all').catch(function(){}); S.fan.touched = false; }
     S.br = { info:null, loading:false }; S.camClip = null;
-    if (S.st.running && screen!=='stress') invoke('stop_stress').catch(function(){});
-    if (S.sf.running) invoke('stop_surface_scan').catch(function(){});
-    if (S.dw.running) invoke('stop_disk_write_test').catch(function(){});
-    if (S.dr.running) invoke('stop_disk_read_test').catch(function(){});
-    if (S.mem.running) invoke('stop_memory_test').catch(function(){});
+    if (S.st.running && screen!=='stress') haltTest('stop_stress', 'переход на экран «'+screen+(id?'/'+id:'')+'»');
+    if (S.sf.running) haltTest('stop_surface_scan', 'переход на экран «'+screen+'»');
+    if (S.dw.running) haltTest('stop_disk_write_test', 'переход на экран «'+screen+'»');
+    if (S.dr.running) haltTest('stop_disk_read_test', 'переход на экран «'+screen+'»');
+    if (S.mem.running) haltTest('stop_memory_test', 'переход на экран «'+screen+(id?'/'+id:'')+'»');
     if (S.kbWinBlock){ invoke('stop_win_key_block').catch(function(){}); S.kbWinBlock = false; }
     if (document.getElementById('fill-overlay')) A.fillClose();
     if (S.auto.on && screen!=='test' && screen!=='report' && screen!=='sensors' && screen!=='stress') A.autoOff();
@@ -504,7 +504,7 @@ var A = {
     A.autoTempPoll(false);
     if (S.auto.timer) clearTimeout(S.auto.timer);
     if (S.auto.probe) clearTimeout(S.auto.probe);
-    if (S.st.running) invoke('stop_stress').catch(function(){});
+    if (S.st.running) haltTest('stop_stress', 'конец или прерывание автопрогона (autoOff)');
     S.auto = { on:false, ids:[], idx:-1, stopped:false, waiting:false, msg:'', cls:'' };
   },
   /* Живая температура процессора на время автопрогона (для экрана «Идёт проверка»): опрос раз в 3 с, без полной перерисовки */
@@ -978,7 +978,7 @@ var A = {
     invoke('run_memory_test', { sizeMb:m.size, passes:m.passes }).then(function(r){
       fin(); m.res=r; render();
       var totalMb = S.hw && S.hw.ram_total_gb ? Math.round(S.hw.ram_total_gb*1024) : null;
-      recordDetail('mem', { lines:['Проверено '+r.tested_mb+' МБ'+(totalMb?' из '+totalMb+' МБ установленной ОЗУ':'')+', проходов '+r.passes+', время '+r.elapsed_secs+' с'+' (проверяется вся свободная ОЗУ — остальное занято системой и другими процессами)'+(r.stopped?' (остановлено)':''),'Ошибок: '+r.errors].concat(r.first_errors) });
+      recordDetail('mem', { lines:['Проверено '+r.tested_mb+' МБ'+(totalMb?' из '+totalMb+' МБ установленной ОЗУ':'')+', проходов '+r.passes+', время '+r.elapsed_secs+' с'+' (проверяется вся свободная ОЗУ — остальное занято системой и другими процессами)'+(r.stopped?' (остановлено)':''),'Ошибок: '+r.errors].concat(r.first_errors).concat(r.stopped ? ['Кто остановил: '+(stopLogFor('memory').join(' | ') || 'вызовов остановки из программы не было (остановка снаружи?)')] : []) });
       if (S.auto.on && S.cat==='mem'){
         A.autoApply(r.stopped ? null
           : r.errors>0 ? { status:'fail', note:'Ошибок памяти: '+r.errors+' на '+r.tested_mb+' МБ — модуль или слот неисправны' }
@@ -989,7 +989,7 @@ var A = {
       if (S.auto.on && S.cat==='mem') A.autoApply(null);
     });
   },
-  memStop:function(){ invoke('stop_memory_test').catch(function(){}); },
+  memStop:function(){ haltTest('stop_memory_test', 'кнопка «Остановить»'); },
 
   /* ---- яркость ---- */
   brLoad:function(){
@@ -1325,7 +1325,7 @@ var A = {
               tauriEvent.listen('stress-done', function(ev){ fin(ev.payload); }).then(function(u){ unl.push(u); });
               invoke('start_stress', { cfg:{ durationSecs:60, cpu:true, fpu:true, cache:false, memory:false, disk:false, gpu:false, threads:0,
                 memoryPercent:50, diskLetter:'', diskMb:1024, maxTempC: profile().maxTempC || 95 } }).catch(function(){ fin(null); });
-              var guard = setInterval(function(){ if (f.abort){ invoke('stop_stress').catch(function(){}); clearInterval(guard); } if (settled) clearInterval(guard); }, 1000);
+              var guard = setInterval(function(){ if (f.abort){ haltTest('stop_stress', 'проверка вентиляторов (флаг abort)'); clearInterval(guard); } if (settled) clearInterval(guard); }, 1000);
             });
             if (warm.res){
               var t0 = warm.t.length ? warm.t[0] : null, tMax = warm.t.length ? Math.max.apply(null, warm.t) : null;
@@ -1410,7 +1410,7 @@ var A = {
     c.dur = p.dur; render();
   },
   stClear:function(){ if (S.st.running) return; S.st.res=null; S.st.err=null; S.st.events=[]; S.st.last=null; S.st.elapsed=0; S.st.hist={ load:[], temp:[], gpuT:[], clock:[], clockMax:0, scores:{} }; render(); },
-  stStop:function(){ if (S.st.running) invoke('stop_stress').catch(function(){}); },
+  stStop:function(){ if (S.st.running) haltTest('stop_stress', 'кнопка «Остановить»'); },
   stStart:function(){
     var st = S.st, c = st.cfg; if (st.running) return;
     if (!(c.cpu||c.fpu||c.cache||c.memory||c.disk||c.gpu)){ st.err='Выберите хотя бы один вид нагрузки'; render(); return; }
@@ -2968,6 +2968,15 @@ function subTabs(c){
 /* Кнопки экрана «Идёт проверка» и баннера автопрогона срабатывают по нажатию (pointerdown), а не по клику: во время записи на диск
    и других тестов экран перерисовывается каждую секунду и по событиям прогресса, кнопка успевала замениться между нажатием и
    отпусканием, и клик пропадал. Клавиатурная активация (Enter/Space, event.detail===0) обрабатывается через onclick. */
+/* Остановка теста с записью «кто остановил» (в подробности отчёта): в отчётах 25.09 стресс-тест и память останавливались сами,
+   без действий инженера, а причина нигде не сохранялась. Стек вызова укорочен до 3 кадров. */
+function haltTest(cmd, who){
+  var st = ''; try { st = (new Error().stack||'').split('\n').slice(2,5).map(function(l){ return l.trim().replace(/\(?(https?|file|tauri|http)[^)\s]*[\/:]/,'(').slice(0,70); }).join(' < '); } catch(e){}
+  (S.stopLog = S.stopLog || []).push(new Date().toISOString().slice(11,19)+' '+cmd.replace(/^stop_/,'')+' — '+who+(st ? ' · '+st : ''));
+  if (S.stopLog.length>30) S.stopLog.shift();
+  return invoke(cmd).catch(function(){});
+}
+function stopLogFor(kw){ return (S.stopLog||[]).filter(function(l){ return l.indexOf(kw)>=0; }).slice(-3); }
 function autoLogPush(text){
   var d = new Date(), t = String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0');
   (S.autoLog = S.autoLog || []).push({ t:t, text:text }); if (S.autoLog.length>40) S.autoLog.shift();
@@ -3873,6 +3882,7 @@ function stOnDone(res){
   if (res.memErrors||res.diskErrors) lines.push('Ошибки данных: память '+res.memErrors+', диск '+res.diskErrors);
   if (res.logFile) lines.push('Показания по секундам (CSV): '+res.logFile);
   st.events.forEach(function(e){ lines.push('! '+e); });
+  if (res.reason==='stopped'){ var who = stopLogFor('stress'); lines.push(who.length ? 'Кто остановил: '+who.join(' | ') : 'Кто остановил: вызовов остановки из программы не было (остановка снаружи?)'); }
   recordDetail('stress', { lines:lines.slice(0,60), series: downsample(st.hist.load, 200) });
   var v = judgeStress(res);
   if (v) recordDetail('stress', { auto:v });

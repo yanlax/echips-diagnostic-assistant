@@ -3,7 +3,7 @@
 
 use printpdf::path::{PaintMode, WindingOrder};
 use printpdf::{
-    Color, IndirectFontRef, Image, ImageTransform, Line, Mm, PdfDocument, PdfDocumentReference,
+    Color, IndirectFontRef, Line, Mm, PdfDocument, PdfDocumentReference,
     PdfLayerReference, Point, Polygon, Rgb,
 };
 use serde::{Deserialize, Serialize};
@@ -202,15 +202,7 @@ const FONT_BOLD: &[u8] = include_bytes!("../../assets/fonts/PTSans-Bold.ttf");
 /// Статический regular-инстанс релиза (не variable-font — printpdf/
 /// ttf_parser надёжнее работают со статикой, как и с PT Sans).
 const FONT_MONO: &[u8] = include_bytes!("../../assets/fonts/JetBrainsMono-Regular.ttf");
-/// Фирменный знак шапки — растеризован из logo/echips-mark-orange.svg,
-/// присланного пользователем отдельным пакетом (echips-report.zip):
-/// оранжевый шестиугольник для тёмного фона, как в .brand .hex референса.
-/// Раньше здесь использовался обычный логотип приложения (logo.png) —
-/// пятиугольник с вписанным текстом ECHIPS — и рядом ещё раз рисовался
-/// текст "ECHIPS HARDWARE CHECK": получалось два разных знака и дублирующая
-/// подпись, отсюда и замечание "шапка отличается, логотип другой".
-const MARK_PNG: &[u8] = include_bytes!("../../assets/mark_orange.png");
-const MARK_PX: f32 = 256.0;
+// Знак Echips на обложке — оранжевый шестиугольник, рисуется вектором (draw_hexagon), картинки в PDF нет.
 
 fn draw_rule(layer: &PdfLayerReference, color: Rgb, x0: f32, x1: f32, y0: f32, y1: f32) {
     layer.set_fill_color(Color::Rgb(color));
@@ -236,6 +228,19 @@ fn draw_rule(layer: &PdfLayerReference, color: Rgb, x0: f32, x1: f32, y0: f32, y
 /// Референс (echips_report_template.html) использует border-radius
 /// повсюду — плоские углы были одной из причин, почему первая версия
 /// переверстки «выглядела не так, как шаблон».
+/// Шестиугольник (вершиной вверх) контуром: знак Echips на обложке.
+fn draw_hexagon(layer: &PdfLayerReference, color: Rgb, thickness_pt: f32, cx: f32, cy: f32, r: f32) {
+    layer.set_outline_color(Color::Rgb(color));
+    layer.set_outline_thickness(thickness_pt);
+    let pts: Vec<(Point, bool)> = (0..6)
+        .map(|k| {
+            let a = std::f32::consts::FRAC_PI_2 + k as f32 * std::f32::consts::FRAC_PI_3;
+            (Point::new(Mm(cx + r * a.cos()), Mm(cy + r * a.sin())), false)
+        })
+        .collect();
+    layer.add_line(Line { points: pts, is_closed: true });
+}
+
 fn rounded_rect_points(x0: f32, y0: f32, x1: f32, y1: f32, radius: f32) -> Vec<(Point, bool)> {
     let r = radius.max(0.0).min((x1 - x0).abs() / 2.0).min((y1 - y0).abs() / 2.0);
     if r < 0.05 {
@@ -1197,22 +1202,9 @@ pub(crate) fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
     // ---- .brand: знак + "ECHIPS" + плашка "HARDWARE CHECK", одной строкой ----
     let mark_h = 7.0_f32;
     let mark_y = cover_top - 3.0 - mark_h;
-    if let Ok(decoder) = printpdf::image_crate::codecs::png::PngDecoder::new(std::io::Cursor::new(MARK_PNG)) {
-        if let Ok(mark) = Image::try_from(decoder) {
-            let natural_h_mm = MARK_PX / 300.0 * 25.4;
-            let scale = mark_h / natural_h_mm;
-            mark.add_to_layer(
-                w.layer.clone(),
-                ImageTransform {
-                    translate_x: Some(Mm(PDF_MARGIN_L)),
-                    translate_y: Some(Mm(mark_y)),
-                    scale_x: Some(scale),
-                    scale_y: Some(scale),
-                    ..Default::default()
-                },
-            );
-        }
-    }
+    // Знак — векторный шестиугольник (без растровой картинки с альфа-каналом: PDF без SMask открывается одинаково
+    // во всех просмотрщиках; раньше на странице с логотипом часть программ показывала белую страницу)
+    draw_hexagon(&w.layer, Rgb::new(1.0, 0.698, 0.141, None), 1.6, PDF_MARGIN_L + mark_h / 2.0, mark_y + mark_h / 2.0, mark_h / 2.0 - 0.4);
     let word_x = PDF_MARGIN_L + mark_h + 4.0;
     let brand_baseline = mark_y + mark_h / 2.0 - 1.8;
     w.layer.set_fill_color(Color::Rgb(p.cover_text.clone()));
@@ -1233,8 +1225,19 @@ pub(crate) fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
     w.layer.use_text("Отчёт диагностики", 19.0, Mm(PDF_MARGIN_L), Mm(w.y), &w.font_bold);
     w.y -= 7.0;
     w.layer.set_fill_color(Color::Rgb(p.cover_text_muted.clone()));
+    // Приёмка/ремонт и этап («до»/«после») — в подзаголовке, где есть место: в подписях колонок метаданных они
+    // накладывались на соседнюю колонку («УСТРОЙСТВО · ПРИЁМКА/РЕМОНТ № …» + «СЕРИЙНЫЙ НОМЕР»).
+    let mut subtitle = String::from("Полная аппаратная проверка устройства");
+    if !report.intake.trim().is_empty() {
+        subtitle.push_str(&format!(" · приёмка/ремонт № {}", report.intake.trim()));
+    }
+    match report.repair_stage.as_str() {
+        "before" => subtitle.push_str(" · до ремонта"),
+        "after" => subtitle.push_str(" · после ремонта"),
+        _ => {}
+    }
     w.layer
-        .use_text("Полная аппаратная проверка устройства", 10.5, Mm(PDF_MARGIN_L), Mm(w.y), &w.font_regular);
+        .use_text(subtitle, 10.5, Mm(PDF_MARGIN_L), Mm(w.y), &w.font_regular);
 
     w.y -= 8.0;
     // Тонкая линия над метаданными — как border-top у .cover-meta в
@@ -1244,16 +1247,7 @@ pub(crate) fn render_pdf(report: &DiagnosticReport) -> Result<Vec<u8>, String> {
     let meta_col_w = PDF_CONTENT_W / 4.0;
     let time_range = format_time_range(report);
     let duration = format_duration(report);
-    let stage_label = match report.repair_stage.as_str() {
-        "before" => " · ДО РЕМОНТА",
-        "after" => " · ПОСЛЕ РЕМОНТА",
-        _ => "",
-    };
-    let device_label = if report.intake.trim().is_empty() {
-        format!("УСТРОЙСТВО{stage_label}")
-    } else {
-        format!("УСТРОЙСТВО · ПРИЁМКА/РЕМОНТ № {}{stage_label}", report.intake.trim())
-    };
+    let device_label = String::from("УСТРОЙСТВО");
     let meta: [(&str, String); 4] = [
         (device_label.as_str(), report.device_model.clone()),
         ("СЕРИЙНЫЙ НОМЕР", report.device_serial.clone()),

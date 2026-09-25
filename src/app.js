@@ -158,9 +158,14 @@ var S = {
 var _icache = {};
 function invokeCached(cmd, args, ttl){
   var k = cmd + JSON.stringify(args||{}), e = _icache[k];
-  if (e && Date.now()-e.t < ttl) return Promise.resolve(e.v);
-  return invoke(cmd, args).then(function(v){ _icache[k] = { t:Date.now(), v:v }; return v; });
+  if (e && Date.now()-e.t < ttl) return e.p;   // в кэше и незавершённый запрос — параллельные вызовы не дублируются
+  var p = invoke(cmd, args).then(function(v){ return v; }, function(err){ delete _icache[k]; throw err; });
+  _icache[k] = { t:Date.now(), p:p };
+  return p;
 }
+/* В автопрогоне тяжёлые запросы (SMART, журнал сбоев) заранее запускаются параллельно и читаются из кэша;
+   вне автопрогона — всегда свежие данные */
+function invokeAuto(cmd, args){ return S.auto && S.auto.on ? invokeCached(cmd, args, 180000) : invoke(cmd, args); }
 
 function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
@@ -468,6 +473,11 @@ var A = {
     S.auto = { on:true, ids:ids, idx:-1, stopped:false, waiting:false, msg:'', cls:'', timer:null, mode:S.autoMode };
     S.autoTemps = []; S.autoLog = [];
     A.autoTempPoll(true);
+    _icache = {};
+    // тяжёлые запросы к диску и журналу собираем заранее, параллельно (тесты возьмут готовое из кэша)
+    if (ids.indexOf('smart')>=0) invokeCached('get_smart_report', {}, 180000).catch(function(){});
+    if (ids.indexOf('disk')>=0) invokeCached('get_disk_health', {}, 180000).catch(function(){});
+    if (ids.indexOf('crash')>=0) invokeCached('get_crash_history', { days: Math.max(profile().crashDays || 30, 90) }, 180000).catch(function(){});
     A.autoNext();
   },
   autoOff:function(){
@@ -499,7 +509,7 @@ var A = {
   autoNext:function(){
     var a = S.auto; if (!a.on) return;
     if (a.timer) clearTimeout(a.timer);
-    a.idx++; a.stopped=false; a.waiting=false; a.msg=''; a.cls=''; a.detail=false; a.stepT0=Date.now();
+    a.idx++; a.stopped=false; a.waiting=false; a.msg=''; a.cls=''; a.stepT0=Date.now();   // a.detail держится на весь прогон
     if (a.idx >= a.ids.length){ A.autoReport(); return; }
     var nm = (CATS.filter(function(x){ return x.id===a.ids[a.idx]; })[0]||{}).name || a.ids[a.idx];
     autoLogPush(nm+' — запуск');
@@ -552,7 +562,7 @@ var A = {
   smLoad:function(){
     if (S.sm.disks || S.sm.loading) return;
     S.sm.loading = true;
-    invoke('get_smart_report').then(function(list){
+    invokeAuto('get_smart_report').then(function(list){
       S.sm.disks = list; S.sm.loading = false; S.sm.sel = 0; list.forEach(function(d,k){ if (d.is_system) S.sm.sel = k; }); render();
     }).catch(function(err){
       S.sm.loading = false; S.sm.disks = []; S.sm.err = typeof err==='string'?err:'Не удалось получить SMART'; render();
@@ -561,7 +571,7 @@ var A = {
   smPick:function(i){ S.sm.sel = i; render(); },
   smAuto:function(){
     S.sm.disks = null; S.sm.err = null; S.sm.loading = true;
-    invoke('get_smart_report').then(function(list){
+    invokeAuto('get_smart_report').then(function(list){
       // В автопрогоне — только системный диск; остальные проверяются вручную (вкладка «Категории»).
       var sysOnly = list.filter(function(d){ return d.is_system; });
       if (sysOnly.length) list = sysOnly;
@@ -1589,7 +1599,9 @@ var A = {
       run_mode: S.auto && S.auto.on ? (S.autoMode==='express' ? 'экспресс' : 'полный') : (S.autoMode ? (S.autoMode==='express' ? 'экспресс' : 'полный') : ''),
       engineer: S.engineer ? S.engineer.name : '',
       summary_comment: S.reportSummary || '',
-      started_at: S.startedAt || new Date().toISOString(),
+      // Часы ПК могли быть сбиты при запуске и потом синхронизированы (в отчёте была разница в 2 года) —
+      // если «длительность» больше суток, начало считаем неточным и берём момент сборки отчёта
+      started_at: (S.startedAt && Date.now()-new Date(S.startedAt).getTime() < 864e5 && Date.now() >= new Date(S.startedAt).getTime()) ? S.startedAt : new Date().toISOString(),
       finished_at: new Date().toISOString(),
       results: testable.map(function(c){
         var d = S.detail[c.id] || {}, a = d.auto || null;
@@ -1619,7 +1631,10 @@ var A = {
       return invoke('submit_report', { kind:kind, report:rep }).then(function(r){
         S.sentHash = h; S.reportSend = /^sent/.test(r) ? 'sent' : 'queued';
       }).catch(function(){ S.reportSend = 'queued'; }).then(function(){
-        S.reportBusy = false; render(); refreshQueue();
+        S.reportBusy = false; refreshQueue();
+        // пока инженер печатает в поле, экран не перерисовываем — иначе теряется фокус
+        var ae = document.activeElement;
+        if (ae && (ae.tagName==='TEXTAREA' || ae.tagName==='INPUT') && document.getElementById('screen').contains(ae)) renderNav(); else render();
         if (S.reportAgain){ var k = S.reportAgain; S.reportAgain = null; A.reportSync(k); }
       });
     });
@@ -1906,7 +1921,7 @@ function fetchCategory(kind){
     return invoke('list_problem_devices').then(function(all){
       // Служебные устройства, которые на ноутбуках показываются «без драйвера» без последствий
       // (PS/2-эмуляция мыши/клавиатуры при тачпаде на I2C/HID) — в замечания не берём, но пишем в лог.
-      var BENIGN = /PS\/2 (Mouse|Keyboard)|PS\/2-совместим|Standard PS\/2/i;
+      var BENIGN = /PS\/2[\s(]*(Mouse|Keyboard|мыш|клав)|PS\/2-совместим|Standard PS\/2/i;
       var list = all.filter(function(d){ return !BENIGN.test(d.friendly_name||''); });
       var skipped = all.filter(function(d){ return BENIGN.test(d.friendly_name||''); }).map(function(d){ return d.friendly_name+' (служебное, не считается)'; });
       var names = list.map(function(d){ return d.friendly_name + (d['class'] ? ' ('+d['class']+')' : ''); });
@@ -1922,7 +1937,7 @@ function fetchCategory(kind){
   }
   if (kind==='crash'){
     var days = profile().crashDays || 30;
-    return Promise.all([invoke('get_crash_history', { days: Math.max(days, 90) }), invokeCached('get_disk_health', {}, 30000).catch(function(){ return []; })]).then(function(pair){
+    return Promise.all([invokeAuto('get_crash_history', { days: Math.max(days, 90) }), invokeCached('get_disk_health', {}, 30000).catch(function(){ return []; })]).then(function(pair){
       var h = pair[0], disks = pair[1] || [];
       var laptop = !S.hw || S.hw.is_laptop;
       // \Device\HarddiskN\DRn -> имя диска с этим номером
@@ -2911,6 +2926,50 @@ function autoStressFocusActive(){
   var a = S.auto;
   return !!(a && a.on && !a.waiting && !a.stopped && !a.detail && S.screen==='stress' && S.st.running);
 }
+/* Датчики внутри автопрогона — тот же экран «Идёт проверка» */
+function autoSensorsFocusActive(){
+  var a = S.auto;
+  return !!(a && a.on && !a.waiting && !a.stopped && !a.detail && S.screen==='sensors');
+}
+function afLineSvg(series, opts){
+  // общий график для экрана «Идёт проверка»: несколько рядов, каждый со своей шкалой
+  var W = 480, H = 120, out = '';
+  series.forEach(function(sr){
+    var d = (sr.data||[]).filter(function(v){ return v!=null; }).slice(-120);
+    if (d.length<2) return;
+    var lo = sr.min!=null ? sr.min : Math.min.apply(null,d)-3, hi = sr.max!=null ? sr.max : Math.max(Math.max.apply(null,d)+3, lo+12);
+    if (hi<=lo) hi = lo+1;
+    var pts = d.map(function(v,i){ return (i/(d.length-1)*W).toFixed(1)+','+(H-8-(Math.min(hi,Math.max(lo,v))-lo)/(hi-lo)*(H-16)).toFixed(1); }).join(' ');
+    out += '<polyline points="'+pts+'" fill="none" stroke="'+sr.color+'" stroke-width="2" vector-effect="non-scaling-stroke"'+(sr.dash?' stroke-dasharray="5 4"':'')+'/>';
+    if (sr.limit!=null && sr.limit<hi && sr.limit>lo){ var y = (H-8-(sr.limit-lo)/(hi-lo)*(H-16)).toFixed(1); out += '<line x1="0" x2="'+W+'" y1="'+y+'" y2="'+y+'" stroke="var(--err)" stroke-dasharray="4 4" opacity=".6"/>'; }
+  });
+  return '<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none" class="af-chart'+(opts&&opts.tall?' tall':'')+'">'+out+'</svg>';
+}
+function screenAutoFocusSensors(){
+  var a = S.auto, n = a.ids.length, r = S.sensorReading;
+  var secs = profile().sensorsProbeSecs || 8, el = Math.max(0, (Date.now()-(a.stepT0||Date.now()))/1000), pct = Math.min(100, el/secs*100);
+  var cnt = { pass:0, fail:0, na:0 }; a.ids.forEach(function(id){ var x = S.results[id]; if (cnt[x]!==undefined) cnt[x]++; });
+  var cpuT = r && r.available && r.cpu_temp_c!=null ? Math.round(r.cpu_temp_c) : null, lim = profile().maxTempC||95;
+  var gpus = gpuFromSnap(S.hwm && S.hwm.snap);
+  var rows = gpus.map(function(g){
+    var bits = []; if (g.load!=null) bits.push('загрузка '+g.load.toFixed(0)+'%'); if (g.clockCore!=null) bits.push(g.clockCore.toFixed(0)+' МГц'); if (g.power!=null && g.power>0) bits.push(g.power.toFixed(1)+' Вт');
+    return '<div class="af-row"><b>'+esc(g.vendor)+(g.temp!=null ? ' · '+g.temp.toFixed(0)+' °C' : '')+'</b><span>'+esc(g.name)+(bits.length?' · '+bits.join(' · '):'')+'</span></div>';
+  }).join('') || '<div class="af-row"><span>Видеоадаптеры датчиками не обнаружены</span></div>';
+  var hist = S.sensorHistory.length ? S.sensorHistory : S.gpuHistory;
+  var modeName = a.mode==='express' ? 'Экспресс' : 'Полный автопрогон';
+  return '<div class="pane af">'+
+    '<div class="af-head"><div><div class="eyebrow">'+modeName+' · шаг '+(a.idx+1)+' из '+n+'</div><h1 class="title">Датчики</h1></div>'+
+    '<div class="headactions"><button class="btn btn-ghost" onclick="echips.autoDetail()">Подробности теста</button><button class="btn btn-ghost" onclick="echips.autoStop()">Прервать автопрогон</button></div></div>'+
+    '<div class="af-ticks">'+afTicksHtml()+'</div>'+
+    '<div class="af-grid">'+
+      '<section class="af-pan af-big"><h3>Снимаем показания температурных датчиков</h3><div class="af-pct">'+Math.round(pct)+'<small>%</small></div><div class="bar"><div class="fill" style="width:'+pct.toFixed(0)+'%"></div></div>'+
+        '<p class="af-mut">'+esc(a.msg || 'Опрос датчиков…')+'</p>'+
+        '<div class="af-mini"><div><b>'+fmtTime(Math.round(el))+' / '+fmtTime(secs)+'</b><span>время замера</span></div><div><b>'+hist.length+'</b><span>замеров</span></div><div><b>'+cnt.pass+'</b><span>тестов пройдено</span></div></div></section>'+
+      '<section class="af-pan"><h3>Температура процессора</h3><div class="af-tv">'+(cpuT!=null ? cpuT+'<small> °C</small>' : '—')+'</div>'+afLineSvg([{ data:hist, color:'var(--accent)', limit:lim }])+'<p class="af-mut">'+(r && r.note ? esc(r.note) : 'порог '+lim+' °C')+'</p></section>'+
+      '<section class="af-pan"><h3>Видеоадаптеры</h3><div class="af-rows">'+rows+'</div></section>'+
+    '</div>'+
+    '<section class="af-pan af-log"><h3>Журнал</h3>'+((S.autoLog||[]).slice(-5).map(function(l){ return '<div><span>'+esc(l.t)+'</span>'+esc(l.text)+'</div>'; }).join('') || '<div><span></span>Ждём результатов…</div>')+'</section></div>';
+}
 function afTicksHtml(){
   var a = S.auto;
   return a.ids.map(function(id,i){
@@ -2918,6 +2977,25 @@ function afTicksHtml(){
     var nm = (CATS.filter(function(x){ return x.id===id; })[0]||{}).name || id;
     return '<i class="af-tk '+cl+'" title="'+esc(nm)+'"></i>';
   }).join('');
+}
+function afThrottle(h){
+  var c = h.clock.filter(function(v){ return v!=null; });
+  if (c.length<10 || !h.clockMax) return false;
+  var top = Math.max.apply(null, c.slice(0, Math.max(5, Math.floor(c.length/3))));   // «эталон» — начало нагрузки
+  var low = c.slice(Math.floor(c.length/3)).filter(function(v){ return v < top*0.8; }).length;
+  return low>=3;
+}
+function afScoreRows(p, st){
+  var rows = [], sc = p.scores || {}, names = { cpu:'CPU, Мопс/с', fpu:'FPU, ГФлопс', cache:'Кэш', memory:'Память', disk:'Диск', gpu:'GPU, кадр/с' };
+  Object.keys(sc).forEach(function(k){
+    var base = st.hist.scores && st.hist.scores[k], arr = base && base.length ? base : null;
+    var avg = arr ? arr.reduce(function(x,y){ return x+y; },0)/arr.length : null;
+    rows.push('<div class="af-row"><b>'+esc(names[k]||k)+'</b><span>сейчас '+Math.round(sc[k]*10)/10+(avg!=null ? ' · среднее '+avg.toFixed(1)+' · мин '+Math.min.apply(null,arr).toFixed(1) : '')+'</span></div>');
+  });
+  if (p.gpuTempC!=null) rows.push('<div class="af-row"><b>Видеокарта</b><span>'+Math.round(p.gpuTempC)+' °C</span></div>');
+  if (p.powerW) rows.push('<div class="af-row"><b>Мощность</b><span>'+p.powerW.toFixed(0)+' Вт</span></div>');
+  if (p.fanRpm) rows.push('<div class="af-row"><b>Вентилятор</b><span>'+Math.round(p.fanRpm)+' об/мин</span></div>');
+  return rows.join('') || '<div class="af-row"><span>Разогрев…</span></div>';
 }
 function screenAutoFocusStress(){
   var a = S.auto, st = S.st, p = st.last || {}, h = st.hist, n = a.ids.length;
@@ -2947,6 +3025,10 @@ function screenAutoFocusStress(){
         '<div class="af-mini"><div><b>'+fmtTime(st.elapsed||0)+(dur?' / '+fmtTime(dur):'')+'</b><span>время нагрузки</span></div><div><b>'+errs+'</b><span>ошибок данных</span></div><div><b>'+cnt.pass+'</b><span>тестов пройдено</span></div></div></section>'+
       '<section class="af-pan"><h3>Температура процессора</h3><div class="af-tv">'+(p.tempC!=null ? Math.round(p.tempC)+'<small> °C</small>' : '—')+'</div>'+svg+'<p class="af-mut">порог '+lim+' °C'+(p.gpuTempC!=null ? ' · видеокарта '+Math.round(p.gpuTempC)+' °C' : '')+'</p></section>'+
       '<section class="af-pan"><h3>Загрузка</h3><div class="af-tv">'+(p.load!=null ? Math.round(p.load)+'<small> %</small>' : '—')+'</div><div class="af-bars">'+bars+'</div><p class="af-mut">'+(p.fanRpm ? 'вентилятор '+Math.round(p.fanRpm)+' об/мин' : '')+(p.powerW ? (p.fanRpm?' · ':'')+p.powerW.toFixed(0)+' Вт' : '')+'</p></section>'+
+      '<section class="af-pan af-wide"><h3>Частота процессора и загрузка</h3><div class="af-tv">'+(p.clockMhz ? Math.round(p.clockMhz)+'<small> МГц</small>' : '—')+(st.hist.clockMax ? '<small class="af-side"> макс. '+Math.round(st.hist.clockMax)+' МГц · ' : '')+(st.hist.clockMax ? (p.clockMhz ? Math.round(p.clockMhz/st.hist.clockMax*100) : 0)+'% от максимума</small>' : '')+'</div>'+
+        afLineSvg([{ data:h.clock, color:'var(--cool)', min:0, max:st.hist.clockMax||null }, { data:h.load, color:'var(--accent)', min:0, max:100, dash:true }], { tall:true })+
+        '<p class="af-mut"><i class="af-key" style="background:var(--cool)"></i>частота &nbsp; <i class="af-key" style="background:var(--accent)"></i>загрузка'+(afThrottle(h) ? ' &nbsp;·&nbsp; <b class="af-warn">частота падала ниже 80% — возможен троттлинг</b>' : '')+'</p></section>'+
+      '<section class="af-pan"><h3>Результаты нагрузки</h3><div class="af-rows">'+afScoreRows(p, st)+'</div></section>'+
     '</div>'+
     '<section class="af-pan af-log"><h3>События нагрузки</h3>'+ev+'</section></div>';
 }
@@ -2977,7 +3059,7 @@ function screenAutoFocus(){
     '</div>'+
     '<section class="af-pan af-log"><h3>Журнал</h3>'+log+'</section></div>';
 }
-setInterval(function(){ if (autoFocusActive()) render(); }, 1000);   // тикает время шага на экране «Идёт проверка»
+setInterval(function(){ if (autoFocusActive() || autoSensorsFocusActive()) render(); }, 1000);   // тикает время шага на экране «Идёт проверка»
 function autoBanner(){
   var a = S.auto; if (!a.on) return '';
   var n = a.ids.length;
@@ -3984,12 +4066,16 @@ function screenMb(){
       '<div class="msg">'+(m.serial&&m.uuid ? 'SN и UUID' : m.serial ? 'SN' : 'UUID')+' записан'+(m.serial&&m.uuid ? 'ы' : '')+' и подтвержд'+(m.serial&&m.uuid ? 'ены' : 'ён')+' чтением обратно. Перезагрузите ПК, чтобы Windows показал новые значения. Запись сохранена в журнал аудита.</div>'+
       '<div class="actions"><button class="btn btn-ghost" onclick="echips.mbVerify()">Проверить идентификаторы</button><button class="btn btn-primary" onclick="echips.go(\'start\')">Готово</button></div></div>';
   }
-  return '<div class="pane">'+
-    '<div class="crumbs"><button class="btn-link" onclick="echips.go(\'start\')">← режимы</button>'+
-    '<span class="idx">замена платы · гарантия</span></div>'+
-    '<div class="testhead"><div><h2>Замена платы</h2>'+
-    '<div class="hint">Доступ только для авторизованного техника. Чтение SN/UUID — WMI; запись — заводской утилитой (AMI/Insyde) с проверкой чтением обратно.</div></div></div>'+
-    '<div class="field" style="margin-top:16px">'+body+'</div></div>';
+  var stepIdx = { reading:0, readerror:0, form:1, confirm:2, writing:3, stub:3 }[m.step]; if (stepIdx===undefined) stepIdx = 4;
+  var steps = ['Чтение с платы','Новые значения','Проверка','Запись','Готово'].map(function(t,i){
+    return '<div class="mb-st'+(i<stepIdx?' done':i===stepIdx?' on':'')+'"><i>'+(i<stepIdx?'✓':(i+1))+'</i><span>'+t+'</span></div>';
+  }).join('');
+  return '<div class="pane te mbx">'+
+    '<div class="af-head"><div><div class="eyebrow">Замена платы · гарантия</div><h1 class="title">Запись SN и UUID</h1></div>'+
+    '<button class="btn btn-ghost" onclick="echips.go(\'start\')">← К режимам</button></div>'+
+    '<div class="mb-steps">'+steps+'</div>'+
+    '<div class="hint mb-hint">Доступ только для авторизованного техника. Чтение SN/UUID — WMI; запись — заводской утилитой (AMI/Insyde) с проверкой чтением обратно.</div>'+
+    '<section class="af-pan mb-body">'+body+'</section></div>';
 }
 
 /* ---------- добавление инженера ----------
@@ -4086,7 +4172,8 @@ function render(){
   renderNav();
   var host = document.getElementById('screen');
   var focus = document.activeElement, sel = null;
-  if(focus && focus.tagName==='INPUT') sel = focus.selectionStart;
+  var focusKey = null;
+  if(focus && (focus.tagName==='INPUT' || focus.tagName==='TEXTAREA') && focus.type!=='file'){ sel = focus.selectionStart; focusKey = focus.id || focus.getAttribute('placeholder') || ''; }
   var viewKey = S.screen+'|'+S.cat+'|'+(S.screen==='drivers'?S.drv.step:'')+'|'+(S.screen==='mb'?S.mb.step:'');
   var isNewView = viewKey !== S.viewKey; S.viewKey = viewKey;
   host.innerHTML = S.screen==='start' ? screenStart()
@@ -4096,12 +4183,14 @@ function render(){
     : S.screen==='dash' ? screenDash()
     : S.screen==='test' ? screenTest()
     : S.screen==='repdetail' ? screenRepDetail()
-    : S.screen==='sensors' ? screenSensors()
+    : S.screen==='sensors' ? (autoSensorsFocusActive() ? screenAutoFocusSensors() : screenSensors())
     : S.screen==='stress' ? (autoStressFocusActive() ? screenAutoFocusStress() : screenStress())
     : S.screen==='history' ? screenHistory() : screenReport();
   if (isNewView && host.firstElementChild) host.firstElementChild.classList.add('enter');
   if(sel!==null){
-    var inp = host.querySelector('input');
+    var inp = null;
+    host.querySelectorAll('input,textarea').forEach(function(x){ if (!inp && (x.id || x.getAttribute('placeholder') || '') === focusKey) inp = x; });
+    if(!inp) inp = host.querySelector('input');
     if(inp){ inp.focus(); try{ inp.setSelectionRange(sel,sel); }catch(e){} }
   }
   if (S.screen==='test' && cat().kind==='surface') paintSurface();
@@ -4288,9 +4377,9 @@ document.addEventListener('DOMContentLoaded', function(){
     render();
   }
   invoke('flush_report_queue').catch(function(){}).then(refreshQueue);
-  setInterval(function(){ if (!S.auto.on) A.reportSync('sync'); refreshQueue(); }, 20000);
+  setInterval(function(){ if (!S.auto.on) A.reportSync('sync'); refreshQueue(); }, 10000);
   // Отчёты, накопленные без сети, досылаем сами: раз в 3 минуты и сразу при появлении связи.
-  setInterval(function(){ invoke('flush_report_queue').catch(function(){}); }, 180000);
+  setInterval(function(){ invoke('flush_report_queue').catch(function(){}); }, 60000);
   window.addEventListener('online', function(){ invoke('flush_report_queue').catch(function(){}); });
 });
 })();

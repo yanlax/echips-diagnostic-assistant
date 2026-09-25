@@ -90,6 +90,7 @@ input::placeholder{color:var(--mute)}
 
 /* статус отправки отчётов */
 .queuebox{min-width:0;font-size:12.5px;color:var(--mute);white-space:nowrap;display:flex;align-items:center;gap:8px}
+.queuebox{max-width:230px;overflow:hidden;flex:0 1 auto}.queuebox #queue-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.queuebox .btn-link{flex:none}
 .queuebox .ok{color:var(--mute)}
 .queuebox .ok:before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ok);margin-right:8px;vertical-align:baseline}
 .queuebox .bad{color:var(--accent-hi)}.queuebox .err{display:none}
@@ -743,7 +744,7 @@ h1.title{font-size:38px;letter-spacing:-.03em;line-height:1.08;margin:5px 0 0}
 .af-mini b{white-space:nowrap}.af-mini{flex-wrap:wrap}
 
 /* ---- Старт ---- */
-.st-split{display:grid;grid-template-columns:400px minmax(0,1fr);gap:24px}
+.st-split{display:grid;align-items:stretch;grid-template-columns:400px minmax(0,1fr);gap:24px}
 .st-sheet{background:var(--glass);border:1px solid var(--line);border-radius:18px;padding:30px}
 .st-k{margin:0;color:var(--mute);font-size:13px}
 .st-model{font:600 44px/1.05 var(--grotesk);letter-spacing:-.03em;margin:4px 0 0;color:var(--text-hi)}
@@ -755,7 +756,7 @@ h1.title{font-size:38px;letter-spacing:-.03em;line-height:1.08;margin:5px 0 0}
 .st-hero{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:34px;border-radius:18px;background:linear-gradient(135deg,var(--hero1),var(--hero2));border:1px solid var(--hero-b);cursor:pointer;color:inherit}
 .st-hb b{display:block;font:600 30px/1.1 var(--grotesk);letter-spacing:-.02em;color:var(--text-hi)}.st-hb span{display:block;margin-top:8px;color:var(--hero-tx)}
 .st-go{background:var(--accent);color:var(--accent-ink);font-weight:650;padding:14px 26px;border-radius:12px;white-space:nowrap}
-.st-tiles{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.st-tiles{display:grid;grid-template-columns:1fr 1fr;grid-auto-rows:1fr;gap:16px;flex:1 1 auto}
 .st-tile{background:var(--glass);border:1px solid var(--line);border-radius:16px;padding:24px;min-height:120px;display:flex;flex-direction:column;justify-content:space-between;cursor:pointer;color:inherit}
 .st-tile:hover{border-color:var(--line-strong);background:var(--glass-hover)}
 .st-tile b{font:600 20px var(--grotesk);letter-spacing:-.01em;color:var(--text-hi)}.st-tile span{color:var(--mute)}
@@ -802,3 +803,27 @@ h1.title{font-size:38px;letter-spacing:-.03em;line-height:1.08;margin:5px 0 0}
 @media (max-width:1100px){.rp-wrap{grid-template-columns:1fr}.rp-head{grid-template-columns:1fr}}
 .rp-v h1{font-size:40px}.rp-head{grid-template-columns:minmax(0,1.2fr) auto auto;gap:26px}.rp-c{gap:22px}.rp-tb .rn{font-size:14px}
 select.search-input{background-image:none;padding-left:12px}
+
+/* экран «Идёт проверка»: строки, широкая панель, ключи графика */
+.af-wide{grid-column:span 2}
+@media (max-width:1100px){.af-wide{grid-column:1/-1}}
+.af-chart.tall{height:150px}
+.af-side{font-size:13px;color:var(--mute);font-weight:400;letter-spacing:0}
+.af-key{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.af-warn{color:var(--accent-hi);font-weight:600}
+.af-rows{display:flex;flex-direction:column;gap:2px}
+.af-row{display:flex;justify-content:space-between;gap:14px;padding:8px 0;border-top:1px solid var(--line);font-size:13px}
+.af-row:first-child{border-top:0}.af-row b{font-weight:600;color:var(--text-hi);white-space:nowrap}.af-row span{color:var(--mute);text-align:right;overflow-wrap:anywhere}
+
+/* «Замена платы» в стиле «Стенд» */
+.mb-steps{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 14px}
+.mb-st{display:flex;align-items:center;gap:10px;padding:8px 14px 8px 8px;border:1px solid var(--line);border-radius:99px;color:var(--mute);font-size:13px;background:var(--glass)}
+.mb-st i{font-style:normal;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:var(--glass-hover);font:600 12px var(--mono)}
+.mb-st.on{color:var(--text-hi);border-color:var(--accent)}.mb-st.on i{background:var(--accent);color:var(--accent-ink)}
+.mb-st.done{color:var(--text-2)}.mb-st.done i{background:var(--ok);color:#06210f}
+.mb-hint{margin:0 0 14px}
+.mb-body{padding:26px}
+.mbx .card{background:var(--glass-hover);border:1px solid var(--line);border-radius:14px;padding:18px}
+.mbx .formgrid{max-width:none;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+@media (max-width:1100px){.mbx .formgrid{grid-template-columns:1fr}}
+.mbx .formfield input{width:100%}.mb-hint{font-size:13.5px;color:var(--mute)}

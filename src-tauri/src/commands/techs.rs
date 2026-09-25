@@ -392,6 +392,29 @@ pub(crate) fn gh_error(status: reqwest::StatusCode) -> String {
     }
 }
 
+
+// ---------- общие помощники для других подписанных файлов (профили моделей) ----------
+
+/// Разбирает {"payload","sig"}, проверяет подпись; возвращает строку payload.
+pub(crate) fn verify_signed_text(text: &str) -> Option<String> {
+    let s: sig::Signed = serde_json::from_str(text).ok()?;
+    if sig::verify(PUB_HEX.trim(), &s.payload, &s.sig) { Some(s.payload) } else { None }
+}
+
+/// Подписывает payload ключом админа (DPAPI) и возвращает готовый текст файла.
+pub(crate) fn sign_to_text(payload: String) -> Result<String, String> {
+    let key = read_signing_key().ok_or("Сначала вставьте ключ подписи на экране «Инженеры»")?;
+    let sig_hex = sig::sign(&key, &payload)?;
+    let mut body = serde_json::to_string_pretty(&sig::Signed { payload, sig: sig_hex }).map_err(|e| e.to_string())?;
+    body.push('\n');
+    Ok(body)
+}
+
+/// Папки для копий подписанных файлов: рядом с exe (флешка) и %LOCALAPPDATA%.
+pub(crate) fn copy_dirs() -> Vec<std::path::PathBuf> {
+    store_dirs()
+}
+
 /// Читает актуальный список и sha, применяет правку, подписывает и коммитит. Возвращает
 /// новый список (чтобы приложение сразу показало его).
 async fn commit_list<F>(message: String, edit: F) -> Result<Vec<Tech>, String>

@@ -838,7 +838,7 @@ var A = {
     np.name = np.name || key; np.expect = ee;
     var mt = parseFloat(P.maxT); if (mt>=60 && mt<=110) np.maxTempC = mt;
     invoke('profiles_save_model', { key:key, profile:np }).then(function(f){
-      applyRemoteProfiles(f); P.msg = 'Эталон «'+key+'» сохранён в data/profiles.json — теперь действует на всех ноутбуках.';
+      applyRemoteProfiles(f); P.msg = 'Эталон «'+key+'» сохранён и подписан — появится на других ноутбуках, когда они выйдут в интернет.';
     }).catch(function(err){ P.err = typeof err==='string' ? err : 'Не удалось сохранить эталон'; }).then(function(){ P.busy=false; render(); });
   },
   /* ---- история отчётов (админ): список из echips-reports, просмотр, сравнение двух ---- */
@@ -4136,15 +4136,6 @@ function screenTechAdmin(){
       '<input type="password" value="'+esc(t.keyInput)+'" oninput="echips.techadminField(\'keyInput\',this.value)" placeholder="ключ подписи">'+
       '<div class="hint" style="margin-top:6px">Вводится один раз. Без ключа список инженеров изменить нельзя.</div></div>'+
       '<div class="headactions" style="margin-top:12px"><button class="btn btn-ghost" onclick="echips.techadminSaveKey()">Сохранить ключ</button></div>';
-  // токен GitHub нужен только для сохранения профилей моделей (публичный репозиторий кода)
-  var tokenBlock = '<details style="margin-top:22px"><summary class="rs-mut" style="cursor:pointer">Токен для профилей моделей'+(t.hasToken?' · сохранён':'')+'</summary>'+
-    (t.hasToken
-      ? '<div class="dai" style="margin-top:10px"><p>Токен GitHub зашифрован средствами Windows и хранится только на этом компьютере.</p></div><div class="dai"><button class="btn btn-ghost" onclick="echips.techadminClearToken()">Удалить токен</button></div>'
-      : '<div class="formfield" style="margin-top:10px"><label>Токен GitHub (нужен только для сохранения эталонов моделей)</label>'+
-        '<input type="password" value="'+esc(t.tokenInput)+'" oninput="echips.techadminField(\'tokenInput\',this.value)" placeholder="github_pat_…">'+
-        '<div class="hint" style="margin-top:6px">Fine-grained токен на репозиторий echips-diagnostic-assistant, право Contents: read and write.</div></div>'+
-        '<div class="headactions" style="margin-top:12px"><button class="btn btn-ghost" onclick="echips.techadminSaveToken()">Сохранить токен</button></div>')+
-    '</details>';
   var rows = (S.lock.techs||[]).map(function(x){
     return '<tr><td><i class="av">'+esc(String(x.name||'?').charAt(0).toUpperCase())+'</i></td><td><b>'+esc(x.name)+'</b><div class="rr mono">'+esc(x.id)+'</div></td>'+
       '<td><span class="role'+(x.role==='admin'?' adm':'')+'">'+(x.role==='admin'?'Администратор':'Техник')+'</span></td>'+
@@ -4164,7 +4155,7 @@ function screenTechAdmin(){
         '<div class="headactions" style="margin-top:14px">'+(t.hasKey ? '<button class="btn btn-primary" '+(t.busy?'disabled':'')+' onclick="echips.techadminPublish()">'+(t.busy?'Сохраняю…':'Сохранить в список')+'</button>' : '')+
         '<span class="rs-mut" style="margin-left:6px">'+(t.hasKey ? '' : 'Для записи нужен ключ подписи (справа).')+'</span></div>'+
         '<p class="rs-mut" style="margin-top:12px">Список хранится подписанным в приватном репозитории и подхватывается на ноутбуках, когда они выходят в интернет; между обновлениями вход работает без сети. Если ноутбук не был в сети больше 7 суток — войти сможет только администратор. Тот же идентификатор с новым PIN заменяет запись.</p></div>'+
-    '</section><aside class="rp-side"><h3>Ключ подписи</h3>'+keyBlock+tokenBlock+'</aside></div></div>';
+    '</section><aside class="rp-side"><h3>Ключ подписи</h3>'+keyBlock+'</aside></div></div>';
 }
 
 function screenReport(){

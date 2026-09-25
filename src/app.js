@@ -1880,7 +1880,11 @@ function fetchCategory(kind){
       var sn = String(si.serial_number||'').trim(), bsn = String(hw.board_serial||'').trim(), uu = String(hw.system_uuid||'').trim();
       if (exp) lines.push('Сверка с последней записью в этой сессии ('+(exp.serial?'SN '+exp.serial:'')+(exp.serial&&exp.uuid?', ':'')+(exp.uuid?'UUID '+exp.uuid:'')+')');
       row('SN системы', sn, exp && exp.serial ? sn===exp.serial : !idBad(sn), exp && exp.serial ? 'ожидается '+exp.serial : idBad(sn) ? 'не задан' : '');
-      row('SN платы', bsn, exp && exp.serial ? bsn===exp.serial : !idBad(bsn), exp && exp.serial ? 'ожидается '+exp.serial : idBad(bsn) ? 'не задан' : '');
+      // SN платы «To be filled by O.E.M.» — заводской заглушкой не считаем неисправностью (только показываем),
+      // пока нет ожидаемого значения из записи SN/UUID; техник может засчитать проверку вручную
+      var bsnPlaceholder = !(exp && exp.serial) && idBad(bsn);
+      row('SN платы', bsn, exp && exp.serial ? bsn===exp.serial : bsnPlaceholder ? null : true, exp && exp.serial ? 'ожидается '+exp.serial : bsnPlaceholder ? 'не заполнено производителем' : '');
+      if (bsnPlaceholder) notes.push('SN платы не заполнено производителем (заглушка BIOS) — на работу не влияет');
       if (!idBad(sn) && !idBad(bsn) && sn!==bsn) notes.push('SN системы и платы различаются');
       var uuBad = !uu || /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(uu) || /^f{8}-f{4}-f{4}-f{4}-f{12}$/i.test(uu) || uu.toLowerCase()==='03000200-0400-0500-0006-000700080009';
       row('UUID', uu, exp && exp.uuid ? normU(uu)===normU(exp.uuid) : !uuBad, exp && exp.uuid ? 'ожидается '+exp.uuid : uuBad ? 'заглушка BIOS' : '');
@@ -2722,7 +2726,10 @@ function judgeSmart(list){
   if (bad.length) return { status:'fail', note:'SMART — плохое состояние. '+bad.join('; ') };
   if (caution.length && cautionFail) return { status:'fail', note:'SMART — тревога. '+caution.join('; ') };
   if (!have) return null;
-  return { status:'pass', note:'SMART без предупреждений ('+have+' диск.)'+(caution.length?'; замечания: '+caution.join('; '):'') };
+  // ошибки обмена по SATA (Phy/CRC) на здоровье не влияют, но при росте — тревожный признак: пишем предупреждение в итог
+  var ifaceWarn = [];
+  list.forEach(function(d){ (d.attrs||[]).forEach(function(a){ if (/Phy Error|CRC Error/i.test(a.name) && a.raw>=100 && a.raw<=9007199254740991) ifaceWarn.push(d.name+': '+a.name+' = '+a.raw); }); });
+  return { status:'pass', note:(ifaceWarn.length ? '⚠ Предупреждение: ошибки обмена по SATA-интерфейсу ('+ifaceWarn.join('; ')+') — проверьте разъём/контакт диска; ' : '')+'SMART без предупреждений ('+have+' диск.)'+(caution.length?'; замечания: '+caution.join('; '):'') };
 }
 function smartLines(list){
   var out = [];
@@ -3659,7 +3666,7 @@ function stOnTick(p){
   h.load.push(p.load); h.clock.push(p.clockMhz); h.clockMax = Math.max(h.clockMax, p.clockMaxMhz||0);
   h.temp.push(p.tempC==null ? null : p.tempC); h.gpuT.push(p.gpuTempC==null ? null : p.gpuTempC);
   Object.keys(p.scores||{}).forEach(function(k){ (h.scores[k] = h.scores[k] || []).push(p.scores[k]); });
-  if (st.cfg.gpu && st.gpuFps!=null) (h.scores.gpu = h.scores.gpu || []).push(st.gpuFps);
+  if (st.cfg.gpu && st.gpuFps>0) (h.scores.gpu = h.scores.gpu || []).push(st.gpuFps);
   (p.events||[]).forEach(function(e){ st.events.push(fmtTime(p.elapsed)+' · '+e); });
   paintStress();
   if (autoStressFocusActive()) render();   // экран «Идёт проверка» обновляется каждый тик
@@ -3703,7 +3710,7 @@ function stOnDone(res){
   var REASON = { completed:'завершён', stopped:'остановлен вручную', thermal:'остановлен температурной защитой', error:'остановлен из-за ошибок' };
   var lines = ['Тест '+(REASON[res.reason]||res.reason)+', длительность '+fmtTime(res.elapsedSecs)+', потоков CPU '+res.threads,
     'Загрузка CPU средняя '+res.avgLoad.toFixed(0)+'%'+(res.clockAvgMhz ? ', частота ср/мин/макс '+res.clockAvgMhz.toFixed(0)+'/'+res.clockMinMhz.toFixed(0)+'/'+res.clockMaxMhz.toFixed(0)+' МГц' : ''),
-    'Температура CPU макс: '+(res.maxTempC!=null ? res.maxTempC.toFixed(0)+' °C' : 'н/д')+' · GPU макс: '+(res.maxGpuTempC!=null ? res.maxGpuTempC.toFixed(0)+' °C' : 'н/д')];
+    'Температура CPU макс: '+(res.maxTempC!=null ? res.maxTempC.toFixed(0)+' °C' : 'н/д')+' · GPU макс: '+(res.maxGpuTempC!=null ? res.maxGpuTempC.toFixed(0)+' °C' : res.maxTempC!=null ? res.maxTempC.toFixed(0)+' °C (встроенная графика — в составе CPU, отдельного датчика нет)' : 'н/д')];
   res.stressors.forEach(function(x){ lines.push('  '+x.name+': ср '+x.avg.toFixed(1)+' '+x.unit+', мин '+x.min.toFixed(1)+', макс '+x.max.toFixed(1)+(x.baseline>0 ? ', базовая '+x.baseline.toFixed(1)+', худшее '+Math.round(x.minRatio*100)+'%, ниже 80%: '+x.throttledSecs+' с' : '')); });
   var gsc = st.hist.scores.gpu; if (gsc && gsc.length) lines.push('  gpu: ср '+(gsc.reduce(function(a,b){ return a+b; },0)/gsc.length).toFixed(1)+' кадр/с, мин '+Math.min.apply(null,gsc));
   if (res.memErrors||res.diskErrors) lines.push('Ошибки данных: память '+res.memErrors+', диск '+res.diskErrors);

@@ -739,3 +739,5 @@ h1.title{font-size:38px;letter-spacing:-.03em;line-height:1.08;margin:5px 0 0}
 .af-chart{width:100%;height:96px;margin-top:12px;display:block}
 .af-log{margin-top:18px;background:var(--term);font:400 12.5px/1.8 var(--mono);color:#B8C4CF}.af-log h3{color:#8796A5}.af-log div span{color:#5C6B7A;margin-right:14px}
 @media (max-width:1100px){.af-grid{grid-template-columns:1fr 1fr}.af-big{grid-column:1/-1}}
+.af-bars{display:flex;gap:4px;align-items:flex-end;height:96px;margin-top:12px}.af-bars i{flex:1;background:var(--cool);border-radius:3px 3px 0 0;opacity:.85;min-height:4px}
+.af-mini b{white-space:nowrap}.af-mini{flex-wrap:wrap}

@@ -2892,6 +2892,50 @@ function autoPaintTemp(){
   v.innerHTML = Math.round(S.autoTemps[S.autoTemps.length-1])+'<small> °C</small>';
   if (svg) svg.outerHTML = autoTempSvg();
 }
+/* Стресс-тест внутри автопрогона — тот же экран «Идёт проверка», данные берутся из тиков стресс-теста */
+function autoStressFocusActive(){
+  var a = S.auto;
+  return !!(a && a.on && !a.waiting && !a.stopped && !a.detail && S.screen==='stress' && S.st.running);
+}
+function afTicksHtml(){
+  var a = S.auto;
+  return a.ids.map(function(id,i){
+    var r = S.results[id], cl = i===a.idx ? 'run' : (r==='pass'||r==='fail'||r==='na') ? r : (i<a.idx ? 'na' : '');
+    var nm = (CATS.filter(function(x){ return x.id===id; })[0]||{}).name || id;
+    return '<i class="af-tk '+cl+'" title="'+esc(nm)+'"></i>';
+  }).join('');
+}
+function screenAutoFocusStress(){
+  var a = S.auto, st = S.st, p = st.last || {}, h = st.hist, n = a.ids.length;
+  var dur = st.cfg.dur || 0, pct = dur>0 ? Math.min(100, (st.elapsed||0)/dur*100) : null;
+  var cnt = { pass:0, fail:0, na:0 }; a.ids.forEach(function(id){ var r = S.results[id]; if (cnt[r]!==undefined) cnt[r]++; });
+  var temps = h.temp.filter(function(v){ return v!=null; }), lim = profile().maxTempC||95;
+  var svg = '<svg viewBox="0 0 480 120" preserveAspectRatio="none" class="af-chart"></svg>';
+  if (temps.length>1){
+    var lo = Math.min.apply(null,temps)-3, hi = Math.max(Math.max.apply(null,temps)+3, lo+12);
+    var pts = temps.slice(-120).map(function(v,i,arr){ return (i/(arr.length-1)*480).toFixed(1)+','+(112-(v-lo)/(hi-lo)*104).toFixed(1); }).join(' ');
+    svg = '<svg viewBox="0 0 480 120" preserveAspectRatio="none" class="af-chart"><polyline points="'+pts+'" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke"/>'+
+      (lim<hi ? '<line x1="0" x2="480" y1="'+(112-(lim-lo)/(hi-lo)*104).toFixed(1)+'" y2="'+(112-(lim-lo)/(hi-lo)*104).toFixed(1)+'" stroke="var(--err)" stroke-dasharray="4 4" opacity=".6"/>' : '')+'</svg>';
+  }
+  var loads = h.load.slice(-28), bars = loads.map(function(v){ return '<i style="height:'+Math.max(4, v).toFixed(0)+'%"></i>'; }).join('');
+  var sc = p.scores ? Object.keys(p.scores).map(function(k){ return k.toUpperCase()+' '+Math.round(p.scores[k]); }).join(' · ') : '';
+  var ev = st.events.slice(-7).map(function(t){ return '<div><span></span>'+esc(t)+'</div>'; }).join('') || '<div><span></span>Нагрузка идёт, событий нет.</div>';
+  var errs = (p.memErrors||0)+(p.diskErrors||0);
+  var modeName = a.mode==='express' ? 'Экспресс' : 'Полный автопрогон';
+  return '<div class="pane af">'+
+    '<div class="af-head"><div><div class="eyebrow">'+modeName+' · шаг '+(a.idx+1)+' из '+n+'</div><h1 class="title">Стресс-тест</h1></div>'+
+    '<div class="headactions"><button class="btn btn-ghost" onclick="echips.autoDetail()">Подробности теста</button><button class="btn btn-ghost" onclick="echips.autoStop()">Прервать автопрогон</button></div></div>'+
+    '<div class="af-ticks">'+afTicksHtml()+'</div>'+
+    '<div class="af-grid">'+
+      '<section class="af-pan af-big"><h3>Нагрузка на процессор'+(st.cfg.gpu?' и видеокарту':'')+' — проверка охлаждения и троттлинга</h3>'+
+        (pct!=null ? '<div class="af-pct">'+Math.round(pct)+'<small>%</small></div><div class="bar"><div class="fill" style="width:'+pct.toFixed(0)+'%"></div></div>' : '<div class="af-pct af-wait">Идёт нагрузка</div><div class="bar ind"><div class="fill"></div></div>')+
+        '<p class="af-mut">'+esc(sc || 'Разогрев…')+(p.clockMhz ? ' · '+Math.round(p.clockMhz)+' МГц' : '')+'</p>'+
+        '<div class="af-mini"><div><b>'+fmtTime(st.elapsed||0)+(dur?' / '+fmtTime(dur):'')+'</b><span>время нагрузки</span></div><div><b>'+errs+'</b><span>ошибок данных</span></div><div><b>'+cnt.pass+'</b><span>тестов пройдено</span></div></div></section>'+
+      '<section class="af-pan"><h3>Температура процессора</h3><div class="af-tv">'+(p.tempC!=null ? Math.round(p.tempC)+'<small> °C</small>' : '—')+'</div>'+svg+'<p class="af-mut">порог '+lim+' °C'+(p.gpuTempC!=null ? ' · видеокарта '+Math.round(p.gpuTempC)+' °C' : '')+'</p></section>'+
+      '<section class="af-pan"><h3>Загрузка</h3><div class="af-tv">'+(p.load!=null ? Math.round(p.load)+'<small> %</small>' : '—')+'</div><div class="af-bars">'+bars+'</div><p class="af-mut">'+(p.fanRpm ? 'вентилятор '+Math.round(p.fanRpm)+' об/мин' : '')+(p.powerW ? (p.fanRpm?' · ':'')+p.powerW.toFixed(0)+' Вт' : '')+'</p></section>'+
+    '</div>'+
+    '<section class="af-pan af-log"><h3>События нагрузки</h3>'+ev+'</section></div>';
+}
 function screenAutoFocus(){
   var a = S.auto, c = cat(), n = a.ids.length;
   var pr = autoProgress(c);
@@ -3522,6 +3566,7 @@ function stOnTick(p){
   if (st.cfg.gpu && st.gpuFps!=null) (h.scores.gpu = h.scores.gpu || []).push(st.gpuFps);
   (p.events||[]).forEach(function(e){ st.events.push(fmtTime(p.elapsed)+' · '+e); });
   paintStress();
+  if (autoStressFocusActive()) render();   // экран «Идёт проверка» обновляется каждый тик
 }
 /* Вердикт по итогам: температура, падение скорости (троттлинг), ошибки данных, аварийная остановка. */
 function judgeStress(res){
@@ -4060,7 +4105,7 @@ function render(){
     : S.screen==='test' ? screenTest()
     : S.screen==='repdetail' ? screenRepDetail()
     : S.screen==='sensors' ? screenSensors()
-    : S.screen==='stress' ? screenStress()
+    : S.screen==='stress' ? (autoStressFocusActive() ? screenAutoFocusStress() : screenStress())
     : S.screen==='history' ? screenHistory() : screenReport();
   if (isNewView && host.firstElementChild) host.firstElementChild.classList.add('enter');
   if(sel!==null){

@@ -474,12 +474,6 @@ var A = {
   autoStart:function(mode){
     // mode: 'express' — короткий набор проверок для входного контроля (P.expressTests), иначе полный
     S.autoMode = mode==='express' ? 'express' : 'full';
-    // «До/после ремонта» без номера приёмки: отчёты не свяжутся в пару (лежат в разных папках)
-    if (S.repairStage && !S.intake){
-      var okGo = true;
-      try { okGo = window.confirm('Выбран этап «'+(S.repairStage==='before' ? 'до ремонта' : 'после ремонта')+'», но номер приёмки не указан — отчёты «до» и «после» не свяжутся в пару.\n\nНачать без номера?'); } catch(e){}
-      if (!okGo) return;
-    }
     var listSrc = S.autoMode==='express' ? (profile().expressTests || profile().tests) : profile().tests;
     var ids = (listSrc||[]).filter(function(id){ return CATS.some(function(c){ return c.id===id; }); });
     if (!ids.length) return;

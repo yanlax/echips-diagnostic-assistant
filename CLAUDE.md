@@ -76,6 +76,7 @@ Tauri 2 приложение для инженеров сервисного це
   Коммит "Версия x.y.z", затем тег `vX.Y.Z` и пуш тега. После публикации
   релиза можно удалить старый релиз/тег по просьбе пользователя
   (`gh release delete`, `git push origin :refs/tags/vX.Y.Z`, `git tag -d`).
+- Вопросы пользователю — только `appConfirm({title,text,ok,cancel,danger,onOk,onCancel})` (встроенное окно в дизайне «Стенд»); системные `window.confirm/alert` не использовать: в WebView2 они подписаны «tauri.localhost» и выбиваются из дизайна.
 - Не трогай `tauri.conf.json` / `capabilities/default.json` без
   необходимости — там уже настроены нужные права и `withGlobalTauri`.
 

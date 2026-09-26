@@ -471,7 +471,18 @@ var A = {
       if (S.auto.on && S.cat===c.id) A.autoApply({ status:'na', note:'Не удалось определить устройство ('+(c.kind==='touch'?'сенсорный экран':'наушники')+') — не применимо' });
     });
   },
-  autoStart:function(mode){
+  autoStart:function(mode, skipIntakeCheck){
+    // «До/после ремонта» без номера приёмки: отчёты «до» и «после» не свяжутся в пару (лягут в разные папки)
+    if (S.repairStage && !S.intake && !skipIntakeCheck){
+      appConfirm({
+        title:'Номер приёмки не указан',
+        text:'Выбран этап «'+(S.repairStage==='before' ? 'до ремонта' : 'после ремонта')+'», но номер приёмки не введён — отчёты «до» и «после» не свяжутся в пару.',
+        ok:'Запустить без номера', cancel:'Ввести номер',
+        onOk:function(){ A.autoStart(mode, true); },
+        onCancel:function(){ var i = document.getElementById('intake-input'); if (i) i.focus(); }
+      });
+      return;
+    }
     // mode: 'express' — короткий набор проверок для входного контроля (P.expressTests), иначе полный
     S.autoMode = mode==='express' ? 'express' : 'full';
     var listSrc = S.autoMode==='express' ? (profile().expressTests || profile().tests) : profile().tests;
@@ -818,11 +829,14 @@ var A = {
     // Теперь смена этапа при уже собранных результатах начинает новую проверку (отчёт предыдущей уже отправлен).
     var have = Object.keys(S.results).some(function(k){ return S.results[k] && S.results[k]!=='idle'; });
     if (have){
-      var ok = true;
-      try { ok = window.confirm('Сменить этап ремонта?\n\nТекущие результаты будут сброшены — начнётся новая проверка. Отчёт по этой проверке уже отправлен (если очередь пуста), к нему вернуться можно будет через «Историю».'); } catch(e){}
-      if (!ok){ renderStageBtns(); return; }
-      A.reportSync('manual');
-      S.repairStage = next; A.reset(); return;
+      appConfirm({
+        title:'Сменить этап ремонта?',
+        text:'Текущие результаты будут сброшены — начнётся новая проверка «'+(next==='before' ? 'до ремонта' : next==='after' ? 'после ремонта' : 'без этапа')+'».\nОтчёт по этой проверке уже отправлен (если очередь пуста), к нему можно вернуться через «Историю».',
+        ok:'Сбросить и сменить', cancel:'Оставить как есть',
+        onOk:function(){ A.reportSync('manual'); S.repairStage = next; A.reset(); },
+        onCancel:function(){ renderStageBtns(); }
+      });
+      return;
     }
     S.repairStage = next; renderStageBtns();
   },
@@ -1774,12 +1788,17 @@ var A = {
     var t = S.techadmin;
     if(t.busy) return;
     if(S.engineer && S.engineer.id===id){ t.err='Себя удалить нельзя.'; render(); return; }
-    if(!window.confirm('Удалить инженера «'+id+'» из списка?')) return;
-    t.busy=true; t.err=''; t.msg=''; render();
-    invoke('techs_remove', { id:id }).then(function(list){
-      S.lock.techs = list; t.msg='Удалён: '+id;
-    }).catch(function(err){ t.err = typeof err==='string' ? err : 'Не удалось удалить'; })
-      .then(function(){ t.busy=false; render(); });
+    appConfirm({
+      title:'Удалить инженера?', text:'«'+id+'» больше не сможет войти в программу. Отчёты этого инженера останутся на сервере.',
+      ok:'Удалить', cancel:'Отмена', danger:true,
+      onOk:function(){
+        t.busy=true; t.err=''; t.msg=''; render();
+        invoke('techs_remove', { id:id }).then(function(list){
+          S.lock.techs = list; t.msg='Удалён: '+id;
+        }).catch(function(err){ t.err = typeof err==='string' ? err : 'Не удалось удалить'; })
+          .then(function(){ t.busy=false; render(); });
+      }
+    });
   },
   techadminInit:function(){
     invoke('techs_list').then(function(list){ S.lock.techs = list || []; render(); }).catch(function(err){ S.techadmin.err = typeof err==='string' ? err : 'Не удалось загрузить список'; render(); });
@@ -2962,6 +2981,32 @@ function subTabs(c){
 /* Кнопки экрана «Идёт проверка» и баннера автопрогона срабатывают по нажатию (pointerdown), а не по клику: во время записи на диск
    и других тестов экран перерисовывается каждую секунду и по событиям прогресса, кнопка успевала замениться между нажатием и
    отпусканием, и клик пропадал. Клавиатурная активация (Enter/Space, event.detail===0) обрабатывается через onclick. */
+/* Встроенное окно вопроса в дизайне «Стенд» вместо системного window.confirm (в нём заголовок «tauri.localhost» и чужой вид).
+   o: { title, text, ok, cancel, danger, onOk, onCancel }. Esc — отмена, Enter — подтвердить, клик вне окна — отмена. */
+function closeModal(){
+  var m = document.getElementById('modal-overlay'); if (m && m.parentNode) m.parentNode.removeChild(m);
+  document.removeEventListener('keydown', modalKey, true);
+}
+function modalKey(e){
+  var m = document.getElementById('modal-overlay'); if (!m) return;
+  if (e.key==='Escape'){ e.preventDefault(); e.stopPropagation(); document.getElementById('modal-cancel').click(); }
+  else if (e.key==='Enter'){ e.preventDefault(); e.stopPropagation(); document.getElementById('modal-ok').click(); }
+}
+function appConfirm(o){
+  closeModal();
+  var ov = document.createElement('div');
+  ov.id = 'modal-overlay'; ov.className = 'modal-overlay';
+  ov.innerHTML = '<div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-t"><h2 id="modal-t">'+esc(o.title||'')+'</h2>'+
+    '<p>'+esc(o.text||'').replace(/\n/g,'<br>')+'</p>'+
+    '<div class="modal-actions"><button type="button" class="btn btn-ghost" id="modal-cancel">'+esc(o.cancel||'Отмена')+'</button>'+
+    '<button type="button" class="btn btn-primary'+(o.danger?' btn-danger':'')+'" id="modal-ok">'+esc(o.ok||'Продолжить')+'</button></div></div>';
+  document.body.appendChild(ov);
+  document.getElementById('modal-ok').addEventListener('click', function(){ closeModal(); if (o.onOk) o.onOk(); });
+  document.getElementById('modal-cancel').addEventListener('click', function(){ closeModal(); if (o.onCancel) o.onCancel(); });
+  ov.addEventListener('mousedown', function(e){ if (e.target===ov) document.getElementById('modal-cancel').click(); });
+  document.addEventListener('keydown', modalKey, true);
+  document.getElementById('modal-ok').focus();
+}
 /* Остановка теста с записью «кто остановил» (в подробности отчёта): в отчётах 25.09 стресс-тест и память останавливались сами,
    без действий инженера, а причина нигде не сохранялась. Стек вызова укорочен до 3 кадров. */
 function haltTest(cmd, who){
